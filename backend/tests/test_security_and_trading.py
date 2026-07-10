@@ -149,19 +149,24 @@ class TestCORS:
 # ============ RATE LIMITING (Phase 1 #4) - localhost:8001 direct only ============
 class TestRateLimiting:
     def test_orders_rate_limited_after_20_per_minute(self):
+        # Use a non-existent ticker (<=10 chars to pass Pydantic validation) so
+        # these requests still exercise the rate-limiter decorator (which runs
+        # inside the endpoint, after body validation) WITHOUT placing any real
+        # orders against the live paper account. Alpaca will reject "ZZZZINVLD"
+        # with an asset-not-found error, which is exactly what we want here.
         statuses = []
         for i in range(25):
             r = requests.post(
                 f"{LOCAL_URL}/api/orders",
                 headers=AUTH_HEADERS,
-                json={"symbol": "AAPL", "qty": 1, "side": "buy"},
+                json={"symbol": "ZZZZINVLD", "qty": 1, "side": "buy"},
             )
             statuses.append(r.status_code)
         assert 429 in statuses, f"Expected a 429 within 25 rapid requests, got statuses={statuses}"
         idx_429 = statuses.index(429)
         body = requests.post(
             f"{LOCAL_URL}/api/orders", headers=AUTH_HEADERS,
-            json={"symbol": "AAPL", "qty": 1, "side": "buy"},
+            json={"symbol": "ZZZZINVLD", "qty": 1, "side": "buy"},
         )
         if body.status_code == 429:
             assert "rate limit" in body.text.lower() or "Rate limit exceeded" in body.text

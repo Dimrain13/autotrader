@@ -19,9 +19,13 @@ ALPACA_API_KEY="PKRBZGHKVX2SGHWQZZVRJLXRPN"
 ALPACA_SECRET_KEY="A5H61qnJEsWrFMomsiG8K69TpZCZJn9HubwdNpnbjDRR"
 ALPACA_BASE_URL="https://paper-api.alpaca.markets"
 ```
-Paper account number: `PA30RVV1A2DM`. Verified end-to-end with a real
-buy+sell round trip (AAPL, 1 share) — real fill price, real position
-tracking, real buying-power deduction, real trade-history log entry.
+Paper account number: `PA30RVV1A2DM`. Account is currently FLAT (no open
+positions) as of 2026-07-10. NOTE: an earlier version of
+`tests/test_security_and_trading.py::TestRateLimiting` placed real (paper)
+buy orders on every run, silently accumulating an AAPL position over several
+testing passes (grew to 20+ shares) - this has been fixed (test now uses a
+non-existent ticker so it never reaches the real broker) and the accumulated
+position has been liquidated. Auto-trader is confirmed OFF.
 
 ## MongoDB
 Uses existing `MONGO_URL` / `DB_NAME` from `/app/backend/.env` (no auth, local instance). No credentials needed.

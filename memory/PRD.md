@@ -66,6 +66,14 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 - Confirmed installed stack: Python 3.11.15, Node 20.20.2/Yarn 1.22.22, MongoDB 7.0.37; key backend deps `fastapi==0.110.1`, `alpaca-py==0.30.1`, `motor==3.3.1`, `slowapi==0.1.10`, `pydantic==2.12.4`; key frontend deps `react==19`, `react-router-dom==7`, `axios`, `lightweight-charts==4.1.3`, `tailwindcss==3.4`.
 - Backlog (non-blocking): unbounded Mongo `.to_list(length=10000)` reads in `trade_history_service.get_analytics()` / `missed_opportunities_service.get_analytics()` — add projections/date-bounding as trade volume grows.
 
+## Session 6 Update (2026-07-10) — Performance + Linux Deployment
+- User moving VPS target to Linux (SSH port-forward for access, same 127.0.0.1-only security model as RDP). Added `/app/deploy/linux/` (systemd services, `start.sh`, install/uninstall scripts, README) alongside the existing Windows artifacts. Root README now links both.
+- Performance: `google_news_service.py` now uses a pooled `requests.Session()` + 3-minute TTL cache per (symbol, company_name, limit) - repeated news lookups ~30x faster (645ms → ~20-100ms cache hit). Fixed a latent bug where two early-return paths returned a bare tuple instead of the documented `{'has_news', 'articles'}` dict (would have crashed callers if ever hit).
+- `alpaca_service.py`: `get_asset()` (company name lookup) now has a 24h TTL cache; Yahoo/Nasdaq fallback bar-fetching now reuses a pooled session too.
+- `scanner_service.py`: news-check `ThreadPoolExecutor` increased from 5→12 concurrent workers.
+- **Safety catch**: found the auto-trader unexpectedly `active=true` (leftover from an old persistence test, now with real Alpaca keys live) — turned off, confirmed OFF and persists across restart.
+- **Critical bug found+fixed by testing agent**: `tests/test_security_and_trading.py::TestRateLimiting` placed real (paper) BUY orders on every test run with no broker mocking, silently accumulating an AAPL position (1→20→28 shares across sessions). Fixed to use a non-existent ticker (still exercises the rate-limiter, never reaches a real tradable symbol). Liquidated the accumulated 20-share position — account is now flat. All 41 tests still pass.
+
 ## Deferred / Backlog (P1/P2)
 - Consider splitting `server.py` (1280+ lines) into per-domain routers (orders/settings/auto-trader/market) for maintainability (noted by testing agent, non-blocking).
 - Docker Desktop / `docker-compose.yml` path was NOT built (user chose Windows-native/NSSM) — available on request if preference changes later.
