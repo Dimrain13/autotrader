@@ -2,7 +2,7 @@
 
 ## 📋 Overview
 
-This auto-trader implements Ross Cameron's **Small Cap Momentum Strategy** for pre-market/morning trading (7 AM - 11 AM EST).
+This auto-trader implements Ross Cameron's **Small Cap Momentum Strategy** for pre-market/morning entries (7 AM - 11 AM EST), managing and closing positions until 3:30 PM EST.
 
 ---
 
@@ -21,20 +21,23 @@ All stocks must meet these criteria before consideration:
 
 ### **Entry Signals (All Must Be Met)**
 
-1. **Micro-Pullback Pattern**
+1. **Micro-Pullback Pattern** (required)
    - Recent high established (rally peak)
-   - Small pullback of 1-3% from high
+   - 1-3 green candle pullback pattern
    - Price breaking above high (new breakout)
 
-2. **MACD Confirmation**
-   - MACD line above signal line (bullish)
+2. **Volume Confirmation**
+   - Green volume bars after a red bar (buying pressure)
+
+3. **MACD Confirmation**
+   - MACD line crosses above signal line (bullish crossover)
    - Indicates momentum is strengthening
 
-3. **SMA20 Confirmation**
-   - Price above 20-period SMA
+4. **SMA20/SMA50 Confirmation**
+   - Fast SMA(20) crosses above slow SMA(50)
    - Confirms uptrend
 
-4. **Scanner Criteria**
+5. **Scanner Criteria**
    - Stock must have 5/5 criteria met
    - Top momentum stocks only
 
@@ -42,17 +45,17 @@ All stocks must meet these criteria before consideration:
 
 ### **Position Sizing**
 
-**5% of Account Per Trade**
+**10% of Account Per Trade** (up to 5 concurrent = 50% max exposure)
 
 Examples:
-- $1,000 account → $50 per trade
-- $2,000 account → $100 per trade
-- $5,000 account → $250 per trade
-- $10,000 account → $500 per trade
+- $1,000 account → $100 per trade
+- $2,000 account → $200 per trade
+- $5,000 account → $500 per trade
+- $10,000 account → $1,000 per trade
 
-This conservative sizing allows for:
+This sizing allows for:
 - Multiple positions (up to 5 concurrent)
-- Room for losses without major damage
+- Room for losses without major damage (tight 1% stop keeps per-trade risk low)
 - Steady account growth through base hits
 
 ---
@@ -61,17 +64,17 @@ This conservative sizing allows for:
 
 | Metric | Value | Formula |
 |--------|-------|---------|
-| **Profit Target** | +10% | Entry × 1.10 |
-| **Stop Loss** | -5% | Entry × 0.95 |
-| **Risk/Reward** | 2:1 | Risk $50 to make $100 |
+| **Profit Target** | +2% | Entry × 1.02 (sell 50%, move stop to breakeven) |
+| **Stop Loss** | -1% | Entry × 0.99 (trailing) |
+| **Risk/Reward** | 2:1 | Ross Cameron / Warrior Trading core rule |
 
 **Example Trade:**
 - Entry: $10.00
-- Stop Loss: $9.50 (-5%)
-- Profit Target: $11.00 (+10%)
+- Stop Loss: $9.90 (-1%)
+- Profit Target: $10.20 (+2%, sell half + breakeven stop on rest)
 - On 100 shares:
-  - Risk: $50
-  - Reward: $100
+  - Risk: $10
+  - Reward: $20
 
 ---
 
@@ -79,19 +82,19 @@ This conservative sizing allows for:
 
 The auto-trader monitors positions and exits when:
 
-1. **Profit Target Hit** (+10%)
-   - Take profit immediately
-   - Lock in gains
+1. **Profit Target Hit** (+2%)
+   - Sell 50% of the position, move stop to break-even on the rest
+   - Lock in gains while letting a winner run
 
-2. **Stop Loss Hit** (-5%)
+2. **Trailing Stop Hit** (-1%)
    - Cut losses fast
    - Don't hold and hope
 
-3. **MACD Bearish Cross**
-   - MACD crosses below signal line
-   - Momentum reversing
+3. **MACD Bearish Cross (while losing)**
+   - MACD crosses below signal line and position is negative
+   - Exit early instead of waiting for the stop
 
-4. **End of Trading Window** (11 AM EST)
+4. **End of Trading Window** (3:30 PM EST)
    - Close all positions
    - Done for the day
 
@@ -99,20 +102,22 @@ The auto-trader monitors positions and exits when:
 
 ### **Daily Risk Limits**
 
-#### **Max Daily Loss: -10% of Account**
-- $1,000 account → Max loss $100
-- $2,000 account → Max loss $200
-- When hit: **STOP TRADING** for the day
+#### **Max Daily Loss: -1% of Account (HARD KILL SWITCH)**
+- $1,000 account → Max loss $10
+- $2,000 account → Max loss $20
+- When hit: **ALL new BUY orders are blocked server-side** (manual and auto-trader) for the rest of the day
+- This is Ross Cameron's documented "conservative starting" daily risk rule
 
 #### **Max Consecutive Losses: 3**
 - After 3 losing trades in a row
 - **STOP TRADING** for the day
 - Reset next trading day
 
-#### **Trading Hours: 7:00 AM - 11:00 AM EST**
-- Pre-market and morning momentum window
-- Auto-close all positions at 11 AM
-- Software-managed stops (pre-market has no broker stops)
+#### **Trading Hours: Entries 7:00 AM - 11:00 AM EST, managed until 3:30 PM EST**
+- Pre-market and morning momentum window for new entries
+- After 11 AM: manage existing positions only, no new entries
+- Auto-close all positions at 3:30 PM EST
+- Software-managed stops (pre-market/extended hours has no broker stops)
 
 ---
 
@@ -132,7 +137,7 @@ The auto-trader monitors positions and exits when:
 
 ### **Position Limits**
 - Max 5 concurrent positions
-- 5% position sizing (conservative)
+- 10% position sizing per trade (50% max exposure)
 - Prevents over-concentration
 
 ---
@@ -170,13 +175,15 @@ SMA_LONG=50         # Slow SMA (default: 50)
 Located in `/app/backend/services/auto_trader_service.py`:
 
 ```python
-self.position_size_pct = 0.05          # 5% of account per trade
-self.profit_target_pct = 0.10          # 10% profit target
-self.stop_loss_pct = 0.05              # 5% stop loss
-self.daily_max_loss_pct = 0.10         # 10% max daily loss
+self.position_size_pct = 0.10          # 10% of account per trade
+self.profit_target_pct = 0.02          # 2% profit target (sell 50%, breakeven stop on rest)
+self.stop_loss_pct = 0.01              # 1% trailing stop loss
+self.daily_max_loss_pct = 0.01         # 1% max daily loss (hard kill switch)
 self.max_consecutive_losses = 3         # Max 3 losses then done
-self.trading_start_hour = 7             # 7 AM EST
-self.trading_end_hour = 11              # 11 AM EST
+self.require_micro_pullback = True      # 1-3 green candle pullback required for entry
+self.trading_start_hour = 7             # 7 AM EST (entries)
+self.trading_end_hour = 15              # 3:30 PM EST (manage/close)
+self.trading_end_minute = 30
 ```
 
 ---
@@ -186,9 +193,9 @@ self.trading_end_hour = 11              # 11 AM EST
 When auto-trader is active, the Scanner page shows:
 
 ### **Strategy Metrics**
-- Position Size: 5%
-- Profit Target: +10%
-- Stop Loss: -5%
+- Position Size: 10%
+- Profit Target: +2% (partial)
+- Stop Loss: -1% (trailing)
 - Daily P&L: Real-time tracking
 - Loss Streak: X / 3
 

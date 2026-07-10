@@ -1,16 +1,22 @@
 """
 Warrior Trading Momentum Auto-Trader
-Based on Ross Cameron's Small Cap Momentum Strategy
+Based on Ross Cameron's Small Cap Momentum Strategy (Warrior Trading "5 Pillars")
 
-STRATEGY RULES (from documents):
-1. Entry: Micro-pullbacks on front side of momentum (1-3% pullback)
-2. Position Size: 5% of account per trade
-3. Profit Target: 10% of account per trade
-4. Stop Loss: 5% managed in software (pre-market has no broker stops)
-5. Daily Max Loss: 10% of account
-6. Max Consecutive Losses: 3 (then done for day)
-7. Time Window: 7 AM - 11 AM EST (pre-market/morning momentum)
-8. Exit Signals: MACD bearish cross, jackknife rejection, profit target hit
+STRATEGY RULES (aligned with Ross Cameron's documented Warrior Trading rules,
+see warriortrading.com/momentum-day-trading-strategy, /position-sizing,
+/daily-goal - reconciled 2026 to remove the earlier 5%/10%/5%/10% doc
+mismatch and match what the code actually enforces):
+1. Entry: Micro-pullback (1-3 green candles) on the front side of momentum,
+   confirmed by MACD bullish crossover + SMA20/50 crossover + volume + 5/5 scanner criteria
+2. Position Size: 10% of account per trade (up to 5 concurrent = 50% max exposure)
+3. Profit Target: +2% - sell 50% (partial), move stop to break-even
+4. Stop Loss: -1% trailing, managed in software (pre-market/extended hours has no broker stops)
+   -> 2:1 profit-target:stop-loss ratio, matching Warrior Trading's core risk/reward rule
+5. Daily Max Loss: 1% of account (Ross Cameron's conservative starting rule) - HARD KILL SWITCH
+6. Max Consecutive Losses: 3 (then done for day) - "three strikes" rule
+7. Time Window: 7 AM - 11 AM EST entries (pre-market/morning momentum), manage/close by 3:30 PM EST
+8. Exit Signals: trailing stop hit, MACD bearish crossover while losing, profit target hit, end of window
+9. Stock Selection (5 Pillars): $2-$20 price, <20M float, high relative volume, news catalyst, bullish MACD/bull flag
 
 Risk/position state (open_positions, daily_pnl, consecutive_losses,
 exited_today, trade_history) is persisted to MongoDB so it survives a
@@ -33,22 +39,24 @@ class AutoTraderService:
         self.active = False
         self.open_positions = {}  # {symbol: position_data}
 
-        # STRATEGY PARAMETERS - Warrior Trading Quick Scalp Style
-        # Ross Cameron focuses on quick 1-3% moves with tight stops
+        # STRATEGY PARAMETERS - Warrior Trading Quick Scalp Style (Ross Cameron)
+        # 2:1 profit-target:stop-loss ratio + 1% conservative daily-loss kill switch,
+        # matching Ross Cameron's documented risk rules (see file docstring above).
         self.max_positions = 5
-        self.position_size_pct = 0.10  # 10% of account per trade (larger size for smaller % gains)
-        self.profit_target_pct = 0.02  # 2% profit target - sell 50% here
+        self.position_size_pct = 0.10  # 10% of account per trade (up to 5 concurrent = 50% max exposure)
+        self.profit_target_pct = 0.02  # 2% profit target - sell 50% here (2:1 with the 1% stop)
         self.stop_loss_pct = 0.01  # 1% initial stop loss
         self.trailing_stop_pct = 0.01  # 1% trailing stop (default)
         self.partial_sell_pct = 0.50  # Sell 50% at profit target
         self.move_to_breakeven = True  # Move stop to break-even after partial sell
-        self.daily_max_loss_pct = 0.05  # 5% max daily loss (conservative)
-        self.max_consecutive_losses = 3
+        self.daily_max_loss_pct = 0.01  # 1% max daily loss (Ross Cameron's conservative starting rule) - hard kill switch
+        self.max_consecutive_losses = 3  # "Three strikes" rule - done for the day
 
         # Entry condition settings (adjustable)
         self.pullback_min_candles = 1  # Minimum green candles in pullback
         self.pullback_max_candles = 3  # Maximum green candles in pullback
         self.pullback_lookback_bars = 10  # Number of bars to look back for pullback pattern
+        self.require_micro_pullback = True  # Require 1-3 green candle micro-pullback pattern (Warrior Trading core entry trigger)
         self.require_macd_crossover = True  # Require MACD to cross above signal (not just be above)
         self.require_sma_crossover = True   # Require price to cross above SMA (not just be above)
         self.require_bull_flag = False  # Require bull flag pattern (bonus condition)
@@ -141,6 +149,8 @@ class AutoTraderService:
             self.pullback_max_candles = int(settings['pullback_max_candles'])
         if 'pullback_lookback_bars' in settings:
             self.pullback_lookback_bars = int(settings['pullback_lookback_bars'])
+        if 'require_micro_pullback' in settings:
+            self.require_micro_pullback = bool(settings['require_micro_pullback'])
         if 'require_macd_crossover' in settings:
             self.require_macd_crossover = bool(settings['require_macd_crossover'])
         if 'require_sma_crossover' in settings:
@@ -477,12 +487,13 @@ class AutoTraderService:
         Check entry conditions (Warrior Trading Strategy):
 
         1. Stock meets 5/5 scanner criteria
-        2. Green volume bars after red bar (buying pressure)
-        3. MACD bullish (crossover or above signal)
-        4. SMA(short) > SMA50 (crossover or just above)
-        5. Within trading hours
-        6. Not already in position
-        7. Not exited today (no re-entry rule)
+        2. Micro-pullback pattern (1-3 green candles after a move up)
+        3. Green volume bars after red bar (buying pressure)
+        4. MACD bullish (crossover or above signal)
+        5. SMA(short) > SMA50 (crossover or just above)
+        6. Within trading hours
+        7. Not already in position
+        8. Not exited today (no re-entry rule)
         """
         symbol = stock.get('symbol')
         try:
@@ -502,6 +513,11 @@ class AutoTraderService:
             criteria_count = stock.get('criteria_count', 0)
             if criteria_count < 5:
                 logger.debug(f"{symbol}: Only {criteria_count}/5 criteria met - need 5/5")
+                return None
+
+            pullback_check = self.check_micro_pullback(bars)
+            if self.require_micro_pullback and not pullback_check['is_valid']:
+                logger.debug(f"{symbol}: No valid micro-pullback pattern - {pullback_check.get('reason', 'n/a')}")
                 return None
 
             volume_check = self.check_volume_confirmation(bars)
@@ -542,6 +558,7 @@ class AutoTraderService:
                 'symbol': symbol,
                 'entry_price': current_price,
                 'criteria_count': criteria_count,
+                'micro_pullback': pullback_check,
                 'volume_confirmation': volume_check,
                 'macd': macd_check['macd'],
                 'macd_signal': macd_check['signal'],
@@ -553,7 +570,7 @@ class AutoTraderService:
             }
 
             logger.info(f"🎯 ENTRY SIGNAL: {symbol} @ ${entry_signal['entry_price']:.2f} (5/5 criteria)")
-            logger.info(f"   Volume: {volume_check['green_after_red']} green after red | MACD: {'crossover' if macd_check['crossover'] else 'bullish'} | SMA{self.sma_period}/50: {'crossover' if sma_check['crossover'] else 'confirmed'}")
+            logger.info(f"   Pullback: {pullback_check.get('pattern', 'n/a')} | Volume: {volume_check['green_after_red']} green after red | MACD: {'crossover' if macd_check['crossover'] else 'bullish'} | SMA{self.sma_period}/50: {'crossover' if sma_check['crossover'] else 'confirmed'}")
 
             return entry_signal
 

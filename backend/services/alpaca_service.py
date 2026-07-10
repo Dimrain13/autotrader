@@ -83,21 +83,38 @@ class AlpacaService:
                 quote = self.get_latest_quote(symbol)
                 ask_price = quote.get('ask_price', 0)
                 bid_price = quote.get('bid_price', 0)
-                
+
+                # Max-slippage guard: the scanner targets illiquid $2-$20 low-float
+                # names where a wide bid/ask spread means a "market-like" limit
+                # order can fill far from the last trade. Reject outright rather
+                # than blindly cross a dangerously wide spread.
+                MAX_SPREAD_PCT = 8.0
+                spread_pct = quote.get('spread_pct', 0)
+                if ask_price > 0 and bid_price > 0 and spread_pct > MAX_SPREAD_PCT:
+                    raise Exception(
+                        f"Spread too wide for {symbol} during extended hours "
+                        f"({spread_pct:.1f}% > {MAX_SPREAD_PCT}% max) - bid ${bid_price:.2f} / ask ${ask_price:.2f}. "
+                        f"Refusing to place order to avoid excessive slippage."
+                    )
+
+                # Tightened buffer (was +/-10%, now +/-3%) - still aggressive enough
+                # to fill fast-moving pre-market names without exposing the account
+                # to double-digit slippage on a single fill.
+                SLIPPAGE_BUFFER = 0.03
                 if side.lower() == "buy":
-                    # For buy: use ask price + 10% buffer (aggressive to ensure fill in pre-market)
+                    # For buy: use ask price + buffer (aggressive to ensure fill in pre-market)
                     if ask_price > 0:
-                        limit_price = round(ask_price * 1.10, 2)
+                        limit_price = round(ask_price * (1 + SLIPPAGE_BUFFER), 2)
                     elif bid_price > 0:
-                        limit_price = round(bid_price * 1.10, 2)
+                        limit_price = round(bid_price * (1 + SLIPPAGE_BUFFER), 2)
                     else:
                         raise Exception(f"No liquidity for {symbol} during extended hours - no bid or ask available")
                 else:
-                    # For sell: use bid price - 10% buffer (aggressive to ensure fill in pre-market)
+                    # For sell: use bid price - buffer (aggressive to ensure fill in pre-market)
                     if bid_price > 0:
-                        limit_price = round(bid_price * 0.90, 2)
+                        limit_price = round(bid_price * (1 - SLIPPAGE_BUFFER), 2)
                     elif ask_price > 0:
-                        limit_price = round(ask_price * 0.90, 2)
+                        limit_price = round(ask_price * (1 - SLIPPAGE_BUFFER), 2)
                     else:
                         raise Exception(f"No liquidity for {symbol} during extended hours - no bid or ask available")
                 

@@ -76,7 +76,7 @@ export default function Settings() {
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Position Sizing</div>
-                <div className="text-white font-mono font-bold">5% of account per trade</div>
+                <div className="text-white font-mono font-bold">10% of account per trade</div>
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Max Positions</div>
@@ -84,15 +84,15 @@ export default function Settings() {
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Profit Target</div>
-                <div className="text-[#00E599] font-mono font-bold">+10% per trade</div>
+                <div className="text-[#00E599] font-mono font-bold">+2% (sell 50%, move stop to breakeven)</div>
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Stop Loss</div>
-                <div className="text-[#FF1A40] font-mono font-bold">-5% per trade</div>
+                <div className="text-[#FF1A40] font-mono font-bold">-1% trailing</div>
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Daily Max Loss</div>
-                <div className="text-[#FF1A40] font-mono font-bold">-10% of account</div>
+                <div className="text-[#FF1A40] font-mono font-bold">-1% of account (hard kill switch)</div>
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Max Consecutive Losses</div>
@@ -100,22 +100,22 @@ export default function Settings() {
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Trading Hours</div>
-                <div className="text-white font-mono font-bold">7:00 AM - 11:00 AM EST</div>
+                <div className="text-white font-mono font-bold">Entries 7-11 AM · Manage until 3:30 PM EST</div>
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Risk/Reward Ratio</div>
-                <div className="text-[#00E599] font-mono font-bold">2:1 (Risk $50, Make $100)</div>
+                <div className="text-[#00E599] font-mono font-bold">2:1 (Ross Cameron / Warrior Trading rule)</div>
               </div>
             </div>
             <div className="mt-4 pt-4 border-t border-white/10">
               <div className="text-neutral-400 text-xs">
-                <strong>Entry Signals:</strong> Micro-pullback (1-3%) + MACD Bullish + Price &gt; SMA20 + Scanner 5/5
+                <strong>Entry Signals:</strong> Micro-pullback (1-3 green candles, required) + MACD Bullish Crossover + SMA20/50 Crossover + Volume confirmation + Scanner 5/5
               </div>
               <div className="text-neutral-400 text-xs mt-1">
-                <strong>Exit Signals:</strong> Profit target (+10%) | Stop loss (-5%) | MACD Bearish | End of window (11 AM)
+                <strong>Exit Signals:</strong> Partial profit +2% (sell 50%, breakeven stop) | Trailing stop -1% | MACD Bearish Crossover while losing | End of window (3:30 PM)
               </div>
               <div className="text-neutral-400 text-xs mt-2">
-                <strong>Note:</strong> All stops are software-managed (pre-market has no broker stops). See <code className="text-[#00E599]">/app/WARRIOR_TRADING_STRATEGY.md</code> for details.
+                <strong>Note:</strong> All stops are software-managed (pre-market/extended hours have no broker stops). Params match Ross Cameron's documented Warrior Trading rules (2:1 reward:risk, 1% conservative daily-loss limit, 3-strikes circuit breaker, $2-$20 low-float momentum universe).
               </div>
             </div>
           </div>

@@ -720,6 +720,7 @@ async def get_auto_trader_status():
             "pullback_min_candles": auto_trader.pullback_min_candles,
             "pullback_max_candles": auto_trader.pullback_max_candles,
             "pullback_lookback_bars": auto_trader.pullback_lookback_bars,
+            "require_micro_pullback": auto_trader.require_micro_pullback,
             "require_macd_crossover": auto_trader.require_macd_crossover,
             "require_sma_crossover": auto_trader.require_sma_crossover,
             "require_bull_flag": auto_trader.require_bull_flag,
@@ -750,9 +751,10 @@ async def update_auto_trader_settings(settings: dict):
             "message": "Settings updated successfully",
             "current_settings": {
                 # Entry conditions
-                "pullback_min_pct": auto_trader.pullback_min_pct,
-                "pullback_max_pct": auto_trader.pullback_max_pct,
+                "pullback_min_candles": auto_trader.pullback_min_candles,
+                "pullback_max_candles": auto_trader.pullback_max_candles,
                 "pullback_lookback_bars": auto_trader.pullback_lookback_bars,
+                "require_micro_pullback": auto_trader.require_micro_pullback,
                 "require_macd_crossover": auto_trader.require_macd_crossover,
                 "require_sma_crossover": auto_trader.require_sma_crossover,
                 "require_bull_flag": auto_trader.require_bull_flag,
