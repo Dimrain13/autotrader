@@ -105,3 +105,5 @@ credentials.json
 # Emergent agent memory - contains live API keys/tokens, never commit
 /memory/
 test_credentials.md
+.env
+.env.*
