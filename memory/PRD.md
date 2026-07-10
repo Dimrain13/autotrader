@@ -55,12 +55,31 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 - Fixed 1 HIGH bug found by testing: logout button was unreachable (nested inside `{account && ...}`), hoisted PAPER badge + logout button outside that conditional.
 
 ## Deferred / Backlog (P1/P2)
-- **Phase 4** (Logic Quality): reconcile strategy param mismatches (Settings UI says 5%/10%/5%/10%, actual code uses 10%/2%/1%/5%) - decide intended values and align UI+code+comments; decide fate of unused `check_micro_pullback`; extended-hours ±10% limit-order slippage guard for illiquid $2-20 names.
-- **Phase 5** (Windows VPS Deployment): NSSM service setup, Caddy/Nginx reverse proxy or `docker-compose.yml` (api+mongo+web), `.env.example`, README deploy section, bind backend to 127.0.0.1 for RDP-only access.
-- Alpaca paper API key/secret still not configured — user needs to add real keys to `/app/backend/.env` to fully exercise live order placement, position sizing, and quote/bars endpoints end-to-end.
+- Alpaca paper API key/secret still not configured — user needs to add real keys to `/app/backend/.env` to fully exercise live order placement, position sizing, and quote/bars endpoints end-to-end, and to live-verify the micro-pullback gating + extended-hours slippage guard (currently code-inspection-verified only).
 - Consider splitting `server.py` (1280+ lines) into per-domain routers (orders/settings/auto-trader/market) for maintainability (noted by testing agent, non-blocking).
+- Docker Desktop / `docker-compose.yml` path was NOT built (user chose Windows-native/NSSM) — available on request if preference changes later.
 
 ## Next Action Items
-1. Get user's real Alpaca paper API key + secret to verify live order placement/position sizing end-to-end on paper.
-2. Proceed to Phase 4 (logic quality/param reconciliation) once user confirms Phase 1-3 is satisfactory.
-3. Proceed to Phase 5 (Windows VPS deployment scripts: docker-compose / NSSM / start.bat) when ready to move off the Emergent preview environment.
+1. Get user's real Alpaca paper API key + secret to verify live order placement, micro-pullback entry gating, and extended-hours slippage guard end-to-end on paper.
+2. Follow `/app/deploy/windows/README.md` to actually deploy on the Windows Server VPS once ready to leave the Emergent preview environment.
+3. After a period of verified paper trading, flip `ALPACA_PAPER=false` deliberately (bold warning banner logs on startup) to go live with tiny size, per the rollout/safety plan in the original problem statement.
+
+## Session 2 Update (2026-07-10) — Phase 4 & 5
+
+### Phase 4 — Logic Quality/Trust ✅
+- **#13 Reconciled strategy params** with Ross Cameron's documented Warrior Trading rules (user's explicit choice): kept code's 10% position size / 2% profit target / 1% stop loss (already a correct 2:1 R:R), changed `daily_max_loss_pct` from 5% → **1%** (Ross's "conservative starting" daily-loss rule) as a hard kill switch. Fixed all stale UI text (`Settings.js` info card) and `WARRIOR_TRADING_STRATEGY.md` doc to match the reconciled values exactly (was showing stale 5%/10%/5%/10%/11 AM).
+- **check_micro_pullback wired in** as a REQUIRED entry condition (`require_micro_pullback=True`) — was previously computed but unused (diagnostic-only). Now gates real auto-trader entries in `check_entry_signals()`, checked first (after 5/5 scanner criteria, before volume/MACD/SMA).
+- **#15 Extended-hours slippage guard**: tightened the market-order limit-price buffer from ±10% → ±3%, and added a hard reject when bid/ask spread > 8% (protects against illiquid $2-$20 low-float names in extended hours).
+- **Bonus bug fix**: `POST /api/auto-trader/settings` was silently broken (AttributeError referencing non-existent `pullback_min_pct`/`pullback_max_pct`) — fixed to use the real attribute names and added `require_micro_pullback` to the response.
+- **#14 (real fill prices for P&L)** was already implemented during the Phase 1-3 pass (server.py sell logging, auto_trader monitor_exits, position_monitor partial/stop/bearish-exit paths all already read `filled_avg_price` when available).
+
+### Phase 5 — Windows-VPS Deployment (Windows-native, per user choice — no Docker) ✅
+- `/app/deploy/windows/README.md` — full step-by-step guide (prereqs, `.env` setup, build, run)
+- `/app/deploy/windows/start.bat` — one-touch manual startup (MongoDB + backend + frontend, 3 windows)
+- `/app/deploy/windows/install_nssm_service.ps1` / `uninstall_nssm_service.ps1` — persistent Windows services via NSSM (auto-start, survives reboot/RDP logout), backend bound to `127.0.0.1` only (RDP-only network model, no internet exposure)
+- `backend/.env.example`, `frontend/.env.example` — deployment templates
+- Root `/app/README.md` rewritten with security summary + link to deploy guide
+
+### Testing (Session 2)
+- Testing agent independently re-verified: 41/41 pytest pass, auto-trader/status reflects new params, settings bug fix confirmed, code-review of micro-pullback gating + slippage guard ordering, Settings.js UI text reconciled, all 7 frontend pages smoke-tested, logout regression re-confirmed. Zero bugs found (1 cosmetic stale code comment, fixed).
+
