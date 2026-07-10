@@ -24,15 +24,19 @@ chmod +x install_systemd_services.sh
 sudo ./install_systemd_services.sh
 ```
 
-This single script does **everything**, and is safe to re-run if anything
-fails partway (it skips steps already completed):
-1. Installs system prerequisites via apt if missing: Python 3.11 + venv,
-   Node.js/npm, MongoDB (adds MongoDB's official repo automatically), and
-   `yarn`/`serve` (npm globals).
+This single script does **everything** needed on a bare VPS, and re-runs
+safely if anything fails partway (every install command is unconditional/
+idempotent by nature - it won't destroy anything already configured):
+1. Installs system prerequisites via apt, every run: a compiler toolchain
+   (`build-essential`, `libssl-dev`, `libffi-dev`), Python 3 + venv + dev
+   headers, **Node.js 20 LTS via NodeSource** (the distro's default `nodejs`
+   apt package is often years out of date and can't build this app's React
+   19 frontend), MongoDB (via its official repo), and `yarn`/`serve`.
 2. Creates `backend/.env` from the template (auto-generates a random
    `API_ACCESS_TOKEN`) and interactively prompts for your Alpaca paper
    keys — press Enter to skip and fill them in later if you don't have
-   them yet.
+   them yet. **If `backend/.env` already exists, it's left untouched** so
+   a re-run never wipes out keys you've already entered.
 3. Creates the Python virtualenv and installs backend dependencies.
 4. Creates `frontend/.env` from the template, installs frontend
    dependencies, and builds it.

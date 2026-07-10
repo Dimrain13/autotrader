@@ -1,14 +1,14 @@
 #!/bin/bash
 # MomentumX - TRUE one-shot setup for a bare Linux VPS (Ubuntu/Debian).
-# Assumes NOTHING is pre-installed except a base OS + apt. Installs every
-# system dependency needed (compiler toolchain, Python, a modern Node.js via
-# NodeSource, MongoDB via its official repo, yarn/serve), sets up backend +
-# frontend .env files, installs app dependencies, builds the frontend, then
-# installs + starts both apps as persistent systemd services.
+# Assumes NOTHING is pre-installed. Every dependency install command below
+# runs unconditionally, every time - no "is it already installed?" checks,
+# since apt/npm installs are safe/idempotent to repeat. The only exceptions
+# (clearly marked below) are: not overwriting an already-configured
+# backend/.env (would destroy your entered Alpaca keys), and not letting
+# `useradd` hard-fail if the service user already exists.
 #
-# Run with sudo. Safe to re-run (idempotent - skips steps already done).
-# Assumes the repo lives at /opt/momentumx (adjust paths in the .service
-# files if you placed it elsewhere).
+# Run with sudo. Assumes the repo lives at /opt/momentumx (adjust paths in
+# the .service files if you placed it elsewhere).
 set -e
 
 if [ "$EUID" -ne 0 ]; then
@@ -18,8 +18,6 @@ fi
 
 if ! command -v apt-get >/dev/null 2>&1; then
     echo "ERROR: this script targets Debian/Ubuntu (apt-get not found)."
-    echo "On another distro, install the equivalent packages manually: a C"
-    echo "compiler toolchain, Python 3.10+, Node.js 20+, MongoDB, yarn, serve."
     exit 1
 fi
 
@@ -29,108 +27,65 @@ echo "Repo root: $ROOT_DIR"
 export DEBIAN_FRONTEND=noninteractive
 
 # ============================================================
-# [1/7] Base system packages (compiler toolchain + basics)
+# [1/7] Base system packages + Python (unconditional)
 # ============================================================
 echo ""
-echo "[1/7] Installing base system packages..."
+echo "[1/7] Installing base system packages + Python 3..."
 apt-get update -qq
 apt-get install -y \
     curl gnupg ca-certificates \
-    build-essential pkg-config \
-    libssl-dev libffi-dev
+    build-essential pkg-config libssl-dev libffi-dev \
+    python3 python3-venv python3-dev python3-pip
 
 # ============================================================
-# [2/7] Python 3 (use whatever's on the system, or install 3.11)
+# [2/7] Node.js 20 LTS via NodeSource (unconditional - the distro's
+# default apt "nodejs" package is years out of date and can't build
+# this app's React 19 frontend)
 # ============================================================
 echo ""
-echo "[2/7] Setting up Python 3..."
-PYTHON_BIN=""
-for candidate in python3.11 python3.12 python3.13 python3.10 python3; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-        PYTHON_BIN="$candidate"
-        break
-    fi
-done
-if [ -z "$PYTHON_BIN" ]; then
-    echo "  No python3 found - installing python3.11..."
-    apt-get install -y python3.11 python3.11-venv python3-pip
-    PYTHON_BIN="python3.11"
-else
-    echo "  Using $($PYTHON_BIN --version) at $(command -v $PYTHON_BIN)"
-fi
-# Make sure the venv module actually works for whichever python we picked
-# (some distros split it into a separate "pythonX.Y-venv" package).
-if ! "$PYTHON_BIN" -m venv --help >/dev/null 2>&1; then
-    PY_VER_SUFFIX=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-    echo "  Installing python${PY_VER_SUFFIX}-venv..."
-    apt-get install -y "python${PY_VER_SUFFIX}-venv" || apt-get install -y python3-venv
-fi
+echo "[2/7] Installing Node.js 20 LTS via NodeSource..."
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+echo "  Installed $(node -v)."
 
 # ============================================================
-# [3/7] Node.js 20 LTS via NodeSource (distro-default apt packages are
-# often years out of date and too old to build this React 19 frontend)
+# [3/7] MongoDB via its official apt repo (unconditional)
 # ============================================================
 echo ""
-echo "[3/7] Setting up Node.js..."
-NODE_MAJOR_OK=false
-if command -v node >/dev/null 2>&1; then
-    NODE_MAJOR=$(node -v | sed 's/^v//' | cut -d. -f1)
-    if [ "$NODE_MAJOR" -ge 18 ]; then
-        NODE_MAJOR_OK=true
-        echo "  Node $(node -v) already installed and new enough."
-    fi
-fi
-if [ "$NODE_MAJOR_OK" = false ]; then
-    echo "  Installing Node.js 20 LTS via NodeSource..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y nodejs
-    echo "  Installed $(node -v)."
-fi
-
-# ============================================================
-# [4/7] MongoDB via its official apt repo
-# ============================================================
-echo ""
-echo "[4/7] Setting up MongoDB..."
-if ! command -v mongod >/dev/null 2>&1; then
-    echo "  MongoDB not found - adding MongoDB's official apt repo and installing..."
-    UBUNTU_CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
-    curl -fsSL https://pgp.mongodb.com/server-8.0.asc | gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor
-    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${UBUNTU_CODENAME}/mongodb-org/8.0 multiverse" \
-        | tee /etc/apt/sources.list.d/mongodb-org-8.0.list
-    apt-get update -qq
-    if ! apt-get install -y mongodb-org; then
-        echo "  WARNING: mongodb-org install failed for codename '$UBUNTU_CODENAME' (your Ubuntu"
-        echo "  version may not be supported by MongoDB's repo yet). Install MongoDB manually -"
-        echo "  see https://www.mongodb.com/docs/manual/administration/install-on-linux/ - then re-run this script."
-        exit 1
-    fi
-else
-    echo "  MongoDB already present."
+echo "[3/7] Installing MongoDB..."
+UBUNTU_CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
+curl -fsSL https://pgp.mongodb.com/server-8.0.asc | gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${UBUNTU_CODENAME}/mongodb-org/8.0 multiverse" \
+    | tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+apt-get update -qq
+if ! apt-get install -y mongodb-org; then
+    echo "  WARNING: mongodb-org install failed for codename '$UBUNTU_CODENAME' (your Ubuntu"
+    echo "  version may not be supported by MongoDB's repo yet). Install MongoDB manually -"
+    echo "  see https://www.mongodb.com/docs/manual/administration/install-on-linux/ - then re-run this script."
+    exit 1
 fi
 systemctl enable --now mongod
 
 # ============================================================
-# [5/7] yarn + serve (npm globals)
+# [4/7] yarn + serve (unconditional)
 # ============================================================
 echo ""
-echo "[5/7] Installing yarn + serve..."
-if ! command -v yarn >/dev/null 2>&1 || ! command -v serve >/dev/null 2>&1; then
-    npm install -g yarn serve
-else
-    echo "  yarn/serve already present."
-fi
+echo "[4/7] Installing yarn + serve..."
+npm install -g yarn serve
 
 # ============================================================
-# [6/7] Backend + frontend setup (.env, deps, build)
+# [5/7] Backend setup (.env preserved if it already exists, deps
+# installed unconditionally)
 # ============================================================
 echo ""
-echo "[6/7] Setting up backend..."
+echo "[5/7] Setting up backend..."
 cd "$ROOT_DIR/backend"
 
-if [ ! -f ".env" ]; then
+if [ -f ".env" ]; then
+    echo "  backend/.env already exists - leaving it untouched (won't overwrite your keys)."
+else
     cp .env.example .env
-    GENERATED_TOKEN=$("$PYTHON_BIN" -c "import secrets; print(secrets.token_urlsafe(48))")
+    GENERATED_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
     sed -i "s/REPLACE_WITH_A_LONG_RANDOM_TOKEN/${GENERATED_TOKEN}/" .env
     echo "  Created backend/.env (generated a random API_ACCESS_TOKEN for you)."
 
@@ -147,38 +102,32 @@ if [ ! -f ".env" ]; then
             sed -i "s|^ALPACA_SECRET_KEY=\"\"|ALPACA_SECRET_KEY=\"${ALPACA_SECRET_INPUT}\"|" .env
         fi
     fi
-else
-    echo "  backend/.env already exists - leaving it untouched."
 fi
 
-if [ ! -d "venv" ]; then
-    "$PYTHON_BIN" -m venv venv
-fi
+python3 -m venv venv
 source venv/bin/activate
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
 deactivate
 echo "  Backend dependencies installed."
 
+# ============================================================
+# [6/7] Frontend setup (unconditional install + build)
+# ============================================================
 echo ""
-echo "  Setting up frontend..."
+echo "[6/7] Setting up frontend..."
 cd "$ROOT_DIR/frontend"
 [ -f ".env" ] || cp .env.example .env
-yarn install --silent
+yarn install
 yarn build
 echo "  Frontend built."
 
 # ============================================================
-# [7/7] Dedicated service user + systemd units
+# [7/7] Service user + systemd units (unconditional install/start)
 # ============================================================
 echo ""
 echo "[7/7] Installing systemd services..."
-if ! id -u momentumx >/dev/null 2>&1; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin momentumx
-    echo "  Created 'momentumx' system user."
-else
-    echo "  'momentumx' system user already exists."
-fi
+useradd --system --no-create-home --shell /usr/sbin/nologin momentumx 2>/dev/null || true
 
 cp "$SCRIPT_DIR/momentumx-backend.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/momentumx-frontend.service" /etc/systemd/system/
