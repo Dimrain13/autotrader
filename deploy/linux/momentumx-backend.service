@@ -8,7 +8,7 @@ Type=simple
 User=momentumx
 WorkingDirectory=/opt/momentumx/backend
 Environment="PATH=/opt/momentumx/backend/venv/bin"
-ExecStart=/opt/momentumx/backend/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8001 --workers 1
+ExecStart=/opt/momentumx/backend/venv/bin/uvicorn server:app --host 127.0.0.1 --port 9001 --workers 1
 Restart=on-failure
 RestartSec=3
 

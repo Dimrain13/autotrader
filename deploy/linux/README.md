@@ -33,13 +33,13 @@ nano .env
 Fill in:
 - `API_ACCESS_TOKEN` — generate with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`
 - `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` — from alpaca.markets (paper keys until verified)
-- `CORS_ORIGINS` — leave as `http://localhost:3000,http://127.0.0.1:3000` (the SSH tunnel makes the browser think it's talking to localhost)
+- `CORS_ORIGINS` — leave as `http://localhost:4000,http://127.0.0.1:4000` (the SSH tunnel makes the browser think it's talking to localhost)
 
 ```bash
 cd ../frontend
 cp .env.example .env
 ```
-Leave `REACT_APP_BACKEND_URL=http://127.0.0.1:8001`.
+Leave `REACT_APP_BACKEND_URL=http://127.0.0.1:9001`.
 
 ## 4. Install dependencies & build
 
@@ -85,13 +85,13 @@ and/or (`cd frontend && yarn build && sudo systemctl restart momentumx-frontend`
 ## 6. Access it from your laptop via SSH port-forward
 
 ```bash
-ssh -L 3000:127.0.0.1:3000 -L 8001:127.0.0.1:8001 your-user@your-vps-ip
+ssh -L 4000:127.0.0.1:4000 -L 9001:127.0.0.1:9001 your-user@your-vps-ip
 ```
-Then open **http://localhost:3000** in your local browser. Enter the
+Then open **http://localhost:4000** in your local browser. Enter the
 `API_ACCESS_TOKEN` from your `.env` on the token-gate screen.
 
 Keep that SSH session open while you use the app (or use `-f -N` to run the
-tunnel in the background: `ssh -f -N -L 3000:127.0.0.1:3000 -L 8001:127.0.0.1:8001 user@vps-ip`).
+tunnel in the background: `ssh -f -N -L 4000:127.0.0.1:4000 -L 9001:127.0.0.1:9001 user@vps-ip`).
 
 ## Performance notes (backend already optimized for this)
 - Scanner news lookups run in parallel (12 concurrent workers) with a 3-minute

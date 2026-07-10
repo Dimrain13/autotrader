@@ -18,27 +18,27 @@ else
 fi
 
 echo ""
-echo "[2/3] Starting backend (127.0.0.1:8001)..."
+echo "[2/3] Starting backend (127.0.0.1:9001)..."
 cd "$ROOT_DIR/backend"
 source venv/bin/activate
-nohup uvicorn server:app --host 127.0.0.1 --port 8001 > backend.log 2>&1 &
+nohup uvicorn server:app --host 127.0.0.1 --port 9001 > backend.log 2>&1 &
 echo "  Backend PID: $!  (logs: backend/backend.log)"
 deactivate
 
 echo ""
-echo "[3/3] Building + serving frontend (127.0.0.1:3000)..."
+echo "[3/3] Building + serving frontend (127.0.0.1:4000)..."
 cd "$ROOT_DIR/frontend"
 if [ ! -d "build" ]; then
     yarn build
 fi
-nohup npx serve -s build -l 127.0.0.1:3000 > frontend.log 2>&1 &
+nohup npx serve -s build -l 127.0.0.1:4000 > frontend.log 2>&1 &
 echo "  Frontend PID: $!  (logs: frontend/frontend.log)"
 
 echo ""
 echo "============================================================"
 echo "MomentumX is running, bound to 127.0.0.1 only."
 echo "From your LOCAL machine, tunnel in over SSH:"
-echo "  ssh -L 3000:127.0.0.1:3000 -L 8001:127.0.0.1:8001 user@your-vps-ip"
-echo "Then open http://localhost:3000 in your local browser."
+echo "  ssh -L 4000:127.0.0.1:4000 -L 9001:127.0.0.1:9001 user@your-vps-ip"
+echo "Then open http://localhost:4000 in your local browser."
 echo "Stop with: pkill -f 'uvicorn server:app' && pkill -f 'serve -s build'"
 echo "============================================================"

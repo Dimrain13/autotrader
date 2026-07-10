@@ -6,7 +6,7 @@ After=network.target momentumx-backend.service
 Type=simple
 User=momentumx
 WorkingDirectory=/opt/momentumx/frontend
-ExecStart=/usr/bin/npx serve -s build -l 127.0.0.1:3000
+ExecStart=/usr/bin/npx serve -s build -l 127.0.0.1:4000
 Restart=on-failure
 RestartSec=3
 
