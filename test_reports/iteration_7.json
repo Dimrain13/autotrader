@@ -1,0 +1,36 @@
+{
+  "summary": "Follow-up round verified the news-detection-speed fix (Alpaca/Benzinga News API checked first, Google News RSS as fallback) and the concurrency-safety fixes (parallel volume/float/news checks + threading.Lock guarding scan_market's is_scanning check-and-set). Full backend pytest suite: 47/47 passed (no flake this run, ~11s total). Ran 2 real scans via POST /api/scanner/scan: first took 25.6s, second (fresh, past cache) took 6.4s - both within acceptable range and much faster than the pre-fix 40-60s baseline. Backend logs confirmed 'Checking news for N candidates... (Alpaca/Benzinga first, Google News fallback)' followed by 'News check complete' shortly after. Verified criteria_count invariant (criteria_count == count of true values in criteria_met) held with ZERO mismatches across 100 fully_verified results (50 per scan x 2 scans). Verified news_source correctness for all fully_verified results (0 issues) - only 'Benzinga (Alpaca)'/'Google News'/null, never bare 'Alpaca'. Demo scanner (GET /api/scanner/demo) instant and correct. Auto-trader confirmed OFF (active:false) after pytest suite and after manual scans. Frontend regression: Dashboard, Scanner, Trade, History, Missed, Settings, Demo pages all navigate and load correctly with no new console errors (only the pre-existing History list key-prop warning noted in iteration_6, unrelated to this session).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/scanner/scan", "issue": "For candidates NOT in the top-50 'fully_verified' set, has_positive_news carries the initial-pass ESTIMATE (pct_change>=10) but news_source is left null since check_single_news never ran on them - so has_positive_news=true with news_source=null can occur for unverified candidates. This is pre-existing design (estimate fields exist for all criteria pre-verification, e.g. float/volume also carry placeholder values) and not a regression from this session's news-speed fix; only affects display of unverified rows, not the safety-critical fully_verified invariant which was confirmed exact (0 mismatches)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "History page", "issue": "Pre-existing React 'unique key prop' console warning (already flagged in iteration_6, not new)", "selector": "History page list items", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/test_reports/pytest/pytest_iteration7_full.xml"],
+  "action_items": [
+    "(Optional, low priority, pre-existing) Add unique key prop on History page list items.",
+    "(Optional, cosmetic) Consider setting news_source appropriately (or documenting) for unverified/estimated has_positive_news rows in scan results to avoid confusion, though this doesn't affect the safety-critical fully_verified path."
+  ],
+  "critical_code_review_comments": [
+    "check_alpaca_news() correctly uses timezone-aware datetime.now(timezone.utc) for NewsRequest.start - the previous naive-datetime bug is fixed. Confirmed via logs and correct news_source tagging.",
+    "_check_candidate_news() correctly tries Alpaca/Benzinga first then falls back to Google News only when Alpaca has no coverage - confirmed in logs ('Checking news for N candidates... (Alpaca/Benzinga first, Google News fallback)') and via news_source field values across 2 live scans.",
+    "scan_stocks() concurrent 3-worker pool (volume/float/news) + final authoritative criteria_count recompute correctly avoids the shared-counter race - verified 0 mismatches across 100 fully_verified results in 2 separate live scans.",
+    "scan_market()'s threading.Lock correctly guards the is_scanning check-and-set (atomic read-then-write) - code review confirms the check and mutation happen inside the same `with self._scan_lock:` block.",
+    "Full pytest suite (47/47) passed cleanly this run including the previously-flaky test_manual_process_trigger_no_arity_bug - no flake reproduced. Auto-trader confirmed OFF (active:false) both after pytest suite and after manual scan testing; account remains flat, no orders placed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "API_ACCESS_TOKEN from /app/memory/test_credentials.md used successfully for curl and frontend token-gate login",
+  "seed_data_creation": "None - used existing live scan data (2 real scans against live Alpaca paper market data)",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "News-speed fix and concurrency-safety fixes (3-worker pool + criteria_count recompute + scan_lock) all verified working correctly with zero criteria_count mismatches and correct news_source tagging across 2 live scans (25.6s and 6.4s respectively, well under the old 40-60s baseline). Backend pytest 47/47 clean, no flake this run. Only remaining items are the pre-existing History key-prop warning and a minor cosmetic note about news_source being null for unverified/estimated rows (not a regression, not safety-critical). Auto-trader left OFF, no orders placed.",
+  "rca of the issue": "N/A - no new bugs found. The 'BAD NEWS SOURCE' pattern initially flagged during testing was investigated and traced to pre-existing behavior: has_positive_news is an ESTIMATE for stocks outside the top-50 verified set (never actually checked by check_single_news), so news_source correctly stays null for those. All 50/50 fully_verified results in each scan had fully correct news_source values."
+}

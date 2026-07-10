@@ -224,14 +224,19 @@ class TestAutoTrader:
         would leak a Python traceback mentioning "positional argument").
         """
         session.post(f"{BASE_URL}/api/auto-trader/toggle", params={"enabled": True})
-        r = session.post(f"{BASE_URL}/api/auto-trader/process")
-        if r.status_code == 500:
-            assert "Alpaca API not configured" in r.text
-            assert "positional argument" not in r.text
-            assert "TypeError" not in r.text
-        else:
-            assert r.status_code == 200
-        session.post(f"{BASE_URL}/api/auto-trader/toggle", params={"enabled": False})
+        try:
+            r = session.post(f"{BASE_URL}/api/auto-trader/process")
+            if r.status_code == 500:
+                assert "Alpaca API not configured" in r.text
+                assert "positional argument" not in r.text
+                assert "TypeError" not in r.text
+            else:
+                assert r.status_code == 200
+        finally:
+            # Always disable auto-trader afterward, even if an assertion above
+            # fails - this test toggles it on and must not leave it running
+            # against the live paper account.
+            session.post(f"{BASE_URL}/api/auto-trader/toggle", params={"enabled": False})
 
 
 # ============ EVENT LOOP NOT BLOCKED (Phase 3 #11) ============

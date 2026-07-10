@@ -1,5 +1,6 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
+import threading
 from typing import List, Dict
 import pandas as pd
 import numpy as np
@@ -35,6 +36,12 @@ class ScannerService:
         self.cache_timestamp = None
         self.cache_duration = timedelta(seconds=120)  # Cache for 2 minutes (increased from 60s)
         self.is_scanning = False
+        # Guards the is_scanning check-and-set below - without this, two
+        # concurrent requests (e.g. the auto-trader loop + a manual scan)
+        # could both read is_scanning=False before either sets it True,
+        # launching two simultaneous full-market scans and tripping
+        # Alpaca's "too many requests" rate limit.
+        self._scan_lock = threading.Lock()
         
         # Initialize Alpaca clients
         api_key = os.getenv('ALPACA_API_KEY')
@@ -95,45 +102,72 @@ class ScannerService:
             return None
         return sum(prices[-period:]) / period
     
-    def check_positive_news(self, symbol: str) -> tuple[bool, str]:
-        """Check if stock has recent positive news"""
+    def check_alpaca_news(self, symbol: str, hours_back: int = 24, limit: int = 5) -> Dict:
+        """
+        Check Alpaca's real-time news API (Benzinga-powered, already included
+        in the Alpaca data subscription) for stock news.
+
+        This is a fast, clean API call (no HTML scraping) - typically
+        30-200ms vs 1-3s+ for Google News RSS scraping - so it's checked
+        FIRST as the primary news source, with Google News as a fallback
+        for illiquid micro-caps Benzinga doesn't cover.
+
+        Uses the same catalyst-scoring bar as Google News (score_headline)
+        so both sources are judged identically. Returns the same shape as
+        google_news_service.search_stock_news(): {'has_news', 'articles'}.
+        """
         if not self.news_client:
-            return False, "News API not available"
-        
+            return {'has_news': False, 'articles': []}
+
         try:
-            # Get news from last 24 hours
+            from services.google_news_service import score_headline, classify_freshness
+
+            # IMPORTANT: must be timezone-aware (UTC) - a naive datetime here
+            # previously caused this check to silently return 0 results every
+            # time, forcing 100% reliance on the much slower Google News path.
             news_request = NewsRequest(
                 symbols=symbol,
-                start=datetime.now() - timedelta(days=1),
-                limit=10
+                start=datetime.now(timezone.utc) - timedelta(hours=hours_back),
+                limit=limit
             )
             news_set = self.news_client.get_news(news_request)
-            
+
             if not news_set or not hasattr(news_set, 'news') or not news_set.news:
-                return False, "No recent news"
-            
-            # Check for positive keywords in headlines
-            positive_keywords = ['up', 'surge', 'gain', 'rally', 'positive', 'breakthrough', 'approval', 'deal', 'win', 'growth', 'beat', 'revenue', 'earnings']
-            negative_keywords = ['down', 'drop', 'fall', 'loss', 'miss', 'cut', 'layoff', 'decline']
-            
-            # Iterate through news articles
-            for article in news_set.news[:5]:  # Check first 5 articles
-                headline = str(article.headline).lower() if hasattr(article, 'headline') else ''
-                summary = str(article.summary).lower() if hasattr(article, 'summary') else ''
-                
-                # Skip if contains negative keywords
-                if any(keyword in headline or keyword in summary for keyword in negative_keywords):
+                return {'has_news': False, 'articles': []}
+
+            articles = []
+            for article in news_set.news[:limit]:
+                headline = str(getattr(article, 'headline', '') or '')
+                if not headline:
                     continue
-                
-                # Check for positive keywords
-                if any(keyword in headline or keyword in summary for keyword in positive_keywords):
-                    return True, str(article.headline)[:100] if hasattr(article, 'headline') else "Positive news"
-            
-            return False, "No positive news detected"
-            
+
+                scored = score_headline(headline)
+                if scored is None:
+                    continue
+
+                created_at = getattr(article, 'created_at', None)
+                freshness, days_old = classify_freshness(created_at) if created_at else ('unknown', None)
+
+                articles.append({
+                    'title': headline,
+                    'link': getattr(article, 'url', '') or '',
+                    'source': f"benzinga/{getattr(article, 'source', 'alpaca')}",
+                    'pubDate': created_at.isoformat() if created_at else '',
+                    'sentiment': scored['sentiment'],
+                    'score': scored['score'],
+                    'catalysts': scored['catalysts'],
+                    'freshness': freshness,
+                    'days_old': days_old
+                })
+
+            if articles:
+                logger.info(f"{symbol}: Alpaca/Benzinga found {len(articles)} catalyst news article(s)")
+                return {'has_news': True, 'articles': articles}
+            return {'has_news': False, 'articles': []}
+
         except Exception as e:
-            logger.error(f"Error checking news for {symbol}: {str(e)}")
-            return False, "Error fetching news"
+            logger.debug(f"Error checking Alpaca news for {symbol}: {str(e)}")
+            return {'has_news': False, 'articles': []}
     
     def check_bull_flag_pattern(self, bars: List[Dict]) -> bool:
         if len(bars) < 10:
@@ -282,13 +316,33 @@ class ScannerService:
         logger.info(f"Initial scan complete: {len(results)} candidates found (2+ base criteria)")
         
         # Second pass: Calculate accurate volume, float and news for promising candidates
-        # OPTIMIZATION: Only verify top 50 candidates to save time
+        # OPTIMIZATION: Only verify top 50 candidates to save time.
+        # These three checks are independent (different criteria_met keys) so
+        # they run CONCURRENTLY - this is the "find news ASAP" fix: news no
+        # longer waits in line behind volume+float, cutting total second-pass
+        # latency roughly in half-to-a-third.
         if results:
             top_results = sorted(results, key=lambda x: x.get('criteria_count', 0), reverse=True)[:50]
-            logger.info(f"Verifying volume, float and news for top {len(top_results)} candidates...")
-            self._calculate_accurate_volume(top_results, criteria)
-            self._calculate_accurate_float(top_results, criteria)
-            self._check_candidate_news(top_results)
+            logger.info(f"Verifying volume, float and news for top {len(top_results)} candidates (concurrently)...")
+
+            from concurrent.futures import ThreadPoolExecutor as _OuterPool
+            with _OuterPool(max_workers=3) as outer_pool:
+                futures = [
+                    outer_pool.submit(self._calculate_accurate_volume, top_results, criteria),
+                    outer_pool.submit(self._calculate_accurate_float, top_results, criteria),
+                    outer_pool.submit(self._check_candidate_news, top_results),
+                ]
+                for f in futures:
+                    f.result()  # propagate any exception, wait for all to finish
+
+            # Recompute criteria_count/meets_all_criteria once, authoritatively,
+            # now that all three concurrent checks have finished writing their
+            # own criteria_met[...] keys (avoids the shared-counter race that
+            # concurrent increments would otherwise cause).
+            for r in top_results:
+                r['criteria_count'] = sum(1 for v in r['criteria_met'].values() if v)
+                r['meets_all_criteria'] = r['criteria_count'] == 5
+                r['ready_to_trade'] = r['meets_all_criteria']
             
             # Keep all results but mark which ones were fully verified
             verified_symbols = {r['symbol'] for r in top_results}
@@ -483,17 +537,12 @@ class ScannerService:
                 result['volume_ratio'] = round(accurate_volume_ratio, 2)
                 result['volume_needs_calc'] = False
                 
-                # Re-check volume criterion with accurate data
+                # Re-check volume criterion with accurate data. NOTE: criteria_count
+                # is recomputed once from criteria_met in a final pass after
+                # volume/float/news all finish (they now run concurrently, so
+                # incrementing a shared counter here would race).
                 meets_volume = accurate_volume_ratio >= criteria.get('min_volume_ratio', 5)
                 result['criteria_met']['volume_ratio'] = meets_volume
-                
-                # Update criteria count
-                if meets_volume:
-                    result['criteria_count'] += 1
-                
-                # Update meets_all_criteria flag
-                result['meets_all_criteria'] = result['criteria_count'] == 5
-                result['ready_to_trade'] = result['meets_all_criteria']
                 
             logger.info(f"Accurate volume calculated for {len(symbols)} stocks (using {int(minutes_elapsed)} minutes elapsed)")
             
@@ -519,15 +568,9 @@ class ScannerService:
                 result['volume_ratio'] = round(accurate_volume_ratio, 2)
                 result['volume_needs_calc'] = False
                 
-                # Re-check volume criterion
+                # Re-check volume criterion (criteria_count recomputed in final pass)
                 meets_volume = accurate_volume_ratio >= criteria.get('min_volume_ratio', 5)
                 result['criteria_met']['volume_ratio'] = meets_volume
-                
-                if meets_volume:
-                    result['criteria_count'] += 1
-                
-                result['meets_all_criteria'] = result['criteria_count'] == 5
-                result['ready_to_trade'] = result['meets_all_criteria']
             
             logger.info(f"Applied fallback intraday projection for {len(results)} stocks")
 
@@ -575,11 +618,9 @@ class ScannerService:
 
             meets_float = shares_outstanding is not None and shares_outstanding <= max_float
             result['criteria_met']['float'] = meets_float
-            if meets_float:
-                result['criteria_count'] += 1
-
-            result['meets_all_criteria'] = result['criteria_count'] == 5
-            result['ready_to_trade'] = result['meets_all_criteria']
+            # criteria_count is recomputed once in a final pass after
+            # volume/float/news all finish (see scan_stocks) - not incremented
+            # here since these three checks now run concurrently.
 
             return result
 
@@ -597,8 +638,16 @@ class ScannerService:
         logger.info(f"Real float data found for {found_count}/{len(results)} candidates")
 
     def _check_candidate_news(self, results: List[Dict]):
-        """Check for actual positive news from news sources for candidates - PARALLEL + GOOGLE NEWS"""
-        logger.info(f"Checking news for {len(results)} candidates... (parallel with Google News)")
+        """Check for actual positive news from news sources for candidates - PARALLEL.
+
+        PRIMARY: Alpaca/Benzinga News API - a clean API call (~30-200ms),
+        already included in the Alpaca data subscription. Checked first so
+        the news signal is ready as fast as possible instead of lagging
+        behind the price/volume/float checks.
+        FALLBACK: Google News RSS scraping (~1-3s+) - catches illiquid
+        micro-caps Benzinga doesn't cover, but too slow to be primary.
+        """
+        logger.info(f"Checking news for {len(results)} candidates... (Alpaca/Benzinga first, Google News fallback)")
         
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from services.google_news_service import google_news_service
@@ -607,24 +656,29 @@ class ScannerService:
         news_found_count = 0
         
         def check_single_news(result):
-            """Check news for single stock - Uses Google News RSS"""
+            """Check news for single stock - Alpaca/Benzinga first, Google News fallback"""
             if not result.get('news_needs_check'):
                 return result, False
             
             symbol = result['symbol']
             
             try:
-                # Get company name for better news search
-                company_name = None
-                try:
-                    asset_info = alpaca_service.get_asset(symbol)
-                    company_name = asset_info.get('name')
-                except:
-                    pass
-                
-                # PRIMARY: Use Google News (publicly visible news, positive only)
-                # Pass company name for better search results
-                news_result = google_news_service.search_stock_news(symbol, hours_back=24, limit=1, company_name=company_name)
+                # PRIMARY: Alpaca/Benzinga News API (fast, no scraping)
+                news_result = self.check_alpaca_news(symbol, hours_back=24, limit=1)
+                news_source = 'Benzinga (Alpaca)'
+
+                # FALLBACK: Google News RSS (slower, but broader coverage for
+                # illiquid micro-caps Benzinga doesn't index)
+                if not news_result['has_news']:
+                    company_name = None
+                    try:
+                        asset_info = alpaca_service.get_asset(symbol)
+                        company_name = asset_info.get('name')
+                    except:
+                        pass
+                    news_result = google_news_service.search_stock_news(symbol, hours_back=24, limit=1, company_name=company_name)
+                    news_source = 'Google News'
+
                 has_news = news_result['has_news']
                 headline = news_result['articles'][0]['title'] if news_result['articles'] else ""
                 
@@ -636,29 +690,16 @@ class ScannerService:
                     news_freshness = article.get('freshness', 'unknown')
                     news_days_old = article.get('days_old')
                 
-                # FALLBACK: If no Google News, try Alpaca news
-                if not has_news:
-                    has_news_alpaca, headline_alpaca = self.check_positive_news(symbol)
-                    if has_news_alpaca:
-                        has_news = True
-                        headline = headline_alpaca
-                        news_freshness = 'unknown'  # Alpaca doesn't provide freshness
-                
                 result['has_positive_news'] = has_news
                 result['news_headline'] = headline if has_news else "No recent news found"
                 result['news_needs_check'] = False
-                result['news_source'] = 'Google News' if has_news and news_result['articles'] else 'Alpaca'
+                result['news_source'] = news_source if has_news else None
                 result['news_freshness'] = news_freshness  # breaking, warm, cold, unknown
                 result['news_days_old'] = news_days_old
                 
-                # Update criteria
+                # Update criteria (criteria_count recomputed in final pass -
+                # see scan_stocks - since volume/float/news now run concurrently)
                 result['criteria_met']['positive_news'] = has_news
-                if has_news:
-                    result['criteria_count'] += 1
-                
-                # Update meets_all_criteria flag
-                result['meets_all_criteria'] = result['criteria_count'] == 5
-                result['ready_to_trade'] = result['meets_all_criteria']
                 
                 return result, has_news
             except Exception as e:
@@ -710,12 +751,13 @@ class ScannerService:
                 return self.cached_results
         
         # If another scan is already running, return cached results (even if stale)
-        if self.is_scanning:
-            logger.info(f"⚡ Scan in progress - returning cached results ({len(self.cached_results)} stocks)")
-            return self.cached_results if self.cached_results else []
-        
-        # Mark as scanning
-        self.is_scanning = True
+        with self._scan_lock:
+            if self.is_scanning:
+                logger.info(f"⚡ Scan in progress - returning cached results ({len(self.cached_results)} stocks)")
+                return self.cached_results if self.cached_results else []
+            
+            # Mark as scanning (atomic with the check above)
+            self.is_scanning = True
         
         results = []
         

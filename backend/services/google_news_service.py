@@ -6,14 +6,130 @@ Uses web scraping approach since Google News doesn't have a free API
 """
 
 import requests
+from requests.adapters import HTTPAdapter
 from datetime import datetime, timedelta
 import logging
 import time
 import threading
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 import urllib.parse
 
 logger = logging.getLogger(__name__)
+
+
+# Tier 1: STRONG CATALYSTS (Score: 10) - Clear positive events (REAL NEWS)
+# These are actual news events that explain WHY a stock is moving.
+# Shared between Google News and Alpaca/Benzinga news checks so both
+# sources apply the identical catalyst-quality bar (Warrior Trading style:
+# only real catalysts count, not just "up"/"gains" chatter).
+STRONG_CATALYSTS = [
+    # FDA & Healthcare
+    'fda approval', 'fda approved', 'fda clears', 'fda grants', 'drug approved',
+    'clinical trial success', 'positive trial', 'trial results', 'phase 3',
+    'breakthrough therapy', 'fast track', 'priority review',
+    # M&A
+    'acquired', 'acquisition', 'merger', 'buyout', 'takeover', 'tender offer',
+    # Earnings & Financials
+    'earnings beat', 'beats earnings', 'beats estimates', 'earnings surprise',
+    'profit soars', 'revenue beats', 'raised guidance', 'raises outlook',
+    # Analyst Actions
+    'upgraded', 'upgrade', 'price target raised', 'target increased',
+    'initiates coverage', 'buy rating', 'strong buy',
+    # Business Wins
+    'patent approved', 'patent granted', 'wins patent', 'new patent',
+    'contract win', 'wins contract', 'awarded contract', 'secures deal',
+    'partnership', 'partners with', 'strategic alliance', 'collaboration',
+    'major customer', 'key customer', 'new customer',
+    # Product/Tech
+    'breakthrough', 'revolutionary', 'game changer', 'first-of-its-kind',
+    'launches new', 'unveils', 'announces new product',
+    # Capital Markets
+    'ipo prices', 'goes public', 'direct listing', 'spac merger completes'
+]
+
+# Tier 2: GOOD MOMENTUM (Score: 5) - Positive price action
+MOMENTUM_KEYWORDS = [
+    'surge', 'soar', 'soars', 'rally', 'rallies', 'spike', 'spikes',
+    'jump', 'jumps', 'breakout', 'breaks out', 'all-time high',
+    'record high', 'doubles', 'triples'
+]
+
+# Tier 3: WEAK SIGNALS (Score: 2) - Generic positive
+WEAK_POSITIVE_KEYWORDS = [
+    'gains', 'up', 'rises', 'announces', 'launches', 'expands',
+    'growth', 'positive', 'partnership', 'deal'
+]
+
+# NEGATIVE FILTERS - Automatic rejection
+NEGATIVE_KEYWORDS = [
+    'plunge', 'plunges', 'crash', 'crashes', 'tumble', 'tumbles',
+    'decline', 'declines', 'drop', 'drops', 'fall', 'falls', 'down',
+    'miss', 'misses', 'disappoints', 'warning', 'concern', 'worried',
+    'lawsuit', 'sued', 'investigation', 'fraud', 'scandal', 'layoffs',
+    'bankrupt', 'bankruptcy', 'closes', 'shuts down', 'shut down',
+    'failure', 'fails', 'reject', 'rejected', 'denied', 'denies',
+    'downgrade', 'downgraded', 'cuts', 'cut', 'suspended', 'halted',
+    'loss', 'losses', 'blood bath', 'nightmare'
+]
+
+
+def score_headline(title: str) -> Optional[Dict]:
+    """
+    Score a headline for Warrior-Trading-style news catalyst strength.
+
+    Returns None if the headline should be rejected (contains negative
+    keywords, or doesn't clear the minimum "real catalyst" bar of score>=10 -
+    momentum/weak words alone like "surge"/"gains" are just price action,
+    not a catalyst). Otherwise returns {'score', 'sentiment', 'catalysts'}.
+    """
+    title_lower = title.lower()
+
+    score = 0
+    matched_catalysts = []
+
+    for catalyst in STRONG_CATALYSTS:
+        if catalyst in title_lower:
+            score += 10
+            matched_catalysts.append(catalyst)
+
+    if score == 0:
+        for keyword in MOMENTUM_KEYWORDS:
+            if keyword in title_lower:
+                score += 5
+                matched_catalysts.append(keyword)
+                break
+
+    if score == 0:
+        for keyword in WEAK_POSITIVE_KEYWORDS:
+            if keyword in title_lower:
+                score += 2
+                matched_catalysts.append(keyword)
+                break
+
+    has_negative = any(keyword in title_lower for keyword in NEGATIVE_KEYWORDS)
+
+    if has_negative or score < 10:
+        return None
+
+    sentiment_label = 'strong_catalyst' if score >= 10 else ('momentum' if score >= 5 else 'weak')
+
+    return {'score': score, 'sentiment': sentiment_label, 'catalysts': matched_catalysts[:3]}
+
+
+def classify_freshness(published_at: datetime) -> Tuple[str, Optional[int]]:
+    """Classify an article's age into breaking/warm/cold + days_old, shared helper."""
+    try:
+        now = datetime.now(published_at.tzinfo) if published_at.tzinfo else datetime.now()
+        age = now - published_at
+        days_old = age.days
+        hours_old = age.total_seconds() / 3600
+        if days_old <= 1 or hours_old <= 36:
+            return 'breaking', days_old
+        elif days_old <= 5:
+            return 'warm', days_old
+        return 'cold', days_old
+    except Exception:
+        return 'unknown', None
 
 
 class GoogleNewsService:
@@ -35,8 +151,15 @@ class GoogleNewsService:
         }
         # Reuse a single session for connection pooling/keep-alive - avoids a
         # fresh TCP/TLS handshake on every request when scanning many symbols.
+        # Pool size raised to 20 (>= the 12 worker threads used for parallel
+        # news checks) - the default of 10 was smaller than the thread count,
+        # causing "connection pool full, discarding connection" churn and
+        # extra handshake overhead under load.
         self._session = requests.Session()
         self._session.headers.update(self.headers)
+        adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20)
+        self._session.mount('https://', adapter)
+        self._session.mount('http://', adapter)
         self._cache: Dict[tuple, tuple] = {}  # (symbol, company_name, limit) -> (timestamp, result)
         self._cache_lock = threading.Lock()
     
@@ -142,97 +265,16 @@ class GoogleNewsService:
                         # Skip irrelevant news (e.g., "RIOT" about actual riots, not Riot Platforms stock)
                         continue
                     
-                    # ENHANCED SENTIMENT SCORING - Strong catalysts only
-                    
-                    # Tier 1: STRONG CATALYSTS (Score: 10) - Clear positive events (REAL NEWS)
-                    # These are actual news events that explain WHY a stock is moving
-                    strong_catalysts = [
-                        # FDA & Healthcare
-                        'fda approval', 'fda approved', 'fda clears', 'fda grants', 'drug approved',
-                        'clinical trial success', 'positive trial', 'trial results', 'phase 3',
-                        'breakthrough therapy', 'fast track', 'priority review',
-                        # M&A
-                        'acquired', 'acquisition', 'merger', 'buyout', 'takeover', 'tender offer',
-                        # Earnings & Financials
-                        'earnings beat', 'beats earnings', 'beats estimates', 'earnings surprise',
-                        'profit soars', 'revenue beats', 'raised guidance', 'raises outlook',
-                        # Analyst Actions
-                        'upgraded', 'upgrade', 'price target raised', 'target increased',
-                        'initiates coverage', 'buy rating', 'strong buy',
-                        # Business Wins
-                        'patent approved', 'patent granted', 'wins patent', 'new patent',
-                        'contract win', 'wins contract', 'awarded contract', 'secures deal',
-                        'partnership', 'partners with', 'strategic alliance', 'collaboration',
-                        'major customer', 'key customer', 'new customer',
-                        # Product/Tech
-                        'breakthrough', 'revolutionary', 'game changer', 'first-of-its-kind',
-                        'launches new', 'unveils', 'announces new product',
-                        # Capital Markets
-                        'ipo prices', 'goes public', 'direct listing', 'spac merger completes'
-                    ]
-                    
-                    # Tier 2: GOOD MOMENTUM (Score: 5) - Positive price action
-                    momentum_keywords = [
-                        'surge', 'soar', 'soars', 'rally', 'rallies', 'spike', 'spikes',
-                        'jump', 'jumps', 'breakout', 'breaks out', 'all-time high',
-                        'record high', 'doubles', 'triples'
-                    ]
-                    
-                    # Tier 3: WEAK SIGNALS (Score: 2) - Generic positive
-                    weak_positive = [
-                        'gains', 'up', 'rises', 'announces', 'launches', 'expands',
-                        'growth', 'positive', 'partnership', 'deal'
-                    ]
-                    
-                    # NEGATIVE FILTERS - Automatic rejection
-                    negative_keywords = [
-                        'plunge', 'plunges', 'crash', 'crashes', 'tumble', 'tumbles',
-                        'decline', 'declines', 'drop', 'drops', 'fall', 'falls', 'down',
-                        'miss', 'misses', 'disappoints', 'warning', 'concern', 'worried',
-                        'lawsuit', 'sued', 'investigation', 'fraud', 'scandal', 'layoffs',
-                        'bankrupt', 'bankruptcy', 'closes', 'shuts down', 'shut down',
-                        'failure', 'fails', 'reject', 'rejected', 'denied', 'denies',
-                        'downgrade', 'downgraded', 'cuts', 'cut', 'suspended', 'halted',
-                        'loss', 'losses', 'blood bath', 'nightmare'
-                    ]
-                    
-                    # Calculate sentiment score
-                    score = 0
-                    matched_catalysts = []
-                    
-                    # Check for strong catalysts
-                    for catalyst in strong_catalysts:
-                        if catalyst in title_lower:
-                            score += 10
-                            matched_catalysts.append(catalyst)
-                    
-                    # Check for momentum keywords
-                    if score == 0:  # Only if no strong catalyst found
-                        for keyword in momentum_keywords:
-                            if keyword in title_lower:
-                                score += 5
-                                matched_catalysts.append(keyword)
-                                break
-                    
-                    # Check for weak positive
-                    if score == 0:  # Only if nothing else found
-                        for keyword in weak_positive:
-                            if keyword in title_lower:
-                                score += 2
-                                matched_catalysts.append(keyword)
-                                break
-                    
-                    # Check for negative keywords (automatic rejection)
-                    has_negative = any(keyword in title_lower for keyword in negative_keywords)
-                    
-                    # FILTERING RULES:
-                    # 1. Reject any negative news
-                    # 2. STRICT: Require minimum score of 10 (ONLY strong catalysts)
-                    # 3. Momentum keywords like "surge", "soar" are just price action, not real news
-                    # 4. We want ACTUAL catalysts: FDA, earnings, contracts, acquisitions, etc.
-                    if has_negative or score < 10:
-                        logger.debug(f"{symbol}: Rejected news (score: {score}, negative: {has_negative}): {title[:50]}")
+                    # ENHANCED SENTIMENT SCORING - shared helper (same catalyst
+                    # bar used for the Alpaca/Benzinga news check, so both
+                    # sources are judged identically)
+                    scored = score_headline(title)
+                    if scored is None:
+                        logger.debug(f"{symbol}: Rejected news: {title[:50]}")
                         continue
+                    score = scored['score']
+                    sentiment_label = scored['sentiment']
+                    matched_catalysts = scored['catalysts']
                     
                     # Extract link
                     link_start = item_content.find('<link>') + 6
@@ -249,36 +291,17 @@ class GoogleNewsService:
                     pubDate_end = item_content.find('</pubDate>')
                     pubDate = item_content[pubDate_start:pubDate_end] if pubDate_start > 8 and pubDate_end > pubDate_start else ""
                     
-                    # Determine news freshness (Breaking/Warm/Cold)
-                    news_freshness = 'cold'  # Default
+                    # Determine news freshness (Breaking/Warm/Cold) - shared helper
+                    news_freshness = 'unknown'
                     days_old = None
                     if pubDate:
                         try:
                             # Parse RSS date format: "Mon, 06 Jan 2026 12:00:00 GMT"
                             from email.utils import parsedate_to_datetime
                             pub_datetime = parsedate_to_datetime(pubDate)
-                            now = datetime.now(pub_datetime.tzinfo) if pub_datetime.tzinfo else datetime.now()
-                            age = now - pub_datetime
-                            days_old = age.days
-                            hours_old = age.total_seconds() / 3600
-                            
-                            if days_old <= 1 or hours_old <= 36:  # Same day or 1 day old
-                                news_freshness = 'breaking'
-                            elif days_old <= 5:  # Within 5 days
-                                news_freshness = 'warm'
-                            else:  # Older than 5 days
-                                news_freshness = 'cold'
+                            news_freshness, days_old = classify_freshness(pub_datetime)
                         except Exception as date_err:
                             logger.debug(f"Could not parse date {pubDate}: {date_err}")
-                            news_freshness = 'unknown'
-                    
-                    # Determine sentiment label based on score
-                    if score >= 10:
-                        sentiment_label = 'strong_catalyst'
-                    elif score >= 5:
-                        sentiment_label = 'momentum'
-                    else:
-                        sentiment_label = 'weak'
                     
                     articles.append({
                         'title': title,
@@ -287,7 +310,7 @@ class GoogleNewsService:
                         'pubDate': pubDate,
                         'sentiment': sentiment_label,
                         'score': score,
-                        'catalysts': matched_catalysts[:3],  # Top 3 matched keywords
+                        'catalysts': matched_catalysts,  # Top 3 matched keywords
                         'freshness': news_freshness,  # breaking, warm, cold
                         'days_old': days_old
                     })
