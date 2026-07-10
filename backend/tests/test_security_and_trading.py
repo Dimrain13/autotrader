@@ -82,16 +82,21 @@ class TestSettingsMasking:
         assert r.status_code == 400
 
     def test_post_settings_rejects_extra_secret_fields_silently_ignored(self, session):
+        # .env must remain byte-for-byte unchanged (no runtime secret rewriting),
+        # regardless of what real keys happen to be configured in this environment.
+        with open("/app/backend/.env") as f:
+            env_before = f.read()
+
         # Even if a client tries to sneak api_key in, Pydantic model only accepts sma fields
         r = session.post(f"{BASE_URL}/api/settings", json={
             "sma_short": 20, "sma_long": 50, "api_key": "HACKED", "secret_key": "HACKED"
         })
         assert r.status_code == 200
-        # .env must remain unchanged
+
         with open("/app/backend/.env") as f:
-            env_content = f.read()
-        assert "HACKED" not in env_content
-        assert 'ALPACA_API_KEY=""' in env_content
+            env_after = f.read()
+        assert "HACKED" not in env_after
+        assert env_after == env_before
 
 
 # ============ VALIDATION (Phase 1 #4) ============

@@ -12,20 +12,16 @@ Usage:
 - Frontend: enter this token in the "API Access Token" gate screen on first load (stored in browser localStorage key `momentumx_api_token`).
 - Backend/curl: send header `Authorization: Bearer <token>`.
 
-## Alpaca Broker Credentials
-NOT CONFIGURED in this environment. User declined to share full paper-trading
-API key + secret (only a partial key ID was mentioned, no secret). Backend
-currently runs with `ALPACA_API_KEY=""` / `ALPACA_SECRET_KEY=""` in
-`/app/backend/.env`, so all Alpaca-dependent endpoints (account, positions,
-orders, quotes) correctly return `{"detail": "Alpaca API not configured"}`
-instead of fabricating data.
-
-To enable full live/paper trading verification, add to `/app/backend/.env`:
+## Alpaca Broker Credentials (Paper Trading — ACTIVE)
+Real Alpaca paper trading credentials are now configured in `/app/backend/.env`:
 ```
-ALPACA_API_KEY="PK..."
-ALPACA_SECRET_KEY="..."
+ALPACA_API_KEY="PKRBZGHKVX2SGHWQZZVRJLXRPN"
+ALPACA_SECRET_KEY="A5H61qnJEsWrFMomsiG8K69TpZCZJn9HubwdNpnbjDRR"
+ALPACA_BASE_URL="https://paper-api.alpaca.markets"
 ```
-then `sudo supervisorctl restart backend`.
+Paper account number: `PA30RVV1A2DM`. Verified end-to-end with a real
+buy+sell round trip (AAPL, 1 share) — real fill price, real position
+tracking, real buying-power deduction, real trade-history log entry.
 
 ## MongoDB
 Uses existing `MONGO_URL` / `DB_NAME` from `/app/backend/.env` (no auth, local instance). No credentials needed.

@@ -54,8 +54,10 @@ class AlpacaService:
             "cash": float(account.cash),
             "portfolio_value": float(account.portfolio_value),
             "status": account.status,
-            "day_trading_buying_power": float(account.daytrading_buying_power),
-            "pattern_day_trader": account.pattern_day_trader
+            # Not all accounts (e.g. cash/non-margin) have day-trading buying power -
+            # Alpaca returns None in that case. Default to 0 rather than crashing.
+            "day_trading_buying_power": float(account.daytrading_buying_power) if account.daytrading_buying_power is not None else 0.0,
+            "pattern_day_trader": bool(account.pattern_day_trader)
         }
     
     def _is_extended_hours(self):

@@ -55,14 +55,20 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 - Fixed 1 HIGH bug found by testing: logout button was unreachable (nested inside `{account && ...}`), hoisted PAPER badge + logout button outside that conditional.
 
 ## Deferred / Backlog (P1/P2)
-- Alpaca paper API key/secret still not configured — user needs to add real keys to `/app/backend/.env` to fully exercise live order placement, position sizing, and quote/bars endpoints end-to-end, and to live-verify the micro-pullback gating + extended-hours slippage guard (currently code-inspection-verified only).
 - Consider splitting `server.py` (1280+ lines) into per-domain routers (orders/settings/auto-trader/market) for maintainability (noted by testing agent, non-blocking).
 - Docker Desktop / `docker-compose.yml` path was NOT built (user chose Windows-native/NSSM) — available on request if preference changes later.
+- Optional: notification (email/toast) when the daily-loss kill switch triggers, so the user doesn't need to be watching the dashboard.
 
 ## Next Action Items
-1. Get user's real Alpaca paper API key + secret to verify live order placement, micro-pullback entry gating, and extended-hours slippage guard end-to-end on paper.
-2. Follow `/app/deploy/windows/README.md` to actually deploy on the Windows Server VPS once ready to leave the Emergent preview environment.
-3. After a period of verified paper trading, flip `ALPACA_PAPER=false` deliberately (bold warning banner logs on startup) to go live with tiny size, per the rollout/safety plan in the original problem statement.
+1. Follow `/app/deploy/windows/README.md` to actually deploy on the Windows Server VPS once ready to leave the Emergent preview environment.
+2. After a period of verified paper trading, flip `ALPACA_PAPER=false` deliberately (bold warning banner logs on startup) to go live with tiny size, per the rollout/safety plan in the original problem statement.
+
+## Session 3 Update (2026-07-10) — Real Alpaca Paper Verification
+- User provided real Alpaca paper credentials (key `PKRBZGHKVX2SGHWQZZVRJLXRPN`, account `PA30RVV1A2DM`). Configured in `backend/.env`.
+- Found + fixed a real bug during first live call: `alpaca_service.get_account()` crashed with `float() argument ... NoneType` because this paper account's `daytrading_buying_power`/`pattern_day_trader` fields come back as `None` from Alpaca (cash/non-margin account) — now defaults gracefully to `0.0`/`False` instead of crashing.
+- Verified end-to-end with a real order round trip: BUY 1 AAPL → real fill price ($313.07) → position auto-added to monitor with real stop config → real buying-power deduction → SELL 1 AAPL → real trade-history entry logged with real P&L. Real market bars confirmed via Yahoo fallback (Alpaca free-tier IEX data was stale) — no fake data anywhere.
+- Fixed one stale test assertion in `test_security_and_trading.py` that hardcoded an empty-API-key expectation; now environment-agnostic. All 41 tests still pass.
+
 
 ## Session 2 Update (2026-07-10) — Phase 4 & 5
 
