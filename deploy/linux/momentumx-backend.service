@@ -1,0 +1,20 @@
+[Unit]
+Description=MomentumX Trading Backend (FastAPI/uvicorn)
+After=network.target mongod.service
+Wants=mongod.service
+
+[Service]
+Type=simple
+User=momentumx
+WorkingDirectory=/opt/momentumx/backend
+Environment="PATH=/opt/momentumx/backend/venv/bin"
+ExecStart=/opt/momentumx/backend/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8001 --workers 1
+Restart=on-failure
+RestartSec=3
+
+# Hardening (safe defaults for a single-purpose service)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,35 @@
+{
+  "summary": "Tested backend performance changes (news caching, alpaca asset caching, scanner concurrency), Linux deployment artifacts, and safety of auto-trader. All 41 pytest tests pass. News caching works (645ms->99.6ms, identical data). Scanner returns 200 results without error. Auto-trader confirmed OFF both before and after testing. CRITICAL FINDING: the pre-existing TestRateLimiting test in test_security_and_trading.py places REAL market orders (qty=1 buy AAPL) against the live paper account when run - this is what caused the AAPL position to grow from the documented '1 share' to 20, then to 28 during this run. I sold back the 8 shares placed during this run to restore the pre-existing 20-share position, and confirmed auto-trader stayed off. The 20-share pre-existing position (not caused by me) still needs main agent/user attention - it does not match the '1 share verified' baseline in test_credentials.md, implying prior testing passes accumulated real paper positions via this same rate-limit test bug.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "/api/orders (via tests/test_security_and_trading.py::TestRateLimiting::test_orders_rate_limited_after_20_per_minute)", "issue": "This pre-existing test sends up to 25 REAL POST /api/orders (buy AAPL qty=1) requests directly to localhost:8001 to trigger rate limiting, but does NOT mock/stub the Alpaca client. Each pytest run that exercises this test permanently buys real (paper) shares before rate-limiting kicks in (8 orders filled this run alone). This explains why the AAPL position has grown over successive testing sessions (1 share documented -> 20 -> 28 shares seen this session). I sold back the 8 shares added during THIS run to restore prior state, but the test itself will keep buying shares on every future run unless fixed.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_auto_trader_exit_logic.py", "/app/backend/tests/test_security_and_trading.py", "/app/test_reports/pytest/pytest_iteration5.xml"],
+  "action_items": [
+    "Fix tests/test_security_and_trading.py::TestRateLimiting - either mock alpaca_service.place_market_order for this test, or use an endpoint/flag that validates rate-limiting middleware without reaching the broker, so future test runs don't place real orders.",
+    "Decide what to do with the pre-existing 20-share AAPL position (cost basis ~$6291) sitting in the live paper account from prior testing sessions - confirm with user if intentional or should be liquidated.",
+    "Update /app/memory/test_credentials.md - it says '1 share' verified round trip but the account currently holds 20 shares from accumulated test runs; keep this doc in sync or add a warning about the rate-limit test's side effect."
+  ],
+  "critical_code_review_comments": [
+    "google_news_service.py cache/session pooling and bug fix (bare tuple -> dict) implemented correctly and verified working (cache hit dramatically faster, correct dict shape returned for all tested symbols).",
+    "alpaca_service.py get_asset() 24h TTL cache and pooled session for Yahoo/Nasdaq fallback look correct; no issues found in code review.",
+    "scanner_service.py ThreadPoolExecutor for news checks correctly bumped to 12 workers; scan completed in ~6.7s for the full universe with 200 results, no errors.",
+    "Linux deployment artifacts (README, start.sh, systemd unit files, install/uninstall scripts) are well-formed: correct 127.0.0.1 binding, sensible systemd syntax (User=momentumx, Restart=on-failure, WantedBy=multi-user.target), consistent with the SSH-tunnel access model. Root README.md correctly links both deploy/linux/README.md and deploy/windows/README.md.",
+    "Pre-existing issue (not part of this session's changes) but discovered during regression testing: TestRateLimiting hits the real broker - flagged above as HIGH priority since it silently accumulates real paper-money positions on every CI/test run."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (41/41 pytest passed; all manual endpoint checks passed)", "frontend": "not tested this pass (backend-focused review per request)"},
+  "test_credentials": "Used /app/memory/test_credentials.md API_ACCESS_TOKEN and confirmed real Alpaca paper keys active (account PA30RVV1A2DM).",
+  "seed_data_creation": "None. One cleanup sell order placed (8 AAPL shares) to reverse test-induced buys from this session only.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Auto-trader is OFF and confirmed safe. IMPORTANT: do not re-run tests/test_security_and_trading.py::TestRateLimiting without first checking if it has been fixed to mock the broker - each run buys 8+ real AAPL shares. Current AAPL position is 20 shares (~$6291 cost basis), pre-existing from prior sessions - not cleaned up since it wasn't caused by this test pass and liquidating is a business/user decision. News caching, asset caching, and scanner concurrency changes are all verified working correctly. Linux deploy artifacts reviewed and are well-formed.",
+  "rca_of_the_issue": "TestRateLimiting::test_orders_rate_limited_after_20_per_minute in test_security_and_trading.py was written to validate the /api/orders rate-limiter (expects a 429 within 25 rapid requests) but calls the real POST /api/orders endpoint with a real AAPL buy order and no mocking of alpaca_service. Since the rate limit threshold is 20/min, the first ~8-20 requests before the limit trips actually execute as real orders against the configured Alpaca paper account. Because this test is part of the standard regression suite that has been run in each of the 5+ testing passes on this app, the AAPL position has been silently accumulating (documented as 1 share originally, found at 20 shares at start of this session, grew to 28 after this run's test execution, restored to 20 via manual sell-back cleanup)."
+}

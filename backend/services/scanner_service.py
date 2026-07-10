@@ -624,8 +624,9 @@ class ScannerService:
                 result['news_freshness'] = 'unknown'
                 return result, False
         
-        # Process news checks in parallel (5 workers for API rate limits)
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        # Process news checks in parallel (12 workers - I/O-bound Google News/Alpaca
+        # calls, higher concurrency = faster scans without overloading either API)
+        with ThreadPoolExecutor(max_workers=12) as executor:
             futures = {executor.submit(check_single_news, result): result for result in results}
             
             for future in as_completed(futures):

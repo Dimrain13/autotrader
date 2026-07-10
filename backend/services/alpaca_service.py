@@ -6,6 +6,8 @@ from alpaca.data.requests import StockBarsRequest, StockQuotesRequest, StockLate
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 import os
 import requests
+import time
+import threading
 from datetime import datetime, timedelta
 import logging
 
@@ -16,6 +18,18 @@ class AlpacaService:
         api_key = os.getenv('ALPACA_API_KEY')
         secret_key = os.getenv('ALPACA_SECRET_KEY')
         base_url = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+
+        # Reuse a single session for the Yahoo/Nasdaq fallback data paths -
+        # connection pooling/keep-alive avoids a fresh TCP/TLS handshake per
+        # symbol when scanning many stocks, meaningfully speeding up scans.
+        self._http_session = requests.Session()
+
+        # Asset info (company name) rarely changes - cache it so repeated
+        # scans/news-lookups for the same symbol are instant instead of
+        # re-querying Alpaca every time.
+        self._asset_cache = {}
+        self._asset_cache_lock = threading.Lock()
+        self.ASSET_CACHE_TTL_SECONDS = 24 * 60 * 60  # 24 hours
 
         # Determine paper vs live deliberately - never assume paper=True blindly.
         # ALPACA_PAPER env var takes precedence if explicitly set; otherwise infer
@@ -428,18 +442,28 @@ class AlpacaService:
             raise
     
     def get_asset(self, symbol: str):
-        """Get asset information including company name"""
+        """Get asset information including company name (24h TTL cache - company names don't change)"""
         if not self.trading_client:
             raise Exception("Alpaca API not configured")
-        
+
+        with self._asset_cache_lock:
+            cached = self._asset_cache.get(symbol)
+        if cached:
+            cached_at, cached_result = cached
+            if time.time() - cached_at < self.ASSET_CACHE_TTL_SECONDS:
+                return cached_result
+
         try:
             asset = self.trading_client.get_asset(symbol)
-            return {
+            result = {
                 'symbol': asset.symbol,
                 'name': asset.name if hasattr(asset, 'name') else None,
                 'exchange': asset.exchange if hasattr(asset, 'exchange') else None,
                 'asset_class': asset.asset_class if hasattr(asset, 'asset_class') else None
             }
+            with self._asset_cache_lock:
+                self._asset_cache[symbol] = (time.time(), result)
+            return result
         except Exception as e:
             logger.error(f"Failed to get asset info for {symbol}: {str(e)}")
             return {'symbol': symbol, 'name': None}
@@ -570,7 +594,7 @@ class AlpacaService:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
-            response = requests.get(url, headers=headers, timeout=10)
+            response = self._http_session.get(url, headers=headers, timeout=10)
             
             if response.status_code != 200:
                 logger.warning(f"Yahoo Finance returned {response.status_code} for {symbol}")
@@ -635,7 +659,7 @@ class AlpacaService:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json'
             }
-            response = requests.get(url, headers=headers, timeout=10)
+            response = self._http_session.get(url, headers=headers, timeout=10)
             
             if response.status_code != 200:
                 logger.warning(f"Nasdaq API returned {response.status_code} for {symbol}")

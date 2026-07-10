@@ -8,6 +8,8 @@ Uses web scraping approach since Google News doesn't have a free API
 import requests
 from datetime import datetime, timedelta
 import logging
+import time
+import threading
 from typing import Dict, Tuple
 import urllib.parse
 
@@ -22,10 +24,21 @@ class GoogleNewsService:
     Perfect for day trading - see what everyone else sees!
     """
     
+    # Short TTL cache so repeated scans within a few minutes (e.g. auto-trader
+    # loop + manual scans) don't re-hit Google News for the same symbol -
+    # faster responses without sacrificing freshness/accuracy.
+    NEWS_CACHE_TTL_SECONDS = 180
+
     def __init__(self):
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
+        # Reuse a single session for connection pooling/keep-alive - avoids a
+        # fresh TCP/TLS handshake on every request when scanning many symbols.
+        self._session = requests.Session()
+        self._session.headers.update(self.headers)
+        self._cache: Dict[tuple, tuple] = {}  # (symbol, company_name, limit) -> (timestamp, result)
+        self._cache_lock = threading.Lock()
     
     def search_stock_news(self, symbol: str, hours_back: int = 24, limit: int = 5, company_name: str = None) -> Dict:
         """
@@ -47,6 +60,16 @@ class GoogleNewsService:
             }
         """
         try:
+            # Fast path: serve from short-TTL cache if we searched this symbol recently
+            cache_key = (symbol, company_name, limit)
+            with self._cache_lock:
+                cached = self._cache.get(cache_key)
+            if cached:
+                cached_at, cached_result = cached
+                if time.time() - cached_at < self.NEWS_CACHE_TTL_SECONDS:
+                    logger.debug(f"{symbol}: News cache hit ({time.time() - cached_at:.0f}s old)")
+                    return cached_result
+
             # Build search query using BOTH ticker and company name for better results
             # Example: "AAPL" OR "Apple Inc" (stock OR shares)
             if company_name:
@@ -61,12 +84,12 @@ class GoogleNewsService:
             encoded_query = urllib.parse.quote(query)
             url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
             
-            # Fetch RSS feed
-            response = requests.get(url, headers=self.headers, timeout=5)
+            # Fetch RSS feed - reuse pooled session (keep-alive) for speed
+            response = self._session.get(url, timeout=5)
             
             if response.status_code != 200:
                 logger.warning(f"{symbol}: Google News returned status {response.status_code}")
-                return False, ""
+                return {'has_news': False, 'articles': []}
             
             # Parse RSS XML (simple parsing - look for first <title> in <item>)
             content = response.text
@@ -74,7 +97,10 @@ class GoogleNewsService:
             # Check if there are any results
             if '<item>' not in content:
                 # No news found
-                return False, ""
+                result = {'has_news': False, 'articles': []}
+                with self._cache_lock:
+                    self._cache[cache_key] = (time.time(), result)
+                return result
             
             # Extract all news items (up to limit)
             articles = []
@@ -274,16 +300,14 @@ class GoogleNewsService:
             # Return results
             if articles:
                 logger.info(f"{symbol}: Found {len(articles)} news article(s)")
-                return {
-                    'has_news': True,
-                    'articles': articles
-                }
+                result = {'has_news': True, 'articles': articles}
             else:
                 logger.debug(f"{symbol}: No news found")
-                return {
-                    'has_news': False,
-                    'articles': []
-                }
+                result = {'has_news': False, 'articles': []}
+
+            with self._cache_lock:
+                self._cache[cache_key] = (time.time(), result)
+            return result
             
         except requests.Timeout:
             logger.warning(f"{symbol}: Google News request timeout")
@@ -292,7 +316,7 @@ class GoogleNewsService:
             logger.error(f"{symbol}: Error searching Google News: {str(e)}")
             return {'has_news': False, 'articles': []}
     
-    def batch_search_news(self, symbols: list, max_concurrent: int = 5) -> Dict[str, Dict]:
+    def batch_search_news(self, symbols: list, max_concurrent: int = 10) -> Dict[str, Dict]:
         """
         Search news for multiple symbols in parallel
         

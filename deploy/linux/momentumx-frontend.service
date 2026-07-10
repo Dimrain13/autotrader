@@ -1,0 +1,17 @@
+[Unit]
+Description=MomentumX Trading Frontend (static build via `serve`)
+After=network.target momentumx-backend.service
+
+[Service]
+Type=simple
+User=momentumx
+WorkingDirectory=/opt/momentumx/frontend
+ExecStart=/usr/bin/npx serve -s build -l 127.0.0.1:3000
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
