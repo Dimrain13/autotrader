@@ -92,19 +92,12 @@ frontend/node_modules/.cache/default-development/11.pack
 frontend/node_modules/.cache/default-development/12.pack
 frontend/node_modules/.cache/default-development/13.pack
 -e 
-# Environment files
+# Environment files (real secrets only - .env.example templates are
+# intentionally tracked so `git clone` + deployment scripts work)
 *.env
 *.env.*
--e 
-# Environment files
-*.env
-*.env.*
--e 
-# Environment files
-*.env
-*.env.*
-.env
-.env.*
+!*.env.example
+!.env.example
 credentials.json
 *.key
 .credentials
