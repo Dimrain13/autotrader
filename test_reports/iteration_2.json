@@ -1,0 +1,45 @@
+{
+  "summary": "Independently re-verified MomentumX Phase 1/2/3 security & correctness remediation. Created /app/backend/tests/test_security_and_trading.py (25 tests) covering auth, settings masking, CORS (localhost:8001), rate limiting (localhost:8001), order validation, real-data-only bars, no-fake-buying-power code check, auto-trader toggle/status, event loop responsiveness, and unified Mongo persistence - all 25 PASS. Re-ran existing test_auto_trader_exit_logic.py (16 tests) - all still PASS. Verified state persistence across an actual `sudo supervisorctl restart backend` via logs ('Restored auto-trader state: active=True'). Verified startup logs show 'TRADING MODE: PAPER' banner and '🔁 Auto-Trader background loop started (60s interval)'. Frontend E2E via Playwright: TokenGate wrong-token error works, correct token unlocks app, token persists across reload (localStorage), all 6 pages navigate without React crashes, Settings page correctly shows masked/'Not configured' read-only key fields and Save SMA Settings works. FOUND ONE CRITICAL FRONTEND BUG: the logout/lock button never renders because it's nested inside `{account && (...)}` in NavBar (App.js), and /api/account always 500s when Alpaca isn't configured (which is expected/by-design in this env), so `account` state never becomes truthy - meaning the logout button described in the requirements is effectively unreachable via the UI in this environment.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auto-trader/process", "issue": "Returns 500 'Alpaca API not configured' when triggered manually while Alpaca isn't configured - this is expected/graceful given the review's stated constraint, not a code arity bug (verified process_scanner_results(scanner_results, portfolio_value) is called with correct 2 args). Flagging only because a non-500 status (e.g. 503) might be a cleaner signal for 'integration not configured' vs a genuine server error, but this is a design nit, not a functional bug."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "NavBar (App.js)", "issue": "Logout/lock button (data-testid='logout-button') is rendered only inside `{account && (...)}`. Since GET /api/account fails (500, Alpaca not configured) in this environment, `account` state remains null forever, so the entire right-hand nav block (portfolio value, buying power, PAPER badge, AND the logout button) never renders. Users cannot lock/clear the token via the UI at all in this environment - they must manually clear localStorage. This directly fails the reviewed requirement 'A logout/lock button in the navbar should clear the token and show the gate again' whenever the account endpoint is unavailable.", "selector": "[data-testid='logout-button']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_security_and_trading.py",
+    "/app/backend/tests/test_auto_trader_exit_logic.py",
+    "/app/test_reports/pytest/pytest_security.xml",
+    "/app/test_reports/pytest/pytest_regression.xml"
+  ],
+  "action_items": [
+    "Move the logout button out of the `{account && (...)}` conditional in NavBar (App.js) so it always renders once authenticated, independent of whether /api/account succeeds. Portfolio/buying-power/PAPER badge can stay conditional, but the logout button (and ideally a persistent PAPER indicator) should render unconditionally.",
+    "(Optional/nit) Consider returning 503 instead of 500 from endpoints when the root cause is 'Alpaca API not configured' vs an actual unexpected exception, to make monitoring/alerting distinguish config issues from real bugs - not required by review scope, just an observation."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1281 lines - approaching the point where splitting routes into routers (orders/settings/auto-trader/market) would improve maintainability, though not blocking for this remediation pass.",
+    "auth.py verify_token correctly uses secrets.compare_digest for constant-time token comparison - good security practice.",
+    "CORS middleware correctly uses explicit allow-list from CORS_ORIGINS env var, not '*', consistent with allow_credentials=True - correct.",
+    "Settings POST/GET correctly separates secret Alpaca keys (env-only, masked) from mutable SMA config (Mongo-persisted) - matches Phase 1 #2 requirement precisely.",
+    "auto_trader.check_risk_limits() hard kill switch is invoked server-side before every BUY order in /api/orders, not just relying on the frontend - correctly implemented as a non-bypassable guard.",
+    "No leftover DAY_TRADING_MODE / simulated_pdt / portfolio_value*4 logic found in server.py - Phase 2 #8 confirmed via grep.",
+    "No random-OHLC fabrication path found; demo_scanner_service.py still uses random data but is clearly separated as the explicit demo/simulation feature (use_demo=True / /scanner/demo), not the real market-data path - acceptable by design."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_security_and_trading.py"
+  ],
+  "success_rate": {"backend": "100% (25/25 new tests + 16/16 regression tests)", "frontend": "~90% (all flows work except logout button reachability bug)"},
+  "test_credentials": "API_ACCESS_TOKEN from /app/memory/test_credentials.md used successfully for all backend + frontend auth tests.",
+  "seed_data_creation": "Inserted one TEST_-prefixed style trade (symbol TEST_MOMX) via POST /api/trade-history/log to verify Mongo persistence; not cleaned up (harmless test artifact in trade_history collection, main agent may want to clear it).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All Phase 1/2/3 backend security & correctness items verified and passing (auth, CORS, rate limiting, validation, settings masking, real-data-only, kill switch, background loop, state persistence, unified Mongo persistence). The ONLY open item is the frontend logout-button-unreachable bug caused by conditional rendering on `account` state - once fixed, re-run the Playwright TokenGate/logout flow to confirm the button appears and clicking it clears localStorage and shows the gate again (verify via localStorage.getItem('momentumx_api_token') === null after click).",
+  "rca of the issue": "Bug: logout button not rendering. Root cause: NavBar's entire right-side block (including logout button) is guarded by `{account && (...)}`. `account` is populated only by App.js's fetchAccount() which calls GET /api/account -> alpaca_service.get_account() -> raises 'Alpaca API not configured' since ALPACA_API_KEY/SECRET are blank -> 500 -> axios catch sets nothing (account stays null). Since Alpaca keys are intentionally never configured in this environment (and may not be in production if the user still hasn't provided them), this is a persistent, reproducible bug, not a flake. Fix: hoist the logout button (and optionally a static 'PAPER' badge) outside the `account &&` guard so it always renders when authenticated=true, regardless of account fetch success."
+}

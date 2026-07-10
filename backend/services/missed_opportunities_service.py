@@ -1,71 +1,49 @@
 """
 Missed Opportunities Service
-Tracks stocks that met scanner criteria but weren't traded
+Tracks stocks that met scanner criteria but weren't traded.
+
+Persisted in MongoDB (collection: missed_opportunities) instead of a flat
+JSON file, to avoid concurrency corruption and match the rest of the stack.
 """
-import json
-import os
-from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 import logging
+from database import db
 
 logger = logging.getLogger(__name__)
 
+
 class MissedOpportunitiesService:
     def __init__(self):
-        self.data_file = Path("/app/missed_opportunities.json")
-        self._ensure_file_exists()
-    
-    def _ensure_file_exists(self):
-        if not self.data_file.exists():
-            with open(self.data_file, 'w') as f:
-                json.dump([], f)
-    
-    def _load_data(self) -> List[Dict]:
-        try:
-            with open(self.data_file, 'r') as f:
-                return json.load(f)
-        except:
-            return []
-    
-    def _save_data(self, data: List[Dict]):
-        with open(self.data_file, 'w') as f:
-            json.dump(data, f, indent=2)
-    
-    def log_scanner_results(self, scanner_results: List[Dict], traded_symbols: List[str]):
+        self.collection = db.missed_opportunities
+
+    async def _next_id(self) -> int:
+        count = await self.collection.count_documents({})
+        return count + 1
+
+    async def log_scanner_results(self, scanner_results: List[Dict], traded_symbols: List[str]):
         """
         Log stocks from scanner that weren't traded
         Only tracks stocks with 4/5 or 5/5 criteria met (high quality misses)
         """
-        data = self._load_data()
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         logged_count = 0
-        
+
         for stock in scanner_results:
             symbol = stock.get('symbol')
             criteria_count = stock.get('criteria_count', 0)
-            
-            # Only track high-quality opportunities (4/5 or 5/5 criteria)
+
             if criteria_count < 4:
                 continue
-            
-            # Skip if we traded this stock
             if symbol in traded_symbols:
                 continue
-            
-            # Check if already logged today
-            already_logged = any(
-                d.get('symbol') == symbol and 
-                d.get('date') == today 
-                for d in data
-            )
+
+            already_logged = await self.collection.find_one({'symbol': symbol, 'date': today})
             if already_logged:
                 continue
-            
-            # Get criteria details from scanner result
+
             criteria = stock.get('criteria_met', {})
-            
-            # Determine which criteria were missed
+
             missed_criteria = []
             if not criteria.get('price_range', False):
                 missed_criteria.append('Price not $2-$20')
@@ -77,16 +55,11 @@ class MissedOpportunitiesService:
                 missed_criteria.append('No positive news')
             if not criteria.get('float', False):
                 missed_criteria.append('Float > 20M')
-            
-            # Build reason string
-            if missed_criteria:
-                reason = f"Missing: {', '.join(missed_criteria)}"
-            else:
-                reason = "All criteria met but not traded"
-            
-            # Log the missed opportunity
+
+            reason = f"Missing: {', '.join(missed_criteria)}" if missed_criteria else "All criteria met but not traded"
+
             opportunity = {
-                'id': len(data) + 1,
+                'id': await self._next_id(),
                 'symbol': symbol,
                 'date': today,
                 'timestamp': datetime.now(timezone.utc).isoformat(),
@@ -107,20 +80,17 @@ class MissedOpportunitiesService:
                 'price_at_close': None,
                 'potential_pnl': None,
             }
-            
-            data.append(opportunity)
+
+            await self.collection.insert_one(opportunity)
             logged_count += 1
             logger.info(f"📝 Logged missed opportunity: {symbol} ({criteria_count}/5 criteria) - {reason}")
-        
-        self._save_data(data)
+
         return logged_count
-    
-    def log_single_opportunity(self, stock_data: Dict, reason: str = ""):
+
+    async def log_single_opportunity(self, stock_data: Dict, reason: str = ""):
         """Log a single missed opportunity with optional reason"""
-        data = self._load_data()
-        
         opportunity = {
-            'id': len(data) + 1,
+            'id': await self._next_id(),
             'symbol': stock_data.get('symbol'),
             'date': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
             'timestamp': datetime.now(timezone.utc).isoformat(),
@@ -145,46 +115,36 @@ class MissedOpportunitiesService:
             'price_at_close': None,
             'potential_pnl': None,
         }
-        
-        data.append(opportunity)
-        self._save_data(data)
-        return opportunity
-    
-    def get_opportunities(self, date: Optional[str] = None, limit: int = 100) -> List[Dict]:
+
+        await self.collection.insert_one(opportunity)
+        return {k: v for k, v in opportunity.items() if k != '_id'}
+
+    async def get_opportunities(self, date: Optional[str] = None, limit: int = 100) -> List[Dict]:
         """Get missed opportunities, optionally filtered by date"""
-        data = self._load_data()
-        
-        if date:
-            data = [d for d in data if d.get('date') == date]
-        
-        # Sort by timestamp descending (most recent first)
-        data.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-        
-        return data[:limit]
-    
-    def update_opportunity(self, opportunity_id: int, updates: Dict) -> bool:
+        query = {'date': date} if date else {}
+        cursor = self.collection.find(query, {'_id': 0}).sort('timestamp', -1).limit(limit)
+        return await cursor.to_list(length=limit)
+
+    async def update_opportunity(self, opportunity_id: int, updates: Dict) -> bool:
         """Update an opportunity (add notes, status, close price, etc.)"""
-        data = self._load_data()
-        
-        for opp in data:
-            if opp.get('id') == opportunity_id:
-                opp.update(updates)
-                # Calculate potential P&L if we have close price
-                if updates.get('price_at_close') and opp.get('price_at_scan'):
-                    entry = opp['price_at_scan']
-                    exit_price = updates['price_at_close']
-                    # Assume we would have bought 100 shares
-                    shares = int(2000 / entry) if entry > 0 else 100
-                    opp['potential_pnl'] = round((exit_price - entry) * shares, 2)
-                    opp['potential_pnl_pct'] = round(((exit_price - entry) / entry) * 100, 2) if entry > 0 else 0
-                self._save_data(data)
-                return True
-        return False
-    
-    def get_analytics(self) -> Dict:
+        opp = await self.collection.find_one({'id': opportunity_id})
+        if not opp:
+            return False
+
+        if updates.get('price_at_close') and opp.get('price_at_scan'):
+            entry = opp['price_at_scan']
+            exit_price = updates['price_at_close']
+            shares = int(2000 / entry) if entry > 0 else 100
+            updates['potential_pnl'] = round((exit_price - entry) * shares, 2)
+            updates['potential_pnl_pct'] = round(((exit_price - entry) / entry) * 100, 2) if entry > 0 else 0
+
+        await self.collection.update_one({'id': opportunity_id}, {'$set': updates})
+        return True
+
+    async def get_analytics(self) -> Dict:
         """Get analytics on missed opportunities"""
-        data = self._load_data()
-        
+        data = await self.collection.find({}, {'_id': 0}).to_list(length=10000)
+
         if not data:
             return {
                 'total_missed': 0,
@@ -195,30 +155,26 @@ class MissedOpportunitiesService:
                 'by_criteria': {},
                 'by_date': {},
             }
-        
+
         would_have_won = [d for d in data if d.get('status') == 'would_have_won']
         would_have_lost = [d for d in data if d.get('status') == 'would_have_lost']
-        
+
         total_potential_pnl = sum(d.get('potential_pnl', 0) or 0 for d in data)
         avg_criteria = sum(d.get('criteria_count', 0) or 0 for d in data) / len(data)
-        
-        # Group by date
+
         by_date = {}
         for d in data:
             date = d.get('date', 'unknown')
-            if date not in by_date:
-                by_date[date] = {'count': 0, 'symbols': []}
+            by_date.setdefault(date, {'count': 0, 'symbols': []})
             by_date[date]['count'] += 1
             by_date[date]['symbols'].append(d.get('symbol'))
-        
-        # Count by criteria count (4/5 or 5/5)
+
         by_criteria = {}
         for d in data:
             criteria = d.get('criteria_count', 0) or 0
-            if criteria not in by_criteria:
-                by_criteria[criteria] = 0
+            by_criteria.setdefault(criteria, 0)
             by_criteria[criteria] += 1
-        
+
         return {
             'total_missed': len(data),
             'total_would_have_won': len(would_have_won),
@@ -228,17 +184,12 @@ class MissedOpportunitiesService:
             'by_criteria': by_criteria,
             'by_date': by_date,
         }
-    
-    def clear_old_data(self, days_to_keep: int = 30):
+
+    async def clear_old_data(self, days_to_keep: int = 30):
         """Remove opportunities older than specified days"""
-        from datetime import timedelta
-        
-        data = self._load_data()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days_to_keep)).strftime('%Y-%m-%d')
-        
-        filtered = [d for d in data if d.get('date', '') >= cutoff]
-        self._save_data(filtered)
-        return len(data) - len(filtered)
+        result = await self.collection.delete_many({'date': {'$lt': cutoff}})
+        return result.deleted_count
 
 
 missed_opportunities = MissedOpportunitiesService()

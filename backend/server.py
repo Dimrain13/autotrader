@@ -1,25 +1,32 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
+from typing import List, Optional, Dict, Literal
 import uuid
 from datetime import datetime, timezone
 import pandas as pd
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# Shared MongoDB connection (see database.py) - avoids circular imports with services
+from database import db, client
+from auth import verify_token
 
 app = FastAPI(title="MomentumX Trading Platform")
-api_router = APIRouter(prefix="/api")
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+api_router = APIRouter(prefix="/api", dependencies=[Depends(verify_token)])
 
 # Import services
 from services.alpaca_service import alpaca_service
@@ -32,32 +39,42 @@ from services.missed_opportunities_service import missed_opportunities
 import asyncio
 
 class TradeOrder(BaseModel):
-    symbol: str
-    qty: float
-    side: str = "buy"
-    stop_loss_pct: Optional[float] = None
-    take_profit_pct: Optional[float] = None
-    entry_price: Optional[float] = None
-    stop_type: Optional[str] = "fixed"  # 'fixed' or 'trailing'
-    trailing_stop_pct: Optional[float] = 5.0
-    partial_sell_pct: Optional[float] = 50.0
-    partial_sell_trigger_pct: Optional[float] = 10.0
+    symbol: str = Field(..., min_length=1, max_length=10)
+    qty: float = Field(..., gt=0)
+    side: Literal["buy", "sell"] = "buy"
+    stop_loss_pct: Optional[float] = Field(None, ge=0, le=50)
+    take_profit_pct: Optional[float] = Field(None, ge=0, le=100)
+    entry_price: Optional[float] = Field(None, gt=0)
+    stop_type: Optional[Literal["fixed", "trailing"]] = "fixed"
+    trailing_stop_pct: Optional[float] = Field(5.0, ge=0, le=50)
+    partial_sell_pct: Optional[float] = Field(50.0, ge=0, le=100)
+    partial_sell_trigger_pct: Optional[float] = Field(10.0, ge=0, le=100)
     move_to_breakeven: Optional[bool] = True
 
-class ScanCriteria(BaseModel):
-    min_price: float = 2.0
-    max_price: float = 20.0
-    min_change: float = 10.0
-    min_volume_ratio: float = 5.0
-    max_float: int = 20_000_000
+    @field_validator('symbol')
+    @classmethod
+    def symbol_uppercase(cls, v):
+        return v.strip().upper()
 
-class Settings(BaseModel):
-    api_key: str
-    secret_key: str
-    base_url: str = "https://paper-api.alpaca.markets"
-    day_trading_mode: bool = False
-    sma_short: int = 20
-    sma_long: int = 50
+class ScanCriteria(BaseModel):
+    min_price: float = Field(2.0, gt=0)
+    max_price: float = Field(20.0, gt=0)
+    min_change: float = Field(10.0, ge=0)
+    min_volume_ratio: float = Field(5.0, gt=0)
+    max_float: int = Field(20_000_000, gt=0)
+
+    @field_validator('max_price')
+    @classmethod
+    def max_greater_than_min(cls, v, info):
+        min_price = info.data.get('min_price')
+        if min_price is not None and v <= min_price:
+            raise ValueError('max_price must be greater than min_price')
+        return v
+
+class SmaSettingsUpdate(BaseModel):
+    """Non-secret strategy config. Alpaca keys are managed via .env only (Phase 1 #2)."""
+    sma_short: int = Field(20, ge=5, le=100)
+    sma_long: int = Field(50, ge=10, le=200)
 
 def is_market_open() -> bool:
     """Check if US market is currently open (extended hours for paper trading)
@@ -138,19 +155,7 @@ async def get_market_status():
 @api_router.get("/account")
 async def get_account():
     try:
-        account = alpaca_service.get_account()
-        
-        # Check if day trading mode is enabled
-        day_trading_mode = os.getenv('DAY_TRADING_MODE', 'false').lower() == 'true'
-        
-        if day_trading_mode and not account.get('pattern_day_trader'):
-            # Simulate 4x day trading buying power
-            portfolio_value = account.get('portfolio_value', 0)
-            account['buying_power'] = portfolio_value * 4
-            account['day_trading_buying_power'] = portfolio_value * 4
-            account['pattern_day_trader'] = True
-            account['simulated_pdt'] = True
-        
+        account = await asyncio.to_thread(alpaca_service.get_account)
         return account
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -158,7 +163,7 @@ async def get_account():
 @api_router.get("/positions")
 async def get_positions():
     try:
-        positions = alpaca_service.get_positions()
+        positions = await asyncio.to_thread(alpaca_service.get_positions)
         return positions
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -207,7 +212,7 @@ async def sync_position_monitoring(config: dict = None):
             default_config.update(config)
         
         # Get all positions from Alpaca
-        positions = alpaca_service.get_positions()
+        positions = await asyncio.to_thread(alpaca_service.get_positions)
         
         synced = []
         already_monitored = []
@@ -253,13 +258,14 @@ async def sync_position_monitoring(config: dict = None):
 @api_router.get("/orders")
 async def get_orders(status: str = "all", limit: int = 50):
     try:
-        orders = alpaca_service.get_orders(status, limit)
+        orders = await asyncio.to_thread(alpaca_service.get_orders, status, limit)
         return orders
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/orders")
-async def place_order(order: TradeOrder):
+@limiter.limit("20/minute")
+async def place_order(request: Request, order: TradeOrder):
     try:
         # Check if market is open for buy orders (extended hours: 4 AM - 8 PM ET)
         if order.side.lower() == "buy" and not is_market_open():
@@ -269,13 +275,26 @@ async def place_order(order: TradeOrder):
                 detail=f"Market is {session}. Extended trading hours: 4:00 AM - 8:00 PM ET (Monday-Friday)"
             )
         
+        # HARD KILL SWITCH: block new BUY orders once the daily loss limit / max
+        # consecutive losses is hit (server-side, cannot be bypassed by the frontend)
+        if order.side.lower() == "buy":
+            try:
+                account_check = await asyncio.to_thread(alpaca_service.get_account)
+                risk_check = auto_trader.check_risk_limits(account_check.get('portfolio_value', 0))
+                if not risk_check['can_trade']:
+                    raise HTTPException(status_code=403, detail=f"Trading halted: {risk_check['reason']}")
+            except HTTPException:
+                raise
+            except Exception as risk_err:
+                logger.warning(f"Could not evaluate risk limits before order: {risk_err}")
+        
         from services.position_monitor_service import position_monitor
         
         # For SELL orders, capture position data before selling to log to trade history
         position_data = None
         if order.side.lower() == "sell":
             try:
-                positions = alpaca_service.get_positions()
+                positions = await asyncio.to_thread(alpaca_service.get_positions)
                 position_data = next((p for p in positions if p['symbol'] == order.symbol), None)
             except:
                 pass
@@ -290,7 +309,7 @@ async def place_order(order: TradeOrder):
             spread_pct = 0
             
             try:
-                quote = alpaca_service.get_latest_quote(order.symbol)
+                quote = await asyncio.to_thread(alpaca_service.get_latest_quote, order.symbol)
                 current_price = quote.get('ask_price') or quote.get('bid_price') or order.entry_price or 10.0
                 spread_pct = quote.get('spread_pct', 0)
                 bid_price = quote.get('bid_price', 0)
@@ -312,7 +331,7 @@ async def place_order(order: TradeOrder):
             # For TRAILING stops, use position monitor (software-based)
             if order.stop_type == "trailing":
                 # Place simple market order first
-                result = alpaca_service.place_market_order(order.symbol, order.qty, "buy")
+                result = await asyncio.to_thread(alpaca_service.place_market_order, order.symbol, order.qty, "buy")
                 
                 # Use current market price for position monitoring (not stale frontend price)
                 entry_price = current_price
@@ -363,11 +382,12 @@ async def place_order(order: TradeOrder):
                 logger.info(f"📊 {order.symbol}: Trying bracket order - Stop ${stop_loss_price:.2f} (from BID ${stop_reference_price:.2f}), Target ${take_profit_price:.2f}")
                 
                 try:
-                    result = alpaca_service.place_bracket_order(
-                        symbol=order.symbol,
-                        qty=order.qty,
-                        stop_loss_price=stop_loss_price,
-                        take_profit_price=take_profit_price
+                    result = await asyncio.to_thread(
+                        alpaca_service.place_bracket_order,
+                        order.symbol,
+                        order.qty,
+                        stop_loss_price,
+                        take_profit_price
                     )
                     result['actual_price'] = current_price
                     result['stop_reference_price'] = stop_reference_price
@@ -380,7 +400,7 @@ async def place_order(order: TradeOrder):
                     logger.warning(f"⚠️ {order.symbol}: Bracket order failed, using market order with trailing stop - {error_msg}")
                     
                     # Place simple market order instead
-                    result = alpaca_service.place_market_order(order.symbol, order.qty, "buy")
+                    result = await asyncio.to_thread(alpaca_service.place_market_order, order.symbol, order.qty, "buy")
                     result['warning'] = f"Bracket order failed, using trailing stop instead"
                     result['price_changed'] = True
                     result['actual_price'] = current_price
@@ -427,19 +447,17 @@ async def place_order(order: TradeOrder):
                     })
         else:
             # Place simple market order (for sells or buys without stop/profit)
-            result = alpaca_service.place_market_order(order.symbol, order.qty, order.side)
+            result = await asyncio.to_thread(alpaca_service.place_market_order, order.symbol, order.qty, order.side)
             
             # IMPORTANT: For ALL buy orders, add to position monitor with default settings
             # This ensures stop-loss and take-profit are always active
             if order.side.lower() == "buy":
                 try:
-                    # Wait briefly for order to fill
-                    import asyncio
-                    await asyncio.sleep(2)
-                    
-                    # Get the order status to find the actual fill price
+                    # Get the order status to find the actual fill price - no artificial
+                    # sleep here; market orders in paper trading fill near-instantly and
+                    # we fall back to the current quote below if the fill isn't ready yet.
                     try:
-                        order_status = alpaca_service.get_order(result.get('order_id'))
+                        order_status = await asyncio.to_thread(alpaca_service.get_order, result.get('order_id'))
                         if order_status and order_status.get('filled_avg_price'):
                             entry_price = float(order_status['filled_avg_price'])
                             logger.info(f"📊 {order.symbol}: Got fill price from order: ${entry_price:.2f}")
@@ -451,7 +469,7 @@ async def place_order(order: TradeOrder):
                     
                     # Fallback: Use current quote (mid-price) - this is what we'll trade at
                     if not entry_price:
-                        quote = alpaca_service.get_latest_quote(order.symbol)
+                        quote = await asyncio.to_thread(alpaca_service.get_latest_quote, order.symbol)
                         bid = quote.get('bid_price', 0)
                         ask = quote.get('ask_price', 0)
                         # Use mid-price or available price
@@ -485,17 +503,20 @@ async def place_order(order: TradeOrder):
         if order.side.lower() == "sell" and position_data:
             try:
                 entry_price = position_data['avg_entry_price']
-                exit_price = position_data['current_price']  # Use current price as exit estimate
+                # Prefer the real fill price for exit P&L over the last quote (Phase 4 #14)
+                exit_price = position_data['current_price']
+                if result.get('filled_avg_price'):
+                    exit_price = float(result['filled_avg_price'])
                 shares = float(order.qty)
                 pnl = (exit_price - entry_price) * shares
                 pnl_pct = ((exit_price - entry_price) / entry_price) * 100
                 
                 # Get actual entry time from order history
-                entry_time = alpaca_service.get_position_entry_time(order.symbol)
+                entry_time = await asyncio.to_thread(alpaca_service.get_position_entry_time, order.symbol)
                 if not entry_time:
                     entry_time = datetime.now(timezone.utc).isoformat()
                 
-                trade_history.log_trade({
+                await trade_history.log_trade({
                     'symbol': order.symbol,
                     'entry_price': entry_price,
                     'exit_price': exit_price,
@@ -511,6 +532,7 @@ async def place_order(order: TradeOrder):
                 
                 # Add to exited_today set for No Re-Entry rule
                 auto_trader.exited_today.add(order.symbol)
+                await auto_trader.save_state()
                 logger.info(f"🚫 No Re-Entry: {order.symbol} blocked for rest of day")
             except Exception as e:
                 logger.error(f"Failed to log trade history: {str(e)}")
@@ -533,18 +555,19 @@ async def place_order(order: TradeOrder):
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.delete("/orders")
-async def cancel_all_orders():
+@limiter.limit("10/minute")
+async def cancel_all_orders(request: Request):
     """Cancel all open orders"""
     try:
         # Get all orders from Alpaca (filter for open statuses)
-        orders = alpaca_service.get_orders(status="all", limit=50)
+        orders = await asyncio.to_thread(alpaca_service.get_orders, "all", 50)
         open_statuses = ['new', 'pending_new', 'accepted', 'partially_filled']
         cancelled_count = 0
         
         for order in orders:
             if order['status'] in open_statuses:
                 try:
-                    alpaca_service.cancel_order(order['order_id'])
+                    await asyncio.to_thread(alpaca_service.cancel_order, order['order_id'])
                     cancelled_count += 1
                 except Exception as e:
                     logger.error(f"Failed to cancel order {order['order_id']}: {str(e)}")
@@ -560,13 +583,14 @@ async def cancel_all_orders():
 async def cancel_order(order_id: str):
     """Cancel a specific order"""
     try:
-        alpaca_service.cancel_order(order_id)
+        await asyncio.to_thread(alpaca_service.cancel_order, order_id)
         return {"message": f"Order {order_id} cancelled"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/scanner/scan")
-async def scan_stocks(criteria: ScanCriteria, use_demo: bool = False):
+@limiter.limit("10/minute")
+async def scan_stocks(request: Request, criteria: ScanCriteria, use_demo: bool = False):
     try:
         # Use demo scanner for simulation/testing
         if use_demo:
@@ -596,7 +620,7 @@ async def scan_stocks(criteria: ScanCriteria, use_demo: bool = False):
                 positions = await asyncio.to_thread(alpaca_service.get_positions)
                 traded_symbols = [p['symbol'] for p in positions]
                 if results and len(results) > 0:
-                    await asyncio.to_thread(missed_opportunities.log_scanner_results, results, traded_symbols)
+                    await missed_opportunities.log_scanner_results(results, traded_symbols)
             except Exception as bg_err:
                 logger.warning(f"Background scanner tasks failed: {bg_err}")
         
@@ -654,6 +678,7 @@ async def toggle_auto_trader(enabled: bool):
     """Enable or disable auto-trading"""
     try:
         auto_trader.active = enabled
+        await auto_trader.save_state()
         status = "enabled" if enabled else "disabled"
         return {
             "status": status,
@@ -668,7 +693,7 @@ async def get_auto_trader_status():
     """Get current auto-trader status with Warrior Trading strategy metrics"""
     # Get account info for portfolio value
     try:
-        account = alpaca_service.get_account()
+        account = await asyncio.to_thread(alpaca_service.get_account)
         portfolio_value = float(account.get('portfolio_value', 0))
     except:
         portfolio_value = 0
@@ -777,63 +802,15 @@ async def check_entry_conditions(symbol: str):
     4. Bull flag pattern (optional bonus)
     """
     try:
-        # Get bars for analysis - use the same method as market/bars endpoint
-        bars = None
-        try:
-            bars = alpaca_service.get_bars(symbol, timeframe="5Min", limit=100)
-        except Exception as bar_err:
-            error_msg = str(bar_err).lower()
-            if "subscription" in error_msg or "permit" in error_msg:
-                # Generate simulated bars for analysis (same as market/bars endpoint)
-                from datetime import timedelta
-                import random
-                
-                # Get current price from quote
-                try:
-                    quote = alpaca_service.get_latest_quote(symbol)
-                    current_price = (quote.get('ask_price', 0) + quote.get('bid_price', 0)) / 2
-                    if current_price == 0:
-                        current_price = quote.get('ask_price', 0) or quote.get('bid_price', 0)
-                except:
-                    current_price = 10.0
-                
-                now = datetime.now(timezone.utc)
-                bars = []
-                seed_base = hash(symbol + now.strftime('%Y-%m-%d'))
-                volatility = 0.002
-                
-                random.seed(seed_base)
-                day_open = current_price * random.uniform(0.92, 0.97)
-                
-                for i in range(100):
-                    bar_time = now - timedelta(minutes=(100 - i - 1) * 5)
-                    random.seed(seed_base + i)
-                    progress = (i + 1) / 100
-                    target_price = day_open + (current_price - day_open) * progress
-                    noise = random.gauss(0, volatility * target_price)
-                    bar_price = target_price + noise
-                    
-                    open_price = bar_price * (1 + random.uniform(-volatility/2, volatility/2))
-                    close_price = bar_price * (1 + random.uniform(-volatility/2, volatility/2))
-                    high_price = max(open_price, close_price) * (1 + random.uniform(0, volatility))
-                    low_price = min(open_price, close_price) * (1 - random.uniform(0, volatility))
-                    volume = int(random.uniform(50000, 200000))
-                    
-                    bars.append({
-                        "timestamp": bar_time.isoformat(),
-                        "open": round(max(0.01, open_price), 2),
-                        "high": round(max(0.01, high_price), 2),
-                        "low": round(max(0.01, low_price), 2),
-                        "close": round(max(0.01, close_price), 2),
-                        "volume": volume
-                    })
-            else:
-                raise bar_err
+        # Get bars for analysis - REAL DATA ONLY (Alpaca -> Yahoo -> Nasdaq fallback
+        # chain). Never fabricate bars; if no real data is available, skip this symbol.
+        bars_result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, "5Min", 100)
+        bars = [] if bars_result.get('no_historical_data') else bars_result.get('bars', [])
         
         if not bars or len(bars) < 20:
             return {
                 "symbol": symbol,
-                "error": "Insufficient bar data",
+                "error": "No real market data available for this symbol - skipped (no synthetic data is ever used)",
                 "conditions": {}
             }
         
@@ -939,25 +916,25 @@ async def check_entry_conditions(symbol: str):
 @api_router.get("/trade-history")
 async def get_trade_history(limit: int = 100, symbol: str = None):
     """Get historical trades"""
-    trades = trade_history.get_trades(limit=limit, symbol=symbol)
+    trades = await trade_history.get_trades(limit=limit, symbol=symbol)
     return {"trades": trades}
 
 @api_router.get("/trade-history/analytics")
 async def get_trade_analytics():
     """Get trading performance analytics"""
-    analytics = trade_history.get_analytics()
+    analytics = await trade_history.get_analytics()
     return analytics
 
 @api_router.get("/trade-history/daily-pnl")
 async def get_daily_pnl(days: int = 30):
     """Get daily P&L for the last N days"""
-    daily_pnl = trade_history.get_daily_pnl(days=days)
+    daily_pnl = await trade_history.get_daily_pnl(days=days)
     return {"daily_pnl": daily_pnl}
 
 @api_router.post("/trade-history/log")
 async def log_trade(trade_data: dict):
     """Manually log a trade"""
-    trade_history.log_trade(trade_data)
+    await trade_history.log_trade(trade_data)
     return {"message": "Trade logged successfully"}
 
 # ============ MISSED OPPORTUNITIES ENDPOINTS ============
@@ -965,21 +942,19 @@ async def log_trade(trade_data: dict):
 @api_router.get("/missed-opportunities")
 async def get_missed_opportunities(date: str = None, limit: int = 100):
     """Get missed trading opportunities"""
-    # Run synchronous file I/O in thread pool to avoid blocking the event loop
-    opportunities = await asyncio.to_thread(missed_opportunities.get_opportunities, date=date, limit=limit)
+    opportunities = await missed_opportunities.get_opportunities(date=date, limit=limit)
     return {"opportunities": opportunities}
 
 @api_router.get("/missed-opportunities/analytics")
 async def get_missed_analytics():
     """Get analytics on missed opportunities"""
-    # Run synchronous file I/O in thread pool to avoid blocking the event loop
-    analytics = await asyncio.to_thread(missed_opportunities.get_analytics)
+    analytics = await missed_opportunities.get_analytics()
     return analytics
 
 @api_router.post("/missed-opportunities/log")
 async def log_missed_opportunity(data: dict):
     """Manually log a missed opportunity"""
-    opportunity = missed_opportunities.log_single_opportunity(
+    opportunity = await missed_opportunities.log_single_opportunity(
         stock_data=data.get('stock', {}),
         reason=data.get('reason', '')
     )
@@ -990,13 +965,13 @@ async def log_scanner_opportunities(data: dict):
     """Log all scanner results that weren't traded"""
     scanner_results = data.get('scanner_results', [])
     traded_symbols = data.get('traded_symbols', [])
-    count = missed_opportunities.log_scanner_results(scanner_results, traded_symbols)
+    count = await missed_opportunities.log_scanner_results(scanner_results, traded_symbols)
     return {"message": f"Logged {count} missed opportunities"}
 
 @api_router.put("/missed-opportunities/{opportunity_id}")
 async def update_missed_opportunity(opportunity_id: int, updates: dict):
     """Update a missed opportunity (add notes, close price, status)"""
-    success = missed_opportunities.update_opportunity(opportunity_id, updates)
+    success = await missed_opportunities.update_opportunity(opportunity_id, updates)
     if success:
         return {"message": "Opportunity updated"}
     raise HTTPException(status_code=404, detail="Opportunity not found")
@@ -1004,8 +979,9 @@ async def update_missed_opportunity(opportunity_id: int, updates: dict):
 # ============ END MISSED OPPORTUNITIES ============
 
 @api_router.post("/auto-trader/process")
-async def process_auto_trading():
-    """Manually trigger auto-trading processing (called by scanner)"""
+@limiter.limit("10/minute")
+async def process_auto_trading(request: Request):
+    """Manually trigger auto-trading processing (in addition to the background loop)"""
     try:
         if not auto_trader.active:
             return {"message": "Auto-trader not active"}
@@ -1019,12 +995,11 @@ async def process_auto_trading():
             "max_float": 20_000_000
         }
         
-        scanner_results = scanner_service.scan_stocks(criteria)
-        account = alpaca_service.get_account()
-        buying_power = account.get('buying_power', 0)
+        scanner_results = await asyncio.to_thread(scanner_service.scan_stocks, criteria)
+        account = await asyncio.to_thread(alpaca_service.get_account)
         portfolio_value = account.get('portfolio_value', 0)
         
-        await auto_trader.process_scanner_results(scanner_results, buying_power, portfolio_value)
+        await auto_trader.process_scanner_results(scanner_results, portfolio_value)
         
         return {
             "processed": True,
@@ -1035,7 +1010,9 @@ async def process_auto_trading():
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.get("/scanner/demo")
+@limiter.limit("20/minute")
 async def run_demo_scan(
+    request: Request,
     min_price: float = 2.0,
     max_price: float = 20.0,
     min_change: float = 10.0,
@@ -1051,7 +1028,7 @@ async def run_demo_scan(
         "min_volume_ratio": min_volume_ratio,
         "max_float": max_float
     }
-    results = demo_scanner.scan_stocks(criteria)
+    results = await asyncio.to_thread(demo_scanner.scan_stocks, criteria)
     return {
         "results": results,
         "is_market_hours": demo_scanner.is_market_hours(),
@@ -1063,7 +1040,7 @@ async def run_demo_scan(
 async def get_quotes(symbols: str):
     try:
         symbol_list = symbols.split(",")
-        quotes = alpaca_service.get_quotes(symbol_list)
+        quotes = await asyncio.to_thread(alpaca_service.get_quotes, symbol_list)
         return quotes
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1071,7 +1048,7 @@ async def get_quotes(symbols: str):
 @api_router.get("/market/quote/{symbol}")
 async def get_quote(symbol: str):
     try:
-        quotes = alpaca_service.get_quotes([symbol])
+        quotes = await asyncio.to_thread(alpaca_service.get_quotes, [symbol])
         if quotes and symbol in quotes:
             return quotes[symbol]
         else:
@@ -1082,195 +1059,94 @@ async def get_quote(symbol: str):
 @api_router.get("/market/bars/{symbol}")
 async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_fallback: bool = True):
     """
-    Get historical bar data for a symbol.
-    
-    If use_fallback=True (default), will automatically use Nasdaq data when Alpaca IEX data
-    is incomplete or doesn't match the current quote price.
+    Get historical bar data for a symbol. REAL DATA ONLY.
+
+    Never generates synthetic/fake OHLC data. If no real data is available
+    from Alpaca, Yahoo, or Nasdaq, returns an explicit "no data" response
+    instead of fabricating bars.
     """
     try:
         if use_fallback and timeframe in ["5Min", "1Min"]:
             # Use fallback method for intraday data - run in thread pool to avoid blocking
             result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, timeframe, limit)
-            bars = result.get('bars', [])
-            source = result.get('source', 'unknown')
-            warning = result.get('warning')
-            
-            # Add source info to response
             return {
-                'bars': bars,
-                'source': source,
-                'warning': warning,
+                'bars': result.get('bars', []),
+                'source': result.get('source', 'unknown'),
+                'warning': result.get('warning'),
+                'no_historical_data': result.get('no_historical_data', False),
                 'symbol': symbol
             }
         else:
             # Use standard Alpaca for daily data - run in thread pool
             bars = await asyncio.to_thread(alpaca_service.get_bars, symbol, timeframe, limit)
+            if not bars:
+                return {
+                    'bars': [],
+                    'source': 'none',
+                    'no_historical_data': True,
+                    'warning': f'No real historical data available for {symbol}',
+                    'symbol': symbol
+                }
             return {'bars': bars, 'source': 'alpaca', 'symbol': symbol}
     except Exception as e:
-        # If Alpaca historical data fails, generate realistic bars based on ACTUAL current price
-        error_msg = str(e).lower()
-        if "subscription" in error_msg or "permit" in error_msg:
-            logger.warning(f"Alpaca subscription doesn't permit historical data for {symbol} - generating simulated bars")
-            from datetime import datetime, timedelta
-            import random
-            
-            # Get ACTUAL current price from quote (most accurate) - run in thread pool
-            try:
-                quote = await asyncio.to_thread(alpaca_service.get_latest_quote, symbol)
-                logger.info(f"Got quote for {symbol}: {quote}")
-                current_price = (quote.get('ask_price', 0) + quote.get('bid_price', 0)) / 2
-                if current_price == 0:
-                    current_price = quote.get('ask_price', 0) or quote.get('bid_price', 0)
-                if current_price == 0:
-                    # Fallback to position
-                    positions = await asyncio.to_thread(alpaca_service.get_positions)
-                    position = next((p for p in positions if p['symbol'] == symbol), None)
-                    current_price = position['current_price'] if position else 10.0
-                    logger.info(f"Used position price for {symbol}: ${current_price}")
-            except Exception as quote_err:
-                logger.error(f"Failed to get quote for {symbol}: {quote_err}")
-                # Try position as fallback
-                try:
-                    positions = await asyncio.to_thread(alpaca_service.get_positions)
-                    position = next((p for p in positions if p['symbol'] == symbol), None)
-                    current_price = position['current_price'] if position else 10.0
-                    logger.info(f"Used position fallback for {symbol}: ${current_price}")
-                except:
-                    current_price = 10.0
-            
-            logger.info(f"Generating simulated bars for {symbol} based on real quote: ${current_price:.2f}")
-            
-            now = datetime.now()
-            bars = []
-            
-            # Use symbol + date as seed for consistency within a day
-            seed_base = hash(symbol + now.strftime('%Y-%m-%d'))
-            
-            # Calculate time intervals based on timeframe
-            if timeframe == "5Min":
-                interval_minutes = 5
-            elif timeframe == "1Min":
-                interval_minutes = 1
-            elif timeframe == "1Hour":
-                interval_minutes = 60
-            else:
-                interval_minutes = 1440  # 1 day
-            
-            # Generate bars going back from now
-            volatility = 0.002 if timeframe in ["1Min", "5Min"] else 0.01
-            
-            # Start from a base price (today's estimated open, ~5% below current for gapper)
-            random.seed(seed_base)
-            day_open = current_price * random.uniform(0.92, 0.97)
-            
-            for i in range(limit):
-                bar_time = now - timedelta(minutes=(limit - i - 1) * interval_minutes)
-                
-                # Use consistent seed for each bar
-                random.seed(seed_base + i)
-                
-                # Progress through the day toward current price
-                progress = (i + 1) / limit
-                target_price = day_open + (current_price - day_open) * progress
-                
-                # Add noise
-                noise = random.gauss(0, volatility * target_price)
-                bar_price = target_price + noise
-                
-                # Generate OHLC
-                open_price = bar_price * (1 + random.uniform(-volatility/2, volatility/2))
-                close_price = bar_price * (1 + random.uniform(-volatility/2, volatility/2))
-                high_price = max(open_price, close_price) * (1 + random.uniform(0, volatility))
-                low_price = min(open_price, close_price) * (1 - random.uniform(0, volatility))
-                
-                volume = int(random.uniform(50000, 200000))
-                
-                bars.append({
-                    "timestamp": bar_time.isoformat(),
-                    "open": round(max(0.01, open_price), 2),
-                    "high": round(max(0.01, high_price), 2),
-                    "low": round(max(0.01, low_price), 2),
-                    "close": round(max(0.01, close_price), 2),
-                    "volume": volume
-                })
-            
-            # CRITICAL: Last bar must use REAL current price from quote
-            if bars:
-                # Make last bar reflect actual real-time price
-                last_bar = bars[-1]
-                last_bar["close"] = round(current_price, 2)
-                last_bar["high"] = round(max(last_bar["high"], current_price), 2)
-                last_bar["low"] = round(min(last_bar["low"], current_price), 2)
-                # Update timestamp to current time
-                last_bar["timestamp"] = now.isoformat()
-            
-            return bars
-        else:
-            raise HTTPException(status_code=500, detail=str(e))
+        # Real data unavailable - return an explicit error. NEVER fabricate bars.
+        logger.error(f"No real market data available for {symbol}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"No real market data available for {symbol}: {str(e)}"
+        )
+        logger.error(f"No real market data available for {symbol}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"No real market data available for {symbol}: {str(e)}"
+        )
 
 @api_router.post("/settings")
-async def save_settings(settings: Settings):
+async def save_settings(settings: SmaSettingsUpdate):
+    """
+    Update non-secret strategy configuration (SMA periods) - persisted to
+    MongoDB, not .env. Alpaca API keys/secret are intentionally NOT
+    configurable at runtime; manage them directly via the backend .env file
+    (Phase 1 #2 - no runtime .env rewriting of secrets).
+    """
     try:
-        os.environ['ALPACA_API_KEY'] = settings.api_key
-        os.environ['ALPACA_SECRET_KEY'] = settings.secret_key
-        os.environ['ALPACA_BASE_URL'] = settings.base_url
-        os.environ['DAY_TRADING_MODE'] = 'true' if settings.day_trading_mode else 'false'
-        os.environ['SMA_SHORT'] = str(settings.sma_short)
-        os.environ['SMA_LONG'] = str(settings.sma_long)
-        
-        # Save to .env file
-        env_path = ROOT_DIR / '.env'
-        with open(env_path, 'r') as f:
-            lines = f.readlines()
-        
-        # Check what settings exist
-        has_day_trading_mode = any(line.startswith('DAY_TRADING_MODE') for line in lines)
-        has_sma_short = any(line.startswith('SMA_SHORT') for line in lines)
-        has_sma_long = any(line.startswith('SMA_LONG') for line in lines)
-        
-        with open(env_path, 'w') as f:
-            for line in lines:
-                if line.startswith('ALPACA_API_KEY'):
-                    f.write(f'ALPACA_API_KEY="{settings.api_key}"\n')
-                elif line.startswith('ALPACA_SECRET_KEY'):
-                    f.write(f'ALPACA_SECRET_KEY="{settings.secret_key}"\n')
-                elif line.startswith('ALPACA_BASE_URL'):
-                    f.write(f'ALPACA_BASE_URL="{settings.base_url}"\n')
-                elif line.startswith('DAY_TRADING_MODE'):
-                    f.write(f'DAY_TRADING_MODE="{"true" if settings.day_trading_mode else "false"}"\n')
-                elif line.startswith('SMA_SHORT'):
-                    f.write(f'SMA_SHORT="{settings.sma_short}"\n')
-                elif line.startswith('SMA_LONG'):
-                    f.write(f'SMA_LONG="{settings.sma_long}"\n')
-                else:
-                    f.write(line)
-            
-            # Add new settings if they don't exist
-            if not has_day_trading_mode:
-                f.write(f'DAY_TRADING_MODE="{"true" if settings.day_trading_mode else "false"}"\n')
-            if not has_sma_short:
-                f.write(f'SMA_SHORT="{settings.sma_short}"\n')
-            if not has_sma_long:
-                f.write(f'SMA_LONG="{settings.sma_long}"\n')
-        
+        if settings.sma_short >= settings.sma_long:
+            raise HTTPException(status_code=400, detail="sma_short must be less than sma_long")
+
+        await db.app_config.update_one(
+            {"_id": "sma_settings"},
+            {"$set": {"sma_short": settings.sma_short, "sma_long": settings.sma_long}},
+            upsert=True
+        )
         return {"message": "Settings saved successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.get("/settings")
 async def get_settings():
+    """
+    Return current configuration. Alpaca API key/secret are ALWAYS masked -
+    never returned in plaintext (Phase 1 #2).
+    """
+    api_key = os.getenv('ALPACA_API_KEY', '')
     secret_key = os.getenv('ALPACA_SECRET_KEY', '')
-    # Mask the secret key for security (show *** if it exists)
+
+    masked_api_key = (api_key[:4] + '*' * max(0, len(api_key) - 4)) if api_key else ''
     masked_secret = '*' * 32 if secret_key else ''
-    
+
+    config_doc = await db.app_config.find_one({"_id": "sma_settings"}) or {}
+
     return {
-        "api_key": os.getenv('ALPACA_API_KEY', ''),
+        "api_key_masked": masked_api_key,
+        "has_api_key": bool(api_key),
         "secret_key_masked": masked_secret,
         "has_secret_key": bool(secret_key),
         "base_url": os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
-        "day_trading_mode": os.getenv('DAY_TRADING_MODE', 'false').lower() == 'true',
-        "sma_short": int(os.getenv('SMA_SHORT', '20')),
-        "sma_long": int(os.getenv('SMA_LONG', '50'))
+        "paper_trading": alpaca_service.paper,
+        "sma_short": config_doc.get('sma_short', int(os.getenv('SMA_SHORT', '20'))),
+        "sma_long": config_doc.get('sma_long', int(os.getenv('SMA_LONG', '50')))
     }
 
 @api_router.get("/news/{symbol}")
@@ -1282,12 +1158,12 @@ async def get_news(symbol: str, limit: int = 5):
         # Get company name for better search
         company_name = None
         try:
-            asset_info = alpaca_service.get_asset(symbol)
+            asset_info = await asyncio.to_thread(alpaca_service.get_asset, symbol)
             company_name = asset_info.get('name')
         except:
             pass
         
-        result = google_news_service.search_stock_news(symbol, hours_back=24, limit=limit, company_name=company_name)
+        result = await asyncio.to_thread(google_news_service.search_stock_news, symbol, 24, limit, company_name)
         
         return {
             "symbol": symbol,
@@ -1298,12 +1174,39 @@ async def get_news(symbol: str, limit: int = 5):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+async def auto_trader_loop():
+    """
+    Real background loop for the auto-trader (Phase 3 #9). Runs unattended
+    on an interval, decoupled from the frontend, gated by auto_trader.active.
+    /auto-trader/process remains available purely as a manual trigger.
+    """
+    logger.info("🔁 Auto-Trader background loop started (60s interval)")
+    while True:
+        try:
+            if auto_trader.active:
+                criteria = {
+                    "min_price": 2,
+                    "max_price": 20,
+                    "min_change": 10,
+                    "min_volume_ratio": 5,
+                    "max_float": 20_000_000
+                }
+                scanner_results = await asyncio.to_thread(scanner_service.scan_stocks, criteria)
+                account = await asyncio.to_thread(alpaca_service.get_account)
+                portfolio_value = account.get('portfolio_value', 0)
+                await auto_trader.process_scanner_results(scanner_results, portfolio_value)
+        except Exception as e:
+            logger.error(f"Auto-trader loop error: {str(e)}")
+        await asyncio.sleep(60)
+
 app.include_router(api_router)
 
+# CORS (Phase 1 #3): explicit origins only, never '*' with allow_credentials=True
+cors_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '').split(',') if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1317,6 +1220,19 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def startup_services():
     """Start background services"""
+    if not os.environ.get('API_ACCESS_TOKEN'):
+        logger.warning("⚠️  API_ACCESS_TOKEN is not set - the API will reject ALL requests until it is configured in .env")
+
+    trading_mode = "PAPER (safe/simulated)" if alpaca_service.paper else "🔴 LIVE — REAL MONEY AT RISK"
+    logger.info("=" * 60)
+    logger.info(f"  MomentumX starting up — TRADING MODE: {trading_mode}")
+    logger.info("=" * 60)
+
+    # Restore persisted risk/position state from MongoDB (Phase 3 #10) -
+    # never silently reset daily loss limits / stops to defaults on restart.
+    await auto_trader.load_state()
+    await position_monitor.load_state()
+
     position_monitor.start()
     # Start monitoring loop in background
     asyncio.create_task(position_monitor.monitor_positions())
@@ -1325,11 +1241,15 @@ async def startup_services():
     eod_closer.start()
     asyncio.create_task(eod_closer.monitor_eod())
     logger.info("🚀 Position Monitor Service started")
+
+    # Start the real auto-trader background loop (Phase 3 #9) - runs
+    # unattended on the VPS, independent of the frontend/browser being open.
+    asyncio.create_task(auto_trader_loop())
     
     # IMPORTANT: Auto-sync all existing positions to monitoring on startup
     # This ensures stop-loss and take-profit are active for ALL positions
     try:
-        existing_positions = alpaca_service.get_positions()
+        existing_positions = await asyncio.to_thread(alpaca_service.get_positions)
         if existing_positions:
             synced_count = 0
             for pos in existing_positions:

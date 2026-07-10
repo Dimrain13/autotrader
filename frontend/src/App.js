@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
 import axios from "axios";
+import { getToken, setToken, clearToken } from "./lib/axiosConfig";
 import Dashboard from "./pages/Dashboard";
 import Scanner from "./pages/Scanner";
 import Trading from "./pages/Trading";
@@ -9,13 +10,70 @@ import MissedOpportunities from "./pages/MissedOpportunities";
 import Settings from "./pages/Settings";
 import Demo from "./pages/Demo";
 import { Toaster } from "./components/ui/sonner";
-import { TrendingUp, Search, DollarSign, Settings as SettingsIcon, PlayCircle, BarChart3, EyeOff } from "lucide-react";
+import { TrendingUp, Search, DollarSign, Settings as SettingsIcon, PlayCircle, BarChart3, EyeOff, LogOut } from "lucide-react";
 import "@/App.css";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-function NavBar({ account }) {
+function TokenGate({ onAuthenticated }) {
+  const [tokenInput, setTokenInput] = useState("");
+  const [error, setError] = useState("");
+  const [checking, setChecking] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!tokenInput.trim()) return;
+    setChecking(true);
+    setError("");
+    setToken(tokenInput.trim());
+    try {
+      // Any authenticated endpoint works as a verification ping
+      await axios.get(`${API}/settings`);
+      onAuthenticated();
+    } catch (err) {
+      clearToken();
+      setError("Invalid access token. Please check and try again.");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#050505] flex items-center justify-center p-4" data-testid="token-gate-screen">
+      <div className="w-full max-w-md bg-[#0A0A0A] border border-white/10 rounded-sm p-8">
+        <h1 className="text-2xl font-black mb-2" style={{ fontFamily: 'Unbounded, sans-serif' }}>
+          <span className="text-[#00E599]">Momentum</span><span className="text-white">X</span>
+        </h1>
+        <p className="text-sm text-neutral-500 mb-6">Enter your API access token to continue.</p>
+        <form onSubmit={handleSubmit} className="space-y-4" data-testid="token-gate-form">
+          <input
+            type="password"
+            data-testid="token-gate-input"
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder="API Access Token"
+            className="w-full bg-[#121212] border border-white/10 rounded-sm px-4 py-3 text-white text-sm font-mono focus:outline-none focus:border-[#2E5CFF] transition-colors"
+            autoFocus
+          />
+          {error && (
+            <div className="text-[#FF1A40] text-xs" data-testid="token-gate-error">{error}</div>
+          )}
+          <button
+            type="submit"
+            data-testid="token-gate-submit-button"
+            disabled={checking || !tokenInput.trim()}
+            className="w-full bg-[#00E599] text-black font-bold py-3 rounded-sm hover:bg-[#00E599]/90 transition-colors disabled:opacity-50"
+          >
+            {checking ? "Verifying..." : "Unlock"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function NavBar({ account, onLogout }) {
   const location = useLocation();
   
   const isActive = (path) => location.pathname === path;
@@ -138,6 +196,14 @@ function NavBar({ account }) {
               <div className="bg-[#2E5CFF]/10 text-[#2E5CFF] border border-[#2E5CFF]/20 text-[10px] px-2 py-0.5 rounded-full uppercase tracking-widest font-bold animate-pulse">
                 PAPER
               </div>
+              <button
+                onClick={onLogout}
+                data-testid="logout-button"
+                title="Lock / clear access token"
+                className="text-neutral-500 hover:text-white transition-colors"
+              >
+                <LogOut size={16} />
+              </button>
             </div>
           )}
         </div>
@@ -149,12 +215,20 @@ function NavBar({ account }) {
 function App() {
   const [account, setAccount] = useState(null);
   const [loading, setLoading] = useState(false); // Start false for instant UI
+  const [authenticated, setAuthenticated] = useState(!!getToken());
 
   useEffect(() => {
+    const handleUnauthorized = () => setAuthenticated(false);
+    window.addEventListener("momentumx-unauthorized", handleUnauthorized);
+    return () => window.removeEventListener("momentumx-unauthorized", handleUnauthorized);
+  }, []);
+
+  useEffect(() => {
+    if (!authenticated) return;
     fetchAccount();
     const interval = setInterval(fetchAccount, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [authenticated]);
 
   const fetchAccount = async () => {
     try {
@@ -165,10 +239,19 @@ function App() {
     }
   };
 
+  const handleLogout = () => {
+    clearToken();
+    setAuthenticated(false);
+  };
+
+  if (!authenticated) {
+    return <TokenGate onAuthenticated={() => setAuthenticated(true)} />;
+  }
+
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-[#050505]">
-        <NavBar account={account} />
+        <NavBar account={account} onLogout={handleLogout} />
         <main className="container mx-auto p-4 md:p-6">
           {loading ? (
             <div className="flex justify-center items-center h-96">

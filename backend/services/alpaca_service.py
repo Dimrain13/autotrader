@@ -16,13 +16,32 @@ class AlpacaService:
         api_key = os.getenv('ALPACA_API_KEY')
         secret_key = os.getenv('ALPACA_SECRET_KEY')
         base_url = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
-        
+
+        # Determine paper vs live deliberately - never assume paper=True blindly.
+        # ALPACA_PAPER env var takes precedence if explicitly set; otherwise infer
+        # from the base URL. This makes going live an intentional, logged action.
+        alpaca_paper_env = os.getenv('ALPACA_PAPER')
+        if alpaca_paper_env is not None and alpaca_paper_env.strip() != '':
+            paper = alpaca_paper_env.strip().lower() == 'true'
+        else:
+            paper = 'paper' in base_url.lower()
+        self.paper = paper
+        self.base_url = base_url
+
+        if paper:
+            logger.info(f"📝 PAPER TRADING MODE ACTIVE (base_url={base_url}) - no real money at risk")
+        else:
+            logger.warning("#" * 70)
+            logger.warning("# ⚠️  LIVE TRADING MODE ACTIVE — REAL MONEY AT RISK  ⚠️")
+            logger.warning(f"# base_url={base_url} | ALPACA_PAPER={alpaca_paper_env}")
+            logger.warning("#" * 70)
+
         if not api_key or not secret_key:
             logger.warning("Alpaca API keys not configured")
             self.trading_client = None
             self.data_client = None
         else:
-            self.trading_client = TradingClient(api_key=api_key, secret_key=secret_key, paper=True)
+            self.trading_client = TradingClient(api_key=api_key, secret_key=secret_key, paper=paper)
             self.data_client = StockHistoricalDataClient(api_key=api_key, secret_key=secret_key)
     
     def get_account(self):
@@ -373,6 +392,20 @@ class AlpacaService:
             return True
         except Exception as e:
             logger.error(f"Failed to cancel order {order_id}: {str(e)}")
+            raise
+
+    def cancel_all_orders(self):
+        """Cancel all open orders. Returns the number of orders cancelled."""
+        if not self.trading_client:
+            raise Exception("Alpaca API not configured")
+
+        try:
+            responses = self.trading_client.cancel_orders()
+            count = len(responses) if responses else 0
+            logger.info(f"Cancelled {count} open order(s)")
+            return count
+        except Exception as e:
+            logger.error(f"Failed to cancel all orders: {str(e)}")
             raise
     
     def get_asset(self, symbol: str):

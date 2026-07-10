@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Settings as SettingsIcon, Key, Server } from "lucide-react";
 
@@ -13,10 +12,12 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 export default function Settings() {
-  const [apiKey, setApiKey] = useState('');
-  const [secretKey, setSecretKey] = useState('');
+  const [apiKeyMasked, setApiKeyMasked] = useState('');
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [secretKeyMasked, setSecretKeyMasked] = useState('');
+  const [hasSecretKey, setHasSecretKey] = useState(false);
   const [baseUrl, setBaseUrl] = useState('https://paper-api.alpaca.markets');
-  const [dayTradingMode, setDayTradingMode] = useState(false);
+  const [paperTrading, setPaperTrading] = useState(true);
   const [smaShort, setSmaShort] = useState(20);
   const [smaLong, setSmaLong] = useState(50);
   const [saving, setSaving] = useState(false);
@@ -28,13 +29,12 @@ export default function Settings() {
   const fetchSettings = async () => {
     try {
       const response = await axios.get(`${API}/settings`);
-      setApiKey(response.data.api_key || '');
-      // Show masked secret key if it exists
-      if (response.data.has_secret_key) {
-        setSecretKey(response.data.secret_key_masked || '********************************');
-      }
+      setApiKeyMasked(response.data.api_key_masked || '');
+      setHasApiKey(response.data.has_api_key || false);
+      setSecretKeyMasked(response.data.secret_key_masked || '');
+      setHasSecretKey(response.data.has_secret_key || false);
       setBaseUrl(response.data.base_url || 'https://paper-api.alpaca.markets');
-      setDayTradingMode(response.data.day_trading_mode || false);
+      setPaperTrading(response.data.paper_trading !== false);
       setSmaShort(response.data.sma_short || 20);
       setSmaLong(response.data.sma_long || 50);
     } catch (error) {
@@ -46,16 +46,13 @@ export default function Settings() {
     setSaving(true);
     try {
       await axios.post(`${API}/settings`, {
-        api_key: apiKey,
-        secret_key: secretKey,
-        base_url: baseUrl,
-        day_trading_mode: dayTradingMode,
         sma_short: smaShort,
         sma_long: smaLong
       });
-      // Settings saved
+      toast.success('Settings saved successfully');
     } catch (error) {
       console.error('Failed to save settings:', error.message);
+      toast.error(error?.response?.data?.detail || 'Failed to save settings');
     } finally {
       setSaving(false);
     }
@@ -135,115 +132,61 @@ export default function Settings() {
         <CardContent className="space-y-4">
           <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-sm">
             <div className="text-sm text-yellow-500">
-              <strong>Important:</strong> Get your API keys from{' '}
-              <a 
-                href="https://alpaca.markets" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="underline hover:text-yellow-400"
-              >
-                alpaca.markets
-              </a>
-              . Paper trading keys are free and require no deposit.
+              <strong>Security:</strong> API keys are managed via the backend <code>.env</code> file only and can no longer be edited or viewed here in plaintext. Update <code>ALPACA_API_KEY</code> / <code>ALPACA_SECRET_KEY</code> directly in <code>.env</code> and restart the backend to change them.
             </div>
           </div>
 
           <div>
-            <Label htmlFor="api_key" className="text-xs text-neutral-500">
+            <Label className="text-xs text-neutral-500">
               <Key className="inline mr-1" size={14} />
               API Key
             </Label>
             <Input
-              id="api_key"
               data-testid="input-api-key"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              className="mt-1 bg-[#121212] border-white/10 text-white font-mono"
-              placeholder="PKxxxxxxxxxxxxxxxxxx"
+              value={hasApiKey ? apiKeyMasked : 'Not configured'}
+              readOnly
+              disabled
+              className="mt-1 bg-[#121212] border-white/10 text-neutral-400 font-mono cursor-not-allowed"
             />
           </div>
 
           <div>
-            <Label htmlFor="secret_key" className="text-xs text-neutral-500 flex items-center gap-2">
+            <Label className="text-xs text-neutral-500 flex items-center gap-2">
               <Key className="inline" size={14} />
               Secret Key
-              {secretKey && secretKey.startsWith('*') && (
+              {hasSecretKey && (
                 <span className="text-[10px] px-2 py-0.5 bg-[#00E599]/20 text-[#00E599] border border-[#00E599]/30 rounded-full">
                   ✓ SET
                 </span>
               )}
             </Label>
             <Input
-              id="secret_key"
               data-testid="input-secret-key"
-              type="password"
-              value={secretKey}
-              onChange={(e) => setSecretKey(e.target.value)}
-              className="mt-1 bg-[#121212] border-white/10 text-white font-mono"
-              placeholder="Enter your secret key (or leave masked to keep existing)"
+              value={hasSecretKey ? secretKeyMasked : 'Not configured'}
+              readOnly
+              disabled
+              className="mt-1 bg-[#121212] border-white/10 text-neutral-400 font-mono cursor-not-allowed"
             />
           </div>
 
           <div>
-            <Label htmlFor="base_url" className="text-xs text-neutral-500">
+            <Label className="text-xs text-neutral-500">
               <Server className="inline mr-1" size={14} />
               Trading Mode
             </Label>
-            <Select value={baseUrl} onValueChange={setBaseUrl}>
-              <SelectTrigger data-testid="select-trading-mode" className="mt-1 bg-[#121212] border-white/10 text-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="https://paper-api.alpaca.markets">
-                  Paper Trading (Recommended)
-                </SelectItem>
-                <SelectItem value="https://api.alpaca.markets">
-                  Live Trading (Real Money)
-                </SelectItem>
-              </SelectContent>
-            </Select>
+            <div
+              data-testid="trading-mode-display"
+              className="mt-1 bg-[#121212] border border-white/10 rounded-sm px-3 py-2 text-white text-sm font-mono"
+            >
+              {baseUrl}
+            </div>
             <div className="mt-2 text-xs text-neutral-500">
-              {baseUrl === 'https://paper-api.alpaca.markets' ? (
+              {paperTrading ? (
                 <span className="text-[#2E5CFF]">✓ Paper trading mode - No real money at risk</span>
               ) : (
-                <span className="text-[#FF1A40]">⚠ Live trading mode - Real money will be used</span>
+                <span className="text-[#FF1A40]">⚠ LIVE TRADING MODE - Real money is at risk</span>
               )}
             </div>
-          </div>
-
-          <div className="pt-2">
-            <div className="flex items-center justify-between p-4 bg-[#121212] border border-white/10 rounded-sm">
-              <div className="flex-1">
-                <Label htmlFor="day-trading-mode" className="text-sm text-white font-bold cursor-pointer">
-                  Enable Day Trading Mode (4x Leverage)
-                </Label>
-                <div className="text-xs text-neutral-400 mt-1">
-                  Simulates Pattern Day Trader status with 4x intraday buying power. Your $100k portfolio becomes $400k buying power.
-                </div>
-              </div>
-              <Switch
-                id="day-trading-mode"
-                checked={dayTradingMode}
-                onCheckedChange={setDayTradingMode}
-                data-testid="day-trading-mode-toggle"
-              />
-            </div>
-            {dayTradingMode && (
-              <div className="mt-2 p-3 bg-[#00E599]/10 border border-[#00E599]/20 rounded-sm text-xs text-[#00E599]">
-                ✓ Day Trading Mode enabled - You will have 4x intraday buying power for momentum trading
-              </div>
-            )}
-          </div>
-
-          <div className="pt-4">
-            <Button
-              onClick={saveSettings}
-              disabled={saving || !apiKey || !secretKey}
-              data-testid="save-settings-button"
-              className="w-full bg-[#00E599] text-black font-bold hover:bg-[#00CC88] rounded-sm uppercase tracking-wider text-xs shadow-[0_0_15px_rgba(0,229,153,0.3)]"
-            >
-              {saving ? 'Saving...' : 'Save Settings'}
-            </Button>
           </div>
         </CardContent>
       </Card>
@@ -317,6 +260,17 @@ export default function Settings() {
               ⚠️ Warning: Short SMA must be less than Long SMA for crossover strategy to work properly.
             </div>
           )}
+
+          <div className="pt-4">
+            <Button
+              onClick={saveSettings}
+              disabled={saving || smaShort >= smaLong}
+              data-testid="save-settings-button"
+              className="w-full bg-[#00E599] text-black font-bold hover:bg-[#00CC88] rounded-sm uppercase tracking-wider text-xs shadow-[0_0_15px_rgba(0,229,153,0.3)]"
+            >
+              {saving ? 'Saving...' : 'Save SMA Settings'}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
