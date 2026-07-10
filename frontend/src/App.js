@@ -176,36 +176,38 @@ function NavBar({ account, onLogout }) {
             </div>
           </div>
           
-          {account && (
-            <div className="flex items-center gap-2 sm:gap-4" data-testid="account-info">
-              <div className="text-right">
-                <div className="text-xs text-neutral-500">Portfolio</div>
-                <div className="text-sm sm:text-lg font-mono text-white">
-                  ${account.portfolio_value?.toFixed(2) || '0.00'}
+          <div className="flex items-center gap-2 sm:gap-4" data-testid="account-info">
+            {account && (
+              <>
+                <div className="text-right">
+                  <div className="text-xs text-neutral-500">Portfolio</div>
+                  <div className="text-sm sm:text-lg font-mono text-white">
+                    ${account.portfolio_value?.toFixed(2) || '0.00'}
+                  </div>
                 </div>
-              </div>
-              <div className="h-8 w-px bg-white/10" />
-              <div className="text-right">
-                <div className="text-xs text-neutral-500">
-                  Buying Power {account.pattern_day_trader ? '(4x)' : '(2x)'}
+                <div className="h-8 w-px bg-white/10" />
+                <div className="text-right">
+                  <div className="text-xs text-neutral-500">
+                    Buying Power {account.pattern_day_trader ? '(4x)' : '(2x)'}
+                  </div>
+                  <div className="text-lg font-mono text-[#00E599]">
+                    ${account.buying_power?.toFixed(2) || '0.00'}
+                  </div>
                 </div>
-                <div className="text-lg font-mono text-[#00E599]">
-                  ${account.buying_power?.toFixed(2) || '0.00'}
-                </div>
-              </div>
-              <div className="bg-[#2E5CFF]/10 text-[#2E5CFF] border border-[#2E5CFF]/20 text-[10px] px-2 py-0.5 rounded-full uppercase tracking-widest font-bold animate-pulse">
-                PAPER
-              </div>
-              <button
-                onClick={onLogout}
-                data-testid="logout-button"
-                title="Lock / clear access token"
-                className="text-neutral-500 hover:text-white transition-colors"
-              >
-                <LogOut size={16} />
-              </button>
+              </>
+            )}
+            <div className="bg-[#2E5CFF]/10 text-[#2E5CFF] border border-[#2E5CFF]/20 text-[10px] px-2 py-0.5 rounded-full uppercase tracking-widest font-bold animate-pulse">
+              PAPER
             </div>
-          )}
+            <button
+              onClick={onLogout}
+              data-testid="logout-button"
+              title="Lock / clear access token"
+              className="text-neutral-500 hover:text-white transition-colors"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
       </div>
     </nav>
