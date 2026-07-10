@@ -84,9 +84,21 @@ cd "$ROOT_DIR/backend"
 if [ -f ".env" ]; then
     echo "  backend/.env already exists - leaving it untouched (won't overwrite your keys)."
 else
-    cp .env.example .env
+    # Written directly here (not `cp .env.example`) so this script never
+    # depends on that template file existing/being tracked in the repo.
     GENERATED_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
-    sed -i "s/REPLACE_WITH_A_LONG_RANDOM_TOKEN/${GENERATED_TOKEN}/" .env
+    cat > .env << EOF
+MONGO_URL="mongodb://localhost:27017"
+DB_NAME="momentumx"
+CORS_ORIGINS="http://localhost:4000,http://127.0.0.1:4000"
+API_ACCESS_TOKEN="${GENERATED_TOKEN}"
+ALPACA_API_KEY=""
+ALPACA_SECRET_KEY=""
+ALPACA_BASE_URL="https://paper-api.alpaca.markets"
+ALPACA_PAPER="true"
+SMA_SHORT="20"
+SMA_LONG="50"
+EOF
     echo "  Created backend/.env (generated a random API_ACCESS_TOKEN for you)."
 
     if [ -t 0 ]; then
@@ -117,7 +129,14 @@ echo "  Backend dependencies installed."
 echo ""
 echo "[6/7] Setting up frontend..."
 cd "$ROOT_DIR/frontend"
-[ -f ".env" ] || cp .env.example .env
+if [ ! -f ".env" ]; then
+    # Written directly here for the same reason as backend/.env above -
+    # never depends on frontend/.env.example existing in the repo.
+    cat > .env << 'EOF'
+REACT_APP_BACKEND_URL="http://127.0.0.1:9001"
+WDS_SOCKET_PORT=443
+EOF
+fi
 yarn install
 yarn build
 echo "  Frontend built."
