@@ -1,8 +1,10 @@
 #!/bin/bash
-# MomentumX - ONE-SHOT setup: installs system prerequisites (Python, Node,
-# MongoDB, yarn/serve), sets up backend + frontend .env files, installs
-# dependencies, builds the frontend, then installs + starts both apps as
-# persistent systemd services (survive reboot/logout).
+# MomentumX - TRUE one-shot setup for a bare Linux VPS (Ubuntu/Debian).
+# Assumes NOTHING is pre-installed except a base OS + apt. Installs every
+# system dependency needed (compiler toolchain, Python, a modern Node.js via
+# NodeSource, MongoDB via its official repo, yarn/serve), sets up backend +
+# frontend .env files, installs app dependencies, builds the frontend, then
+# installs + starts both apps as persistent systemd services.
 #
 # Run with sudo. Safe to re-run (idempotent - skips steps already done).
 # Assumes the repo lives at /opt/momentumx (adjust paths in the .service
@@ -14,30 +16,82 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+if ! command -v apt-get >/dev/null 2>&1; then
+    echo "ERROR: this script targets Debian/Ubuntu (apt-get not found)."
+    echo "On another distro, install the equivalent packages manually: a C"
+    echo "compiler toolchain, Python 3.10+, Node.js 20+, MongoDB, yarn, serve."
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 echo "Repo root: $ROOT_DIR"
 export DEBIAN_FRONTEND=noninteractive
 
 # ============================================================
-# [1/6] System prerequisites
+# [1/7] Base system packages (compiler toolchain + basics)
 # ============================================================
 echo ""
-echo "[1/6] Checking/installing system prerequisites..."
+echo "[1/7] Installing base system packages..."
 apt-get update -qq
+apt-get install -y \
+    curl gnupg ca-certificates \
+    build-essential pkg-config \
+    libssl-dev libffi-dev
 
-MISSING_PKGS=()
-command -v python3.11 >/dev/null 2>&1 || MISSING_PKGS+=(python3.11 python3.11-venv)
-command -v node >/dev/null 2>&1 || MISSING_PKGS+=(nodejs npm)
-command -v curl >/dev/null 2>&1 || MISSING_PKGS+=(curl)
-command -v gpg >/dev/null 2>&1 || MISSING_PKGS+=(gnupg)
-if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
-    echo "  Installing: ${MISSING_PKGS[*]}"
-    apt-get install -y "${MISSING_PKGS[@]}"
+# ============================================================
+# [2/7] Python 3 (use whatever's on the system, or install 3.11)
+# ============================================================
+echo ""
+echo "[2/7] Setting up Python 3..."
+PYTHON_BIN=""
+for candidate in python3.11 python3.12 python3.13 python3.10 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        PYTHON_BIN="$candidate"
+        break
+    fi
+done
+if [ -z "$PYTHON_BIN" ]; then
+    echo "  No python3 found - installing python3.11..."
+    apt-get install -y python3.11 python3.11-venv python3-pip
+    PYTHON_BIN="python3.11"
 else
-    echo "  Python3.11/Node/curl/gnupg already present."
+    echo "  Using $($PYTHON_BIN --version) at $(command -v $PYTHON_BIN)"
+fi
+# Make sure the venv module actually works for whichever python we picked
+# (some distros split it into a separate "pythonX.Y-venv" package).
+if ! "$PYTHON_BIN" -m venv --help >/dev/null 2>&1; then
+    PY_VER_SUFFIX=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    echo "  Installing python${PY_VER_SUFFIX}-venv..."
+    apt-get install -y "python${PY_VER_SUFFIX}-venv" || apt-get install -y python3-venv
 fi
 
+# ============================================================
+# [3/7] Node.js 20 LTS via NodeSource (distro-default apt packages are
+# often years out of date and too old to build this React 19 frontend)
+# ============================================================
+echo ""
+echo "[3/7] Setting up Node.js..."
+NODE_MAJOR_OK=false
+if command -v node >/dev/null 2>&1; then
+    NODE_MAJOR=$(node -v | sed 's/^v//' | cut -d. -f1)
+    if [ "$NODE_MAJOR" -ge 18 ]; then
+        NODE_MAJOR_OK=true
+        echo "  Node $(node -v) already installed and new enough."
+    fi
+fi
+if [ "$NODE_MAJOR_OK" = false ]; then
+    echo "  Installing Node.js 20 LTS via NodeSource..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+    echo "  Installed $(node -v)."
+fi
+
+# ============================================================
+# [4/7] MongoDB via its official apt repo
+# ============================================================
+echo ""
+echo "[4/7] Setting up MongoDB..."
 if ! command -v mongod >/dev/null 2>&1; then
     echo "  MongoDB not found - adding MongoDB's official apt repo and installing..."
     UBUNTU_CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
@@ -56,23 +110,27 @@ else
 fi
 systemctl enable --now mongod
 
+# ============================================================
+# [5/7] yarn + serve (npm globals)
+# ============================================================
+echo ""
+echo "[5/7] Installing yarn + serve..."
 if ! command -v yarn >/dev/null 2>&1 || ! command -v serve >/dev/null 2>&1; then
-    echo "  Installing yarn + serve (npm global packages)..."
     npm install -g yarn serve
 else
     echo "  yarn/serve already present."
 fi
 
 # ============================================================
-# [2/6] Backend: .env, venv, dependencies
+# [6/7] Backend + frontend setup (.env, deps, build)
 # ============================================================
 echo ""
-echo "[2/6] Setting up backend..."
+echo "[6/7] Setting up backend..."
 cd "$ROOT_DIR/backend"
 
 if [ ! -f ".env" ]; then
     cp .env.example .env
-    GENERATED_TOKEN=$(python3.11 -c "import secrets; print(secrets.token_urlsafe(48))")
+    GENERATED_TOKEN=$("$PYTHON_BIN" -c "import secrets; print(secrets.token_urlsafe(48))")
     sed -i "s/REPLACE_WITH_A_LONG_RANDOM_TOKEN/${GENERATED_TOKEN}/" .env
     echo "  Created backend/.env (generated a random API_ACCESS_TOKEN for you)."
 
@@ -94,7 +152,7 @@ else
 fi
 
 if [ ! -d "venv" ]; then
-    python3.11 -m venv venv
+    "$PYTHON_BIN" -m venv venv
 fi
 source venv/bin/activate
 pip install -q --upgrade pip
@@ -102,11 +160,8 @@ pip install -q -r requirements.txt
 deactivate
 echo "  Backend dependencies installed."
 
-# ============================================================
-# [3/6] Frontend: .env, dependencies, build
-# ============================================================
 echo ""
-echo "[3/6] Setting up frontend..."
+echo "  Setting up frontend..."
 cd "$ROOT_DIR/frontend"
 [ -f ".env" ] || cp .env.example .env
 yarn install --silent
@@ -114,10 +169,10 @@ yarn build
 echo "  Frontend built."
 
 # ============================================================
-# [4/6] Dedicated service user
+# [7/7] Dedicated service user + systemd units
 # ============================================================
 echo ""
-echo "[4/6] Creating service user..."
+echo "[7/7] Installing systemd services..."
 if ! id -u momentumx >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /usr/sbin/nologin momentumx
     echo "  Created 'momentumx' system user."
@@ -125,21 +180,10 @@ else
     echo "  'momentumx' system user already exists."
 fi
 
-# ============================================================
-# [5/6] Install systemd unit files
-# ============================================================
-echo ""
-echo "[5/6] Installing systemd unit files..."
 cp "$SCRIPT_DIR/momentumx-backend.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/momentumx-frontend.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable momentumx-backend.service momentumx-frontend.service
-
-# ============================================================
-# [6/6] Start
-# ============================================================
-echo ""
-echo "[6/6] Starting services..."
 systemctl restart momentumx-backend.service
 systemctl restart momentumx-frontend.service
 sleep 2
