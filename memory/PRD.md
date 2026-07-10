@@ -54,6 +54,12 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 - New `test_security_and_trading.py` (25 tests, added by testing agent): PASS — covers auth, CORS, rate limiting, validation, no-fake-data, kill switch, state persistence, unified persistence.
 - Fixed 1 HIGH bug found by testing: logout button was unreachable (nested inside `{account && ...}`), hoisted PAPER badge + logout button outside that conditional.
 
+## Session 4 Update (2026-07-10) — Token Confusion UX Fix
+- User reported: "what API access token is needed to unlock the site? PKRBZGHKVX2SGHWQZZVRJLXRPN didn't work" — this was the Alpaca broker key, not the site's `API_ACCESS_TOKEN`. Correctly rejected by design (broker credentials must never double as site auth).
+- Fix: clarified `TokenGate` copy in `frontend/src/App.js` (intro text, footer note, error message) to explicitly distinguish the site's `API_ACCESS_TOKEN` (backend/.env) from the Alpaca API key/secret.
+- Testing agent verified 100% pass (41/41 pytest + full TokenGate UX flow) — no functional regression, copy renders correctly.
+- Cleaned up test-artifact positions/trade-history entries left in the live paper account from verification testing.
+
 ## Deferred / Backlog (P1/P2)
 - Consider splitting `server.py` (1280+ lines) into per-domain routers (orders/settings/auto-trader/market) for maintainability (noted by testing agent, non-blocking).
 - Docker Desktop / `docker-compose.yml` path was NOT built (user chose Windows-native/NSSM) — available on request if preference changes later.
