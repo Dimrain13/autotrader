@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
 import axios from "axios";
+import { toast } from "sonner";
 import { getToken, setToken, clearToken } from "./lib/axiosConfig";
 import Dashboard from "./pages/Dashboard";
 import Scanner from "./pages/Scanner";
@@ -237,6 +238,34 @@ function App() {
     fetchAccount();
     const interval = setInterval(fetchAccount, 30000);
     return () => clearInterval(interval);
+  }, [authenticated]);
+
+  // Kill-switch notification: poll risk status app-wide (regardless of which
+  // page is open) and fire a toast exactly once when trading halts, so the
+  // user doesn't have to be staring at the Scanner page to notice.
+  const prevCanTradeRef = useRef(true);
+  useEffect(() => {
+    if (!authenticated) return;
+    const checkRiskStatus = async () => {
+      try {
+        const response = await axios.get(`${API}/auto-trader/status`);
+        const riskStatus = response.data?.risk_status;
+        if (riskStatus) {
+          if (!riskStatus.can_trade && prevCanTradeRef.current) {
+            toast.error(`Auto-Trader Halted: ${riskStatus.reason}`, {
+              description: "New BUY orders are blocked for the rest of the trading day.",
+              duration: 15000,
+            });
+          }
+          prevCanTradeRef.current = riskStatus.can_trade;
+        }
+      } catch (error) {
+        console.error('Failed to fetch risk status:', error);
+      }
+    };
+    checkRiskStatus();
+    const riskInterval = setInterval(checkRiskStatus, 30000);
+    return () => clearInterval(riskInterval);
   }, [authenticated]);
 
   const fetchAccount = async () => {

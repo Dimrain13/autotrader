@@ -31,6 +31,17 @@ class AlpacaService:
         self._asset_cache_lock = threading.Lock()
         self.ASSET_CACHE_TTL_SECONDS = 24 * 60 * 60  # 24 hours
 
+        # Float/shares-outstanding data - real data only, sourced from SEC EDGAR
+        # (free, no API key required, sourced from actual company filings).
+        # Never fabricated: if SEC has no data for a symbol, callers get None
+        # and must treat the float criterion as unknown/not-met rather than
+        # guessing a number.
+        self._float_cache = {}
+        self._float_cache_lock = threading.Lock()
+        self._sec_ticker_to_cik = None
+        self._sec_ticker_map_fetched_at = 0
+        self._sec_headers = {'User-Agent': 'MomentumX-Trading-App (contact: admin@momentumx.local)'}
+
         # Determine paper vs live deliberately - never assume paper=True blindly.
         # ALPACA_PAPER env var takes precedence if explicitly set; otherwise infer
         # from the base URL. This makes going live an intentional, logged action.
@@ -467,6 +478,81 @@ class AlpacaService:
         except Exception as e:
             logger.error(f"Failed to get asset info for {symbol}: {str(e)}")
             return {'symbol': symbol, 'name': None}
+
+    def _get_sec_cik(self, symbol: str):
+        """Lazily fetch and cache the SEC ticker->CIK mapping (refreshed every 24h)."""
+        now = time.time()
+        with self._float_cache_lock:
+            needs_refresh = self._sec_ticker_to_cik is None or (now - self._sec_ticker_map_fetched_at) > self.ASSET_CACHE_TTL_SECONDS
+        if needs_refresh:
+            with self._float_cache_lock:
+                # Re-check inside the lock in case another thread already refreshed it
+                if self._sec_ticker_to_cik is None or (time.time() - self._sec_ticker_map_fetched_at) > self.ASSET_CACHE_TTL_SECONDS:
+                    try:
+                        resp = self._http_session.get(
+                            'https://www.sec.gov/files/company_tickers.json',
+                            headers=self._sec_headers, timeout=15
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            self._sec_ticker_to_cik = {v['ticker']: v['cik_str'] for v in data.values()}
+                            self._sec_ticker_map_fetched_at = time.time()
+                        else:
+                            logger.warning(f"SEC ticker map fetch returned {resp.status_code}")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch SEC ticker map: {e}")
+        if not self._sec_ticker_to_cik:
+            return None
+        return self._sec_ticker_to_cik.get(symbol)
+
+    def get_float_data(self, symbol: str):
+        """
+        Get real shares-outstanding data for a symbol from SEC EDGAR company
+        filings (free, no API key, real data - never fabricated).
+
+        Used as a conservative proxy for float: actual free float is always
+        <= total shares outstanding, so this can only make the low-float
+        scanner criterion stricter, never falsely pass a large-float stock.
+
+        Returns None if SEC has no data for this symbol - callers must treat
+        that as "unknown", never guess/estimate a number.
+        """
+        with self._float_cache_lock:
+            cached = self._float_cache.get(symbol)
+        if cached:
+            cached_at, cached_result = cached
+            if time.time() - cached_at < self.ASSET_CACHE_TTL_SECONDS:
+                return cached_result
+
+        result = None
+        try:
+            cik = self._get_sec_cik(symbol)
+            if cik:
+                for taxonomy, concept in [
+                    ('dei', 'EntityCommonStockSharesOutstanding'),
+                    ('us-gaap', 'CommonStockSharesOutstanding'),
+                ]:
+                    url = f'https://data.sec.gov/api/xbrl/companyconcept/CIK{cik:010d}/{taxonomy}/{concept}.json'
+                    resp = self._http_session.get(url, headers=self._sec_headers, timeout=10)
+                    if resp.status_code == 200:
+                        facts = resp.json().get('units', {}).get('shares', [])
+                        # Use the most recent fact with a sane positive value -
+                        # some filings report a stale/zero value for certain
+                        # share classes (e.g. warrants), which would otherwise
+                        # look like a fake "ultra-low float" pass.
+                        valid_facts = [f for f in facts if f.get('val', 0) > 0]
+                        if valid_facts:
+                            result = {
+                                'shares_outstanding': int(valid_facts[-1]['val']),
+                                'source': 'sec_edgar'
+                            }
+                            break
+        except Exception as e:
+            logger.debug(f"SEC EDGAR float lookup failed for {symbol}: {e}")
+
+        with self._float_cache_lock:
+            self._float_cache[symbol] = (time.time(), result)
+        return result
     
     def get_quotes(self, symbols):
         if not self.data_client:

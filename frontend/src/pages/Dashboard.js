@@ -320,7 +320,7 @@ export default function Dashboard({ account }) {
               <div className="text-xs text-neutral-400">
                 {account?.pattern_day_trader 
                   ? 'You have 4x buying power for day trades (intraday)'
-                  : 'You have 2x buying power. Make 3+ day trades to unlock 4x leverage.'
+                  : 'You have 2x buying power (standard Reg T margin).'
                 }
               </div>
             </div>
@@ -342,8 +342,8 @@ export default function Dashboard({ account }) {
               </div>
             </div>
           </div>
-          <div className="mt-4 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-sm text-xs text-yellow-500">
-            <strong>Note:</strong> Paper trading accounts simulate real margin rules. In live trading with {'<'}$25k, you're limited to 3 day trades per 5 trading days. Your paper account currently has {account?.pattern_day_trader ? '4x leverage (PDT status)' : '2x margin leverage'}.
+          <div className="mt-4 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-sm text-xs text-yellow-500" data-testid="pdt-rule-note">
+            <strong>Note:</strong> Paper trading simulates the margin tier your broker actually reports (currently {account?.pattern_day_trader ? '4x leverage, PDT status' : '2x margin leverage'}). The SEC/FINRA eliminated the classic "$25k minimum / 3 day trades per 5 days" Pattern Day Trader rule in 2026, replacing it with real-time intraday margin monitoring (broker rollout phases in through Oct 2027) — so this restriction may no longer apply once your broker migrates.
           </div>
         </CardContent>
       </Card>

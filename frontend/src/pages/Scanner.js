@@ -869,8 +869,8 @@ export default function Scanner() {
                       <td className="py-3 px-2 text-right font-mono text-[#2E5CFF]">
                         {(stock.volume_ratio || 0).toFixed(2)}x
                       </td>
-                      <td className="py-3 px-2 text-right font-mono text-neutral-400">
-                        {((stock.shares_outstanding || 0) / 1000000).toFixed(1)}M
+                      <td className="py-3 px-2 text-right font-mono text-neutral-400" data-testid={`float-shares-${stock.symbol}`}>
+                        {stock.shares_outstanding ? `${(stock.shares_outstanding / 1000000).toFixed(1)}M` : 'N/A'}
                       </td>
                       <td className="py-3 px-2 text-center max-w-xs">
                         <button

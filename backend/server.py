@@ -922,9 +922,9 @@ async def get_trade_history(limit: int = 100, symbol: str = None):
     return {"trades": trades}
 
 @api_router.get("/trade-history/analytics")
-async def get_trade_analytics():
-    """Get trading performance analytics"""
-    analytics = await trade_history.get_analytics()
+async def get_trade_analytics(days: Optional[int] = 180):
+    """Get trading performance analytics (bounded to last `days` days by default; pass 0 for all-time)"""
+    analytics = await trade_history.get_analytics(days=days if days else None)
     return analytics
 
 @api_router.get("/trade-history/daily-pnl")
@@ -948,9 +948,9 @@ async def get_missed_opportunities(date: str = None, limit: int = 100):
     return {"opportunities": opportunities}
 
 @api_router.get("/missed-opportunities/analytics")
-async def get_missed_analytics():
-    """Get analytics on missed opportunities"""
-    analytics = await missed_opportunities.get_analytics()
+async def get_missed_analytics(days: Optional[int] = 180):
+    """Get analytics on missed opportunities (bounded to last `days` days by default; pass 0 for all-time)"""
+    analytics = await missed_opportunities.get_analytics(days=days if days else None)
     return analytics
 
 @api_router.post("/missed-opportunities/log")

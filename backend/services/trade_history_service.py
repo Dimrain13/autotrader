@@ -8,7 +8,7 @@ Persisted in MongoDB (collection: trade_history) instead of a flat JSON
 file, to avoid concurrency corruption and match the rest of the stack.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 from database import db
 
@@ -91,10 +91,21 @@ class TradeHistoryService:
             cursor = cursor.limit(limit)
         return await cursor.to_list(length=limit or 10000)
 
-    async def get_analytics(self) -> Dict:
-        """Get trading performance analytics"""
+    async def get_analytics(self, days: Optional[int] = 180) -> Dict:
+        """
+        Get trading performance analytics.
+
+        Bounded to the last `days` days at the Mongo query level (default 180)
+        so this doesn't have to load the entire collection into memory as
+        trade history grows. Pass days=None for all-time analytics.
+        """
         try:
-            trades = await self.get_trades()
+            query = {}
+            if days:
+                cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+                query = {'exit_time': {'$gte': cutoff}}
+            cursor = self.collection.find(query, {'_id': 0}).sort('exit_time', -1).limit(5000)
+            trades = await cursor.to_list(length=5000)
 
             if not trades:
                 return {
@@ -154,11 +165,13 @@ class TradeHistoryService:
             return {}
 
     async def get_daily_pnl(self, days: int = 30) -> List[Dict]:
-        """Get daily P&L for chart"""
+        """Get daily P&L for chart, bounded to the last `days` days at the query level"""
         try:
             from collections import defaultdict
 
-            trades = await self.get_trades()
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            cursor = self.collection.find({'exit_time': {'$gte': cutoff}}, {'_id': 0}).sort('exit_time', -1).limit(5000)
+            trades = await cursor.to_list(length=5000)
             daily_pnl = defaultdict(float)
 
             for trade in trades:

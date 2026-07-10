@@ -281,12 +281,13 @@ class ScannerService:
         
         logger.info(f"Initial scan complete: {len(results)} candidates found (2+ base criteria)")
         
-        # Second pass: Calculate accurate volume and check news for promising candidates
+        # Second pass: Calculate accurate volume, float and news for promising candidates
         # OPTIMIZATION: Only verify top 50 candidates to save time
         if results:
             top_results = sorted(results, key=lambda x: x.get('criteria_count', 0), reverse=True)[:50]
-            logger.info(f"Verifying volume and news for top {len(top_results)} candidates...")
+            logger.info(f"Verifying volume, float and news for top {len(top_results)} candidates...")
             self._calculate_accurate_volume(top_results, criteria)
+            self._calculate_accurate_float(top_results, criteria)
             self._check_candidate_news(top_results)
             
             # Keep all results but mark which ones were fully verified
@@ -346,48 +347,25 @@ class ScannerService:
             # if has_positive_news_estimate:
             #     criteria_count += 1
             
-            # 5. Float check (shares outstanding)
-            # Use Interactive Brokers API for real float data
+            # 5. Float check (shares outstanding) - deferred to second pass.
+            # Real float data (IB or SEC EDGAR) is only fetched for the top
+            # candidates that survive the price/change pre-filter, to avoid
+            # hundreds of lookups per scan. NEVER fabricate a number here -
+            # unresolved stocks are excluded rather than guessed.
             shares_outstanding = None
-            float_data_source = "estimated"
+            float_data_source = "pending"
+            criteria_met['float'] = False
             
-            if IB_AVAILABLE and ib_service.use_ib_for_float:
-                # Try to get real float data from IB
-                float_data = ib_service.get_float_data(symbol)
-                if float_data:
-                    shares_outstanding = float_data['float_shares']
-                    float_data_source = "IB"
-                    logger.debug(f"{symbol}: Real float from IB: {shares_outstanding:,}")
-            
-            # Fallback: Estimate if IB data not available
-            if shares_outstanding is None:
-                # Price-based estimation (conservative fallback)
-                import random
-                if current_price < 5:
-                    shares_outstanding = random.randint(5_000_000, 25_000_000)
-                elif current_price < 10:
-                    shares_outstanding = random.randint(10_000_000, 40_000_000)
-                else:
-                    shares_outstanding = random.randint(20_000_000, 80_000_000)
-                float_data_source = "estimated"
-                logger.debug(f"{symbol}: Using estimated float: {shares_outstanding:,}")
-            
-            max_float = criteria.get('max_float', 20_000_000)
-            meets_float = shares_outstanding <= max_float
-            criteria_met['float'] = meets_float
-            if meets_float:
-                criteria_count += 1
-            # - Yahoo Finance API
-            
-            # Show stocks that meet at least 2 NON-VOLUME, NON-NEWS criteria
-            # Volume and News will be verified in second pass
+            # Show stocks that meet at least 2 NON-VOLUME, NON-NEWS, NON-FLOAT criteria
+            # Volume, news and float will be verified in the second pass
             if criteria_count < 2:
-                return  # Skip this stock - needs 2+ criteria (price range + % change, or price range + float, etc.)
+                return  # Skip this stock - needs price range + % change to be worth a closer look
             
-            # Mark for accurate volume and news calculation
+            # Mark for accurate volume, news and float calculation
             needs_volume_calc = True
             needs_news_check = True
-            meets_all_criteria = False  # Will determine after volume and news calc
+            needs_float_calc = True
+            meets_all_criteria = False  # Will determine after volume/news/float calc
             
             # Skip expensive API calls (SMA, 5min bars) to speed up full market scan
             # These will be calculated on-demand when stock is selected for trading
@@ -405,7 +383,8 @@ class ScannerService:
                 "volume_ratio": float(volume_ratio_estimate),  # Estimated - will update
                 "volume_needs_calc": needs_volume_calc,
                 "shares_outstanding": shares_outstanding,
-                "float_data_source": float_data_source,  # "IB" or "estimated"
+                "float_data_source": float_data_source,  # "IB", "sec_edgar", or "pending"/"unknown"
+                "float_needs_calc": needs_float_calc,
                 "has_bull_flag": False,  # Set to false for now, calculated on-demand
                 "has_positive_news": has_positive_news_estimate,  # Estimated - will update
                 "news_headline": news_headline,
@@ -551,7 +530,72 @@ class ScannerService:
                 result['ready_to_trade'] = result['meets_all_criteria']
             
             logger.info(f"Applied fallback intraday projection for {len(results)} stocks")
-    
+
+    def _calculate_accurate_float(self, results: List[Dict], criteria: Dict):
+        """
+        Look up real float/shares-outstanding data for candidates - PARALLEL.
+
+        Real data only: Interactive Brokers first (if connected), then SEC
+        EDGAR (free, no key, real filings). Never fabricates a number - if
+        neither source has data for a symbol, the float criterion stays
+        unmet (fail-safe) instead of a random guess.
+        """
+        logger.info(f"Checking real float data for {len(results)} candidates...")
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        max_float = criteria.get('max_float', 20_000_000)
+
+        def check_single_float(result):
+            if not result.get('float_needs_calc'):
+                return result
+
+            symbol = result['symbol']
+            shares_outstanding = None
+            float_data_source = "unknown"
+
+            try:
+                if IB_AVAILABLE and ib_service.use_ib_for_float:
+                    float_data = ib_service.get_float_data(symbol)
+                    if float_data:
+                        shares_outstanding = float_data['float_shares']
+                        float_data_source = "IB"
+
+                if shares_outstanding is None and ALPACA_SERVICE_AVAILABLE:
+                    sec_data = alpaca_service.get_float_data(symbol)
+                    if sec_data:
+                        shares_outstanding = sec_data['shares_outstanding']
+                        float_data_source = "sec_edgar"
+            except Exception as e:
+                logger.debug(f"{symbol}: Error fetching real float data: {e}")
+
+            result['shares_outstanding'] = shares_outstanding
+            result['float_data_source'] = float_data_source
+            result['float_needs_calc'] = False
+
+            meets_float = shares_outstanding is not None and shares_outstanding <= max_float
+            result['criteria_met']['float'] = meets_float
+            if meets_float:
+                result['criteria_count'] += 1
+
+            result['meets_all_criteria'] = result['criteria_count'] == 5
+            result['ready_to_trade'] = result['meets_all_criteria']
+
+            return result
+
+        found_count = 0
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(check_single_float, result): result for result in results}
+            for future in as_completed(futures):
+                try:
+                    updated = future.result()
+                    if updated.get('shares_outstanding') is not None:
+                        found_count += 1
+                except Exception as e:
+                    logger.error(f"Error processing float future: {str(e)}")
+
+        logger.info(f"Real float data found for {found_count}/{len(results)} candidates")
+
     def _check_candidate_news(self, results: List[Dict]):
         """Check for actual positive news from news sources for candidates - PARALLEL + GOOGLE NEWS"""
         logger.info(f"Checking news for {len(results)} candidates... (parallel with Google News)")

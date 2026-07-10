@@ -141,9 +141,19 @@ class MissedOpportunitiesService:
         await self.collection.update_one({'id': opportunity_id}, {'$set': updates})
         return True
 
-    async def get_analytics(self) -> Dict:
-        """Get analytics on missed opportunities"""
-        data = await self.collection.find({}, {'_id': 0}).to_list(length=10000)
+    async def get_analytics(self, days: Optional[int] = 180) -> Dict:
+        """
+        Get analytics on missed opportunities.
+
+        Bounded to the last `days` days at the Mongo query level (default 180)
+        so this doesn't have to load the entire collection into memory as
+        history grows. Pass days=None for all-time analytics.
+        """
+        query = {}
+        if days:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
+            query = {'date': {'$gte': cutoff}}
+        data = await self.collection.find(query, {'_id': 0}).sort('timestamp', -1).to_list(length=5000)
 
         if not data:
             return {
