@@ -33,7 +33,7 @@ function TokenGate({ onAuthenticated }) {
       onAuthenticated();
     } catch (err) {
       clearToken();
-      setError("Invalid access token. Please check and try again.");
+      setError("Invalid access token. Make sure you're using API_ACCESS_TOKEN from backend/.env - not your Alpaca API key/secret.");
     } finally {
       setChecking(false);
     }
@@ -45,7 +45,10 @@ function TokenGate({ onAuthenticated }) {
         <h1 className="text-2xl font-black mb-2" style={{ fontFamily: 'Unbounded, sans-serif' }}>
           <span className="text-[#00E599]">Momentum</span><span className="text-white">X</span>
         </h1>
-        <p className="text-sm text-neutral-500 mb-6">Enter your API access token to continue.</p>
+        <p className="text-sm text-neutral-500 mb-6">
+          Enter the <code className="text-[#00E599]">API_ACCESS_TOKEN</code> from your backend's
+          <code className="text-neutral-300"> .env</code> file to continue.
+        </p>
         <form onSubmit={handleSubmit} className="space-y-4" data-testid="token-gate-form">
           <input
             type="password"
@@ -68,6 +71,10 @@ function TokenGate({ onAuthenticated }) {
             {checking ? "Verifying..." : "Unlock"}
           </button>
         </form>
+        <p className="text-xs text-neutral-600 mt-4">
+          Note: this is the app's own <code className="text-neutral-400">API_ACCESS_TOKEN</code>,
+          not your Alpaca API key/secret. Find it in <code className="text-neutral-400">backend/.env</code>.
+        </p>
       </div>
     </div>
   );
