@@ -5,84 +5,59 @@ over SSH to your local machine — matching the security model already built
 into this app: **the backend and frontend are bound to `127.0.0.1` only**,
 never exposed directly to the internet.
 
-## 1. Install prerequisites (one-time, Ubuntu/Debian example)
-
-```bash
-sudo apt update
-sudo apt install -y python3.11 python3.11-venv nodejs npm mongodb-org
-npm install -g yarn serve
-```
-(If `mongodb-org` isn't in your default repos, follow MongoDB's official
-Ubuntu install guide, or run MongoDB via Docker instead - either is fine,
-only `MONGO_URL` in `.env` needs to point at it.)
-
-## 2. Get the code onto the VPS
+## 1. Get the code onto the VPS
 
 ```bash
 git clone <your-repo-url> /opt/momentumx
 cd /opt/momentumx
 ```
+(If you cloned it somewhere else, e.g. your home directory, move it first:
+`sudo mv ~/your-repo-folder /opt/momentumx` — the systemd service files
+below assume this exact path, and a dedicated low-privilege service user
+won't have access to anything under `/root`.)
 
-## 3. Configure environment
+## 2. Run the one-shot install script (as root/sudo)
 
-```bash
-cd backend
-cp .env.example .env
-nano .env
-```
-Fill in:
-- `API_ACCESS_TOKEN` — generate with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`
-- `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` — from alpaca.markets (paper keys until verified)
-- `CORS_ORIGINS` — leave as `http://localhost:4000,http://127.0.0.1:4000` (the SSH tunnel makes the browser think it's talking to localhost)
-
-```bash
-cd ../frontend
-cp .env.example .env
-```
-Leave `REACT_APP_BACKEND_URL=http://127.0.0.1:9001`.
-
-## 4. Install dependencies & build
-
-```bash
-cd /opt/momentumx/backend
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-deactivate
-
-cd ../frontend
-yarn install
-yarn build
-```
-
-## 5. Run it
-
-### Option A — Quick manual start (good for a first test)
-```bash
-cd /opt/momentumx/deploy/linux
-chmod +x start.sh
-./start.sh
-```
-
-### Option B — Persistent systemd services (recommended)
 ```bash
 cd /opt/momentumx/deploy/linux
 chmod +x install_systemd_services.sh
 sudo ./install_systemd_services.sh
 ```
-This runs the backend and frontend as `systemd` services under a dedicated
-`momentumx` system user, auto-starting on boot. Manage with:
+
+This single script does **everything**, and is safe to re-run if anything
+fails partway (it skips steps already completed):
+1. Installs system prerequisites via apt if missing: Python 3.11 + venv,
+   Node.js/npm, MongoDB (adds MongoDB's official repo automatically), and
+   `yarn`/`serve` (npm globals).
+2. Creates `backend/.env` from the template (auto-generates a random
+   `API_ACCESS_TOKEN`) and interactively prompts for your Alpaca paper
+   keys — press Enter to skip and fill them in later if you don't have
+   them yet.
+3. Creates the Python virtualenv and installs backend dependencies.
+4. Creates `frontend/.env` from the template, installs frontend
+   dependencies, and builds it.
+5. Creates a dedicated low-privilege `momentumx` system user (the app never
+   runs as root - contains the blast radius if it's ever compromised).
+6. Installs, enables (auto-start on boot), and starts both systemd services.
+
+At the end it prints service status and a reminder if your Alpaca keys are
+still blank. Manage the services with:
 ```bash
 sudo systemctl restart momentumx-backend
 sudo systemctl status momentumx-frontend
 journalctl -u momentumx-backend -f     # live logs
 ```
-To remove: `sudo ./uninstall_systemd_services.sh`.
+To remove everything: `sudo ./uninstall_systemd_services.sh`.
 
-**After any backend/frontend change**: `sudo systemctl restart momentumx-backend`
+**After any backend/frontend code change**: `sudo systemctl restart momentumx-backend`
 and/or (`cd frontend && yarn build && sudo systemctl restart momentumx-frontend`).
 
-## 6. Access it from your laptop via SSH port-forward
+**Prefer a quick manual test run instead of systemd?** Use
+`cd /opt/momentumx/deploy/linux && chmod +x start.sh && ./start.sh` — but
+you'll still need prerequisites installed and `.env` configured first (run
+the install script once, even if you plan to manage it manually afterward).
+
+## 3. Access it from your laptop via SSH port-forward
 
 ```bash
 ssh -L 4000:127.0.0.1:4000 -L 9001:127.0.0.1:9001 your-user@your-vps-ip
@@ -107,3 +82,4 @@ tunnel in the background: `ssh -f -N -L 4000:127.0.0.1:4000 -L 9001:127.0.0.1:90
 - CORS restricted to explicit origins, rate limiting on order/scan endpoints.
 - Hard server-side daily-loss kill switch blocks new buy orders past the limit.
 - No port is ever exposed beyond `127.0.0.1` - the SSH tunnel is your only door in.
+- Both services run as a dedicated no-login `momentumx` system user, never root.
