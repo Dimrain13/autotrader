@@ -1,0 +1,214 @@
+<analysis>**original_problem_statement:**
+The user wants to build a trading application that connects to a small trading account (e.g., k).
+
+**PRODUCT REQUIREMENTS:**
+*   **Stock Scanner Criteria**:
+    1.  Price between  and 0.
+    2.  Up at least 10% for the day.
+    3.  5x relative volume.
+    4.  Float under 20 million shares.
+    5.  A positive news event.
+*   **Trading Strategy**: The application should implement the Warrior Trading momentum strategy, which includes pre-market scanning, specific entry triggers (e.g., bull flag breakout), and risk management rules (e.g., max daily loss, fixed stop-loss).
+*   **Functionality**:
+    -   Support paper trading.
+    -   Scanner runs automatically.
+    -   Auto-trader buys/sells based on the defined strategy.
+    -   A Sell All button for emergency liquidation.
+    -   QUICK BUY defaults to a 000 trade size.
+    -   Filter and sort scanner results.
+    -   News feed with clickable links and sentiment analysis.
+    -   Charts with multiple technical indicators.
+    -   A Historic Trades tab to review profit and loss.
+    -   Automatic closure of all open positions at the end of the trading day.
+    -   A Momentum Scan to find stocks making higher highs.
+    -   Daily profit tracking on the history page.
+    -   **New (this session)**: News categorized by freshness (Breaking, Warm, Cold).
+    -   **New (this session)**: Expandable daily trade view on the History page.
+    -   **New (this session)**: Bid-ask spread visibility and protection against instant sells.
+
+**User's preferred language**: English
+
+**what currently exists?**
+A full-stack trading application (React/FastAPI) connected to the Alpaca paper trading API. The app includes a stock scanner, auto-trader, position monitor, and a detailed trade history page.
+
+This session focused heavily on stability and critical bug fixes:
+-   **Stop Loss Logic Overhaul**: A critical instant sell bug was fixed. Previously, trades were sold immediately at a loss due to the bid-ask spread. The fix involved adding a 60-second settling period after a buy and, crucially, calculating the stop loss from the lower **BID price** instead of the entry (ASK) price.
+-   **Order Resilience**: The buy/sell logic was made more robust. It now warns about high spreads instead of blocking trades and handles scenarios where Alpaca bracket orders get stuck, preventing positions from being sold.
+-   **Trade History Repair**: Over 100 erroneous instant sell trades, which caused a phantom loss of ~4k, were identified and removed from the trade history, restoring the legitimate P&L.
+-   **Performance Optimization**: Addressed site lagginess by reducing frontend polling frequency, increasing backend cache durations for scanner data, and adding timeouts to API calls.
+-   **Feature - News Freshness**: Implemented a system to categorize news as 🔥 Breaking, 🌡️ Warm, or ❄️ Cold and display corresponding badges in the UI.
+-   **Feature - Expandable History**: The History page now features a clickable daily P&L summary that expands to show all individual trades for that day.
+-   **API Key Recovery**: The agent successfully recovered and restored Alpaca API keys from git history after they were accidentally overwritten.
+
+**Last working item**:
+-   **Last item agent was working**: The user reported that they updated the Alpaca API keys but were not seeing their open positions. The agent investigated and confirmed the backend was receiving an unauthorized error from Alpaca, indicating the new keys were not yet active in the running process.
+-   **Status**: IN PROGRESS
+-   **Agent Testing Done**: N
+-   **Which testing method agent to use?**: backend testing agent. First, restart the backend (backend: stopped
+backend: started). Then, use  to test an authenticated endpoint like  to confirm the unauthorized error is resolved. Finally, use the screenshot tool on the  page to visually verify that positions are being displayed.
+-   **User Testing Done**: N
+
+**All Pending/In progress Issue list**:
+-   Issue 1: API connection is failing with an unauthorized error. (P0)
+-   Issue 2: The site is laggy, and trades are slow to execute. (P1)
+-   Issue 3: The scanner and momentum views intermittently clear and show 0 stocks. (P2)
+-   Issue 4: Stuck bracket orders can prevent sell orders from executing. (P2)
+-   Issue 5: Relative Volume calculation has not been verified for correctness. (P2)
+-   Issue 6: Real float data integration (IBKR) is incomplete and disabled. (P3)
+-   Issue 7: Chart data is limited by free APIs, causing delays and potential errors. (P3)
+
+**Issues Detail**:
+-   **Issue 1: API connection is failing with an unauthorized error.**
+    -   **Attempted fixes**: The user updated the API keys in . The agent confirmed the new keys are present but the running application is still using old credentials, resulting in an unauthorized error when testing the connection.
+    -   **Next debug checklist**:
+        1.  Restart the backend service using backend: stopped
+backend: started to ensure it loads the new environment variables from .
+        2.  Run  against an authenticated Alpaca endpoint via the backend (e.g., ) and verify it no longer returns unauthorized.
+        3.  Take a screenshot of the  page to confirm open positions are displayed correctly.
+    -   **Why fix this issue and what will be achieved with the fix?**: This is a critical blocker. The application cannot interact with the trading account (fetch positions, place orders) until the API connection is restored.
+    -   **Status**: IN PROGRESS
+    -   **Is recurring issue?**: Y (API keys have been an issue before)
+    -   **Should Test frontend/backend/both after fix?**: Both.
+    -   **Blocked on other issue**: None.
+
+-   **Issue 2: The site is laggy, and trades are slow to execute.**
+    -   **Attempted fixes**: The agent reduced the frequency of frontend polling for positions and charts, increased backend caching time for scanner and momentum data, and added timeouts to API calls to prevent the UI from hanging.
+    -   **Next debug checklist**:
+        1.  After fixing the API key issue (Issue 1), monitor the application's responsiveness.
+        2.  Check browser network logs to ensure API calls are not being made excessively.
+        3.  Time the execution of a buy and sell order to confirm they are faster.
+    -   **Why fix this issue and what will be achieved with the fix?**: Improves user experience and ensures timely trade execution, which is critical for a trading app.
+    -   **Status**: USER VERIFICATION PENDING
+    -   **Is recurring issue?**: Y
+    -   **Should Test frontend/backend/both after fix?**: Both.
+    -   **Blocked on other issue**: Issue 1.
+
+-   **Issue 3: The scanner and momentum views intermittently clear and show 0 stocks.**
+    -   **Attempted fixes**: Increased frontend API timeouts and improved backend caching logic to return stale data while refreshing in the background. The agent also removed logic that cleared the data on fetch errors.
+    -   **Next debug checklist**:
+        1.  After fixing the API key issue, navigate between the 'Opportunities' and 'Momentum' tabs repeatedly.
+        2.  Scroll through the list of stocks on the Trading page.
+        3.  Verify that the stock lists remain populated and do not unexpectedly clear to No Stocks Found.
+    -   **Why fix this issue and what will be achieved with the fix?**: Provides a stable and reliable view of trading opportunities.
+    -   **Status**: TESTING PENDING
+    -   **Is recurring issue?**: Y
+    -   **Should Test frontend/backend/both after fix?**: Frontend.
+    -   **Blocked on other issue**: Issue 1.
+
+-   **Issue 4: Stuck bracket orders can prevent sell orders from executing.**
+    -   **Attempted fixes**: The agent identified that open bracket orders (stop-loss/take-profit) were holding shares and preventing new sell orders. A workaround was implemented to cancel all open orders for a symbol before attempting to sell.
+    -   **Next debug checklist**:
+        1.  Place a 'FIXED' stop order, which creates a bracket order.
+        2.  Attempt to sell the position using the Sell All button before the bracket order's stop/profit is hit.
+        3.  Confirm the sell executes successfully.
+    -   **Why fix this issue and what will be achieved with the fix?**: This prevents a critical failure state where the user cannot exit a position.
+    -   **Status**: TESTING PENDING
+    -   **Is recurring issue?**: Y
+    -   **Should Test frontend/backend/both after fix?**: Backend.
+    -   **Blocked on other issue**: Issue 1.
+
+-   **Issue 5: Relative Volume calculation has not been verified for correctness.**
+    -   **Attempted fixes**: None. This is a carry-over from a previous session.
+    -   **Next debug checklist**:
+        1.  Add logging to the relative volume calculation in .
+        2.  Compare the app's output for several stocks against a trusted source like TradingView.
+    -   **Why fix this issue and what will be achieved with the fix?**: Ensures the scanner's core logic is reliable.
+    -   **Status**: NOT STARTED
+    -   **Is recurring issue?**: Y
+    -   **Should Test frontend/backend/both after fix?**: Backend.
+    -   **Blocked on other issue**: None.
+
+-   **Issue 6 & 7**: See Upcoming and Future Tasks.
+
+**In progress Task List**:
+-   **Task 1: Verify UI for News Freshness**
+    -   **Where to resume**: The backend logic is complete. The next step is to get a clean test run where the scanner finds stocks with breaking news and verify the 🔥 badge appears correctly on both the  and  pages.
+    -   **What will be achieved with this?**: Completes the news freshness feature, providing users with at-a-glance information about the timeliness of a news catalyst.
+    -   **Status**: TESTING PENDING
+    -   **Should Test frontend/backend/both after fix?**: Frontend.
+    -   **Blocked on something**: Scanner stability (Issue 3).
+
+**Upcoming and Future Tasks**
+-   **Upcoming Tasks**:
+    -   (P2) Create a dedicated, isolated backend test suite for the auto-trader's entry/exit logic.
+    -   (P3) Prompt user about upgrading their Alpaca data plan to get real-time data and fix SIP errors.
+    -   (P3) Make the tab bars on the Trading and Scanner pages sticky so they don't scroll out of view.
+-   **Future Tasks**:
+    -   Complete the Interactive Brokers (IBKR) integration to use real float data.
+    -   Implement a live trading mode.
+    -   (Deferred) Moomoo API Integration.
+
+**Completed work in this session**
+-   **Bugfix (Critical)**: Fixed the instant sell issue by adding a 60s settling period and calculating stop-loss from the **BID price**, not the entry (ASK) price.
+-   **Bugfix**: Resolved an issue where trades weren't appearing in history by implementing logic to cancel stuck Alpaca bracket orders that were preventing sells.
+-   **Bugfix**: Fixed the Buy Selected button on the momentum view.
+-   **Bugfix**: Fixed charts not loading for stocks selected from the momentum view.
+-   **Data Repair**: Cleaned the trade history by identifying and removing 24 instant sell trades caused by the spread bug, restoring a legitimate P&L of +,918.
+-   **Feature**: Implemented expandable rows on the History page to show individual trades for each day.
+-   **Feature**: Added news freshness categorization (Breaking, Warm, Cold) with UI badges.
+-   **Feature**: Added bid-ask spread calculation and a warning for high-spread stocks during order placement.
+-   **Performance**: Improved site responsiveness by optimizing frontend polling, increasing backend cache times, and adding API timeouts.
+-   **Recovery**: Successfully recovered and restored Alpaca API keys from git history after they were accidentally overwritten.
+
+**Code Architecture**
+
+
+**Key Technical Concepts**
+-   **Bid-Ask Spread**: The core reason for the instant sell bug. The fix required understanding that buys happen at the ASK and sells at the BID. The stop loss is now correctly calculated from the BID price to prevent immediate triggers on entry.
+-   **Order Management (Stuck Orders)**: Identified that Alpaca bracket orders can hold shares, preventing other sell orders from executing. The fix involves cancelling existing open orders for a symbol before attempting a new sell.
+-   **API Caching & Resilience**: The slow scanner was improved by using more aggressive backend caching, including returning stale data immediately while a fresh fetch occurs in the background. Frontend timeouts were also adjusted.
+-   **Frontend State Management**: The recurring No Stocks Found issue highlights challenges in managing React state with frequent, sometimes failing, API calls.
+
+**key DB schema**
+-   No relational database is in use.
+-   **trade_history.json**: A flat file storing a JSON array of trade objects. Each object contains details like symbol, entry/exit price, P&L, timestamps, and exit reason.
+
+**All files of reference**
+-   **/app/backend/services/position_monitor_service.py**: Critically modified to fix the instant sell bug by adding a settling period and using the BID price for stop loss calculations.
+-   **/app/backend/server.py**: Modified the order placement endpoint to check for high spread and pass the  (bid price) to the position monitor.
+-   **/app/frontend/src/pages/History.js**: Completely reworked to support the new expandable daily trade history feature.
+-   **/app/frontend/src/pages/Trading.js**: Multiple fixes for momentum view, Buy Selected button, performance optimizations, and displaying spread information.
+-   **/app/backend/services/google_news_service.py**: Updated to parse publication dates and classify news freshness.
+-   **/app/backend/trade_history.json**: The file where trade data is persisted. Was manually edited to remove bug-related trades.
+
+**Critical Info for New Agent**
+-   **The API connection is currently broken.** The immediate first step must be to restart the backend to load the new API keys and verify the connection.
+-   **The Instant Sell fix is paramount.** The stop-loss logic (using BID price + settling period) is critical to the app's viability. Do not change it without understanding the bid-ask spread implications.
+-   **Stuck Alpaca orders are a known issue.** If sell orders fail with insufficient qty while a position clearly exists, the agent must check for and cancel any open orders for that symbol via the Alpaca API.
+-   **The UI data disappearing is a recurring frontend issue.** Be mindful that scanner/momentum data clearing unexpectedly is a known bug. The root cause is likely in React's state management during API calls and view switching.
+
+**documents and test reports created in this job**
+-   None.
+
+**Last 10 User Messages and any pending HUMAN messages**
+1.  **User**: I updated the API but Im not seeing it pull information (IN PROGRESS - Agent identified unauthorized error)
+2.  **User**: Im not seeing my open positions (RELATED to API key issue)
+3.  **User**: why are they not being displayed? (User asking why trades for Jan 15th weren't visible)
+4.  **User**: today is the 15th (User correcting the agent about the current date)
+5.  **User**: Im not seeing my trades for today in the history (User reported trades not showing up, which led to discovering stuck orders)
+6.  **User**: I cant seemingly buy FLYX. Why (Agent diagnosed as a pre-market liquidity issue)
+7.  **User**: In the history tab when you click on the day it should shoe the individual trades. (COMPLETED - Feature was implemented)
+8.  **User**: I need the rest of the history that was removed but without the specific ones that were instant sell (COMPLETED - Agent correctly filtered and restored history)
+9.  **User**: Lets remove the ones from the history that were bought and sold instantly. (COMPLETED - Agent initially wiped too much data)
+10. **User**: It looks like we should be going based on the spread amount instead right? (Agent clarified the logic, which the user accepted)
+
+**Project Health Check:**
+-   **Broken**: The connection to the Alpaca API is currently broken due to an unauthorized error, pending a backend restart.
+-   **Mocked**:
+    -   **Chart Data**: Relies on free, delayed data from Yahoo Finance.
+    -   **Float Data**: Uses mocked data; Interactive Brokers integration is not complete.
+
+**3rd Party Integrations**
+-   **Alpaca Markets API**: Used for paper trading, account data, and quotes. (Currently experiencing an authorization issue).
+-   **Yahoo Finance API ()**: Used for historical chart data.
+-   **Google News (Scraping)**: For news fetching.
+-   **lightweight-charts library**: Frontend charts.
+
+**Testing status**
+-   **Testing agent used after significant changes**: NO
+-   **Troubleshoot agent used after agent stuck in loop**: NO
+-   **Test files created**: []
+-   **Known regressions**: The intermittent scanner display issue (data clearing) persists despite several fixes.
+
+**What agent forgot to execute**
+-   The agent identified the need to restart the backend to fix the unauthorized API key error but has not yet executed or verified this final step. The application is currently in a non-functional state because of this.</analysis>

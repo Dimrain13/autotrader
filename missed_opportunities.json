@@ -1,0 +1,3060 @@
+[
+  {
+    "id": 1,
+    "symbol": "UONEK",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564278+00:00",
+    "price_at_scan": 8.5,
+    "pct_change": 924.0963855421688,
+    "volume": 280,
+    "rel_volume": 9.18,
+    "float_shares": 15140687,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 2,
+    "symbol": "GITS",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564372+00:00",
+    "price_at_scan": 4.97,
+    "pct_change": 158.85416666666669,
+    "volume": 131676,
+    "rel_volume": 171.63,
+    "float_shares": 11198589,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 3,
+    "symbol": "XHLD",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564398+00:00",
+    "price_at_scan": 2.18,
+    "pct_change": 71.65354330708662,
+    "volume": 123876,
+    "rel_volume": 541.27,
+    "float_shares": 8841920,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 4,
+    "symbol": "RR",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564422+00:00",
+    "price_at_scan": 5.02,
+    "pct_change": 32.10526315789473,
+    "volume": 901906,
+    "rel_volume": 5.01,
+    "float_shares": 24918202,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": true,
+      "float": false
+    },
+    "missed_criteria": [
+      "Float > 20M"
+    ],
+    "reason_not_traded": "Missing: Float > 20M",
+    "news_headline": "Richtech Robotics (RR) Shares Surge on Microsoft AI Collaboration - Tokenist",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 5,
+    "symbol": "SVACU",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564449+00:00",
+    "price_at_scan": 12.19,
+    "pct_change": 16.539196940726562,
+    "volume": 5228,
+    "rel_volume": 173.15,
+    "float_shares": 54643331,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": true,
+      "float": false
+    },
+    "missed_criteria": [
+      "Float > 20M"
+    ],
+    "reason_not_traded": "Missing: Float > 20M",
+    "news_headline": "$230 Million SPAC IPO: Spring Valley Acquisition Corp. III Debuts on Nasdaq with Full Overallotment Exercise - Stock Titan",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 6,
+    "symbol": "AMBO",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564470+00:00",
+    "price_at_scan": 3.0,
+    "pct_change": 14.503816793893126,
+    "volume": 406,
+    "rel_volume": 7.73,
+    "float_shares": 11642318,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 7,
+    "symbol": "ABOS",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564486+00:00",
+    "price_at_scan": 2.37,
+    "pct_change": 14.49275362318842,
+    "volume": 31939,
+    "rel_volume": 0.8,
+    "float_shares": 19284343,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": false,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [
+      "Rel Vol < 5x"
+    ],
+    "reason_not_traded": "Missing: Rel Vol < 5x",
+    "news_headline": "Acumen Pharmaceuticals (NASDAQ:ABOS) Price Target Raised to $7.00 at BTIG Research - MarketBeat",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 8,
+    "symbol": "MI",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564502+00:00",
+    "price_at_scan": 4.23,
+    "pct_change": 14.016172506738558,
+    "volume": 701,
+    "rel_volume": 7.74,
+    "float_shares": 18536710,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 9,
+    "symbol": "GDHG",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564519+00:00",
+    "price_at_scan": 2.12,
+    "pct_change": 13.978494623655912,
+    "volume": 700,
+    "rel_volume": 17.05,
+    "float_shares": 16473836,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 10,
+    "symbol": "YHGJ",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564536+00:00",
+    "price_at_scan": 4.495,
+    "pct_change": 13.797468354430379,
+    "volume": 633,
+    "rel_volume": 6.92,
+    "float_shares": 18754532,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 11,
+    "symbol": "FOSL",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564559+00:00",
+    "price_at_scan": 3.925,
+    "pct_change": 11.347517730496453,
+    "volume": 45471,
+    "rel_volume": 6.31,
+    "float_shares": 16436639,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 12,
+    "symbol": "YQ",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564580+00:00",
+    "price_at_scan": 3.64,
+    "pct_change": 10.638297872340429,
+    "volume": 300,
+    "rel_volume": 9.94,
+    "float_shares": 5019959,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 13,
+    "symbol": "KYIVW",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:27:50.564601+00:00",
+    "price_at_scan": 3.79,
+    "pct_change": 10.174418604651166,
+    "volume": 500,
+    "rel_volume": 8.28,
+    "float_shares": 7258829,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 14,
+    "symbol": "NUWE",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:30:52.056853+00:00",
+    "price_at_scan": 3.88,
+    "pct_change": 82.58823529411764,
+    "volume": 229579,
+    "rel_volume": 1205.48,
+    "float_shares": 5634856,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 15,
+    "symbol": "ONEG",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:30:52.056951+00:00",
+    "price_at_scan": 3.91,
+    "pct_change": 24.920127795527165,
+    "volume": 7622,
+    "rel_volume": 6.36,
+    "float_shares": 6347671,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 16,
+    "symbol": "OCC",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:30:52.056988+00:00",
+    "price_at_scan": 5.11,
+    "pct_change": 15.090090090090087,
+    "volume": 3144,
+    "rel_volume": 13.07,
+    "float_shares": 19415173,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 17,
+    "symbol": "REED",
+    "date": "2026-01-27",
+    "timestamp": "2026-01-27T16:30:52.057020+00:00",
+    "price_at_scan": 2.615,
+    "pct_change": 12.715517241379326,
+    "volume": 438,
+    "rel_volume": 14.14,
+    "float_shares": 9924235,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 18,
+    "symbol": "MRNO",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470567+00:00",
+    "price_at_scan": 2.49,
+    "pct_change": 186.1740029881623,
+    "volume": 303266,
+    "rel_volume": 656.42,
+    "float_shares": 19048065,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 19,
+    "symbol": "XHLD",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470645+00:00",
+    "price_at_scan": 3.27,
+    "pct_change": 157.4803149606299,
+    "volume": 381633,
+    "rel_volume": 503.47,
+    "float_shares": 7365117,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 20,
+    "symbol": "GITS",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470670+00:00",
+    "price_at_scan": 4.15,
+    "pct_change": 116.14583333333337,
+    "volume": 207734,
+    "rel_volume": 81.75,
+    "float_shares": 16755471,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 21,
+    "symbol": "NUWE",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470704+00:00",
+    "price_at_scan": 3.86,
+    "pct_change": 81.6470588235294,
+    "volume": 317384,
+    "rel_volume": 516.07,
+    "float_shares": 6052161,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 22,
+    "symbol": "ROMA",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470728+00:00",
+    "price_at_scan": 4.04,
+    "pct_change": 46.37681159420291,
+    "volume": 14692,
+    "rel_volume": 7.73,
+    "float_shares": 12792048,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 23,
+    "symbol": "KUST",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470751+00:00",
+    "price_at_scan": 2.73,
+    "pct_change": 26.38888888888888,
+    "volume": 17663,
+    "rel_volume": 1.41,
+    "float_shares": 9739640,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": false,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [
+      "Rel Vol < 5x"
+    ],
+    "reason_not_traded": "Missing: Rel Vol < 5x",
+    "news_headline": "Acquisition of Kustom Entertainment, Inc. (Nasdaq: KUST) to Enhance Integrated Public Safety: $80 Million Revenue Backlog for AI Cybersecurity Solutions Firm: Cycurion, Inc. (Nasdaq: CYCU) - Barchart.com",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 24,
+    "symbol": "BAER",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470780+00:00",
+    "price_at_scan": 3.265,
+    "pct_change": 14.762741652021086,
+    "volume": 125471,
+    "rel_volume": 5.91,
+    "float_shares": 15093570,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 25,
+    "symbol": "GDHG",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470800+00:00",
+    "price_at_scan": 2.12,
+    "pct_change": 13.978494623655912,
+    "volume": 700,
+    "rel_volume": 5.15,
+    "float_shares": 15160659,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 26,
+    "symbol": "ANL",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470824+00:00",
+    "price_at_scan": 3.56,
+    "pct_change": 11.598746081504705,
+    "volume": 2324,
+    "rel_volume": 7.04,
+    "float_shares": 6511023,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 27,
+    "symbol": "IPWR",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:42:53.470846+00:00",
+    "price_at_scan": 4.35,
+    "pct_change": 10.687022900763345,
+    "volume": 5908,
+    "rel_volume": 11.94,
+    "float_shares": 16173529,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 28,
+    "symbol": "TNMG",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:45:52.727419+00:00",
+    "price_at_scan": 4.34,
+    "pct_change": 26.900584795321635,
+    "volume": 1891,
+    "rel_volume": 1.6,
+    "float_shares": 5708206,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": false,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [
+      "Rel Vol < 5x"
+    ],
+    "reason_not_traded": "Missing: Rel Vol < 5x",
+    "news_headline": "TNMG Stock Climbs Amid Acquisition, Financial Report Sparks Interest - StocksToTrade",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 29,
+    "symbol": "OCC",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:45:52.727504+00:00",
+    "price_at_scan": 5.26,
+    "pct_change": 18.46846846846845,
+    "volume": 5707,
+    "rel_volume": 7.34,
+    "float_shares": 10673837,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 30,
+    "symbol": "CGTL",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:48:25.853349+00:00",
+    "price_at_scan": 3.31,
+    "pct_change": 15.73426573426574,
+    "volume": 1500,
+    "rel_volume": 5.64,
+    "float_shares": 7225391,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 31,
+    "symbol": "RLAY",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T12:48:25.853457+00:00",
+    "price_at_scan": 8.5,
+    "pct_change": 12.063282794990112,
+    "volume": 92155,
+    "rel_volume": 0.64,
+    "float_shares": 17455980,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": false,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [
+      "Rel Vol < 5x"
+    ],
+    "reason_not_traded": "Missing: Rel Vol < 5x",
+    "news_headline": "Oppenheimer Upgrade Fuels Relay Therapeutics Rally On Zovegalisib Optimism (NASDAQ:RLAY) - Seeking Alpha",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 32,
+    "symbol": "FBYD",
+    "date": "2026-01-28",
+    "timestamp": "2026-01-28T13:03:31.182477+00:00",
+    "price_at_scan": 6.66,
+    "pct_change": 13.74893253629376,
+    "volume": 1388,
+    "rel_volume": 0.7,
+    "float_shares": 14896523,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": false,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [
+      "Rel Vol < 5x"
+    ],
+    "reason_not_traded": "Missing: Rel Vol < 5x",
+    "news_headline": "Falcon's Beyond Global (NASDAQ:FBYD) Stock Rating Upgraded by Wall Street Zen - MarketBeat",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 33,
+    "symbol": "UONEK",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.359791+00:00",
+    "price_at_scan": 8.5,
+    "pct_change": 924.0963855421688,
+    "volume": 280,
+    "rel_volume": 25.34,
+    "float_shares": 10597003,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 34,
+    "symbol": "PCLA",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.359886+00:00",
+    "price_at_scan": 6.76,
+    "pct_change": 45.22019334049408,
+    "volume": 1407,
+    "rel_volume": 8.32,
+    "float_shares": 17105021,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 35,
+    "symbol": "SER",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.359913+00:00",
+    "price_at_scan": 3.68,
+    "pct_change": 36.802973977695174,
+    "volume": 186211,
+    "rel_volume": 5890.05,
+    "float_shares": 14123339,
+    "criteria_count": 5,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [],
+    "reason_not_traded": "All criteria met but not traded",
+    "news_headline": "SER Stock Surges Over 70% Pre-Market After FDA Clears Path For Parkinson\u2019s Therapy - Stocktwits",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 36,
+    "symbol": "XHLD",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.359935+00:00",
+    "price_at_scan": 3.42,
+    "pct_change": 35.44554455445545,
+    "volume": 263635,
+    "rel_volume": 82.36,
+    "float_shares": 12609274,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 37,
+    "symbol": "DCX",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.359954+00:00",
+    "price_at_scan": 4.12,
+    "pct_change": 34.20195439739415,
+    "volume": 51270,
+    "rel_volume": 2343.39,
+    "float_shares": 15851011,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 38,
+    "symbol": "LYRA",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.359977+00:00",
+    "price_at_scan": 2.12,
+    "pct_change": 23.976608187134513,
+    "volume": 2018,
+    "rel_volume": 15.45,
+    "float_shares": 17810948,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 39,
+    "symbol": "FIEE",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.359997+00:00",
+    "price_at_scan": 7.27,
+    "pct_change": 21.979865771812072,
+    "volume": 4813,
+    "rel_volume": 80.0,
+    "float_shares": 19775670,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 40,
+    "symbol": "FLWS",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.360015+00:00",
+    "price_at_scan": 4.91,
+    "pct_change": 21.68525402726146,
+    "volume": 18595,
+    "rel_volume": 10.88,
+    "float_shares": 10110777,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 41,
+    "symbol": "LDWY",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.360033+00:00",
+    "price_at_scan": 4.58,
+    "pct_change": 19.5822454308094,
+    "volume": 604,
+    "rel_volume": 55.21,
+    "float_shares": 6255979,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 42,
+    "symbol": "SVACU",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.360062+00:00",
+    "price_at_scan": 12.19,
+    "pct_change": 16.539196940726562,
+    "volume": 5228,
+    "rel_volume": 477.91,
+    "float_shares": 33387036,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": true,
+      "float": false
+    },
+    "missed_criteria": [
+      "Float > 20M"
+    ],
+    "reason_not_traded": "Missing: Float > 20M",
+    "news_headline": "SVACU SEC Filings - Spring Valley Acquisition Corp III 10-K, 10-Q, 8-K Forms - Stock Titan",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 43,
+    "symbol": "TRX",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.360084+00:00",
+    "price_at_scan": 2.225,
+    "pct_change": 15.284974093264255,
+    "volume": 264203,
+    "rel_volume": 5.38,
+    "float_shares": 16526624,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 44,
+    "symbol": "GDHG",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.360107+00:00",
+    "price_at_scan": 2.12,
+    "pct_change": 13.978494623655912,
+    "volume": 700,
+    "rel_volume": 47.05,
+    "float_shares": 8855485,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 45,
+    "symbol": "AIFU",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.360128+00:00",
+    "price_at_scan": 2.07,
+    "pct_change": 13.736263736263723,
+    "volume": 250,
+    "rel_volume": 5.71,
+    "float_shares": 15775601,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 46,
+    "symbol": "CTRM",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.360150+00:00",
+    "price_at_scan": 2.575,
+    "pct_change": 11.956521739130451,
+    "volume": 1312,
+    "rel_volume": 8.09,
+    "float_shares": 13165209,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 47,
+    "symbol": "NUAIW",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.360172+00:00",
+    "price_at_scan": 2.59,
+    "pct_change": 11.158798283261794,
+    "volume": 500,
+    "rel_volume": 15.19,
+    "float_shares": 6476408,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 48,
+    "symbol": "DRMA",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:12:45.360196+00:00",
+    "price_at_scan": 2.77,
+    "pct_change": 10.139165009940353,
+    "volume": 5171,
+    "rel_volume": 32.0,
+    "float_shares": 9291451,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 49,
+    "symbol": "YHGJ",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:16:45.758625+00:00",
+    "price_at_scan": 4.495,
+    "pct_change": 13.797468354430379,
+    "volume": 633,
+    "rel_volume": 17.46,
+    "float_shares": 13636865,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 50,
+    "symbol": "CHNR",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:20:46.025852+00:00",
+    "price_at_scan": 4.38,
+    "pct_change": 11.02661596958175,
+    "volume": 501,
+    "rel_volume": 15.87,
+    "float_shares": 7495441,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 51,
+    "symbol": "DZZ",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:24:45.471292+00:00",
+    "price_at_scan": 3.83,
+    "pct_change": 14.670658682634738,
+    "volume": 304,
+    "rel_volume": 5.35,
+    "float_shares": 19938138,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 52,
+    "symbol": "CATX",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:24:45.471400+00:00",
+    "price_at_scan": 2.89,
+    "pct_change": 12.670565302144258,
+    "volume": 33309,
+    "rel_volume": 9.15,
+    "float_shares": 5046382,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 53,
+    "symbol": "ODYS",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:32:45.186852+00:00",
+    "price_at_scan": 5.9,
+    "pct_change": 17.06349206349207,
+    "volume": 1627,
+    "rel_volume": 18.75,
+    "float_shares": 18920533,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 54,
+    "symbol": "AEI",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T15:51:03.509350+00:00",
+    "price_at_scan": 3.34,
+    "pct_change": 12.080536912751674,
+    "volume": 225,
+    "rel_volume": 9.51,
+    "float_shares": 13481568,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 55,
+    "symbol": "VENU",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T16:37:52.114788+00:00",
+    "price_at_scan": 5.875,
+    "pct_change": 14.522417153996104,
+    "volume": 17085,
+    "rel_volume": 1.04,
+    "float_shares": 17222492,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": false,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [
+      "Rel Vol < 5x"
+    ],
+    "reason_not_traded": "Missing: Rel Vol < 5x",
+    "news_headline": "Five concert venues bring upgraded food, clubs and fan perks - Stock Titan",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 56,
+    "symbol": "TAL",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T16:37:52.114870+00:00",
+    "price_at_scan": 12.175,
+    "pct_change": 13.20316132031613,
+    "volume": 375155,
+    "rel_volume": 5.91,
+    "float_shares": 64114641,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": true,
+      "float": false
+    },
+    "missed_criteria": [
+      "Float > 20M"
+    ],
+    "reason_not_traded": "Missing: Float > 20M",
+    "news_headline": "TAL Education Group (NYSE:TAL) Shares Gap Up Following Earnings Beat - MarketBeat",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 57,
+    "symbol": "AUST",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T17:10:17.980466+00:00",
+    "price_at_scan": 2.91,
+    "pct_change": 13.22957198443581,
+    "volume": 52389,
+    "rel_volume": 6.7,
+    "float_shares": 15991117,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 58,
+    "symbol": "GNPX",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T17:16:18.618937+00:00",
+    "price_at_scan": 2.485,
+    "pct_change": 11.685393258426956,
+    "volume": 10887,
+    "rel_volume": 6.17,
+    "float_shares": 18468034,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 59,
+    "symbol": "NTWK",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T17:16:18.619002+00:00",
+    "price_at_scan": 3.49,
+    "pct_change": 11.146496815286627,
+    "volume": 452,
+    "rel_volume": 5.07,
+    "float_shares": 5837981,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 60,
+    "symbol": "DXST",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T17:25:07.909837+00:00",
+    "price_at_scan": 2.22,
+    "pct_change": 33.33333333333334,
+    "volume": 13265,
+    "rel_volume": 10.68,
+    "float_shares": 9306604,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 61,
+    "symbol": "KPRX",
+    "date": "2026-01-29",
+    "timestamp": "2026-01-29T18:49:22.882529+00:00",
+    "price_at_scan": 2.29,
+    "pct_change": 11.707317073170744,
+    "volume": 7223,
+    "rel_volume": 86.96,
+    "float_shares": 13607025,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 62,
+    "symbol": "VIVS",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146344+00:00",
+    "price_at_scan": 2.99,
+    "pct_change": 65.19337016574586,
+    "volume": 266802,
+    "rel_volume": 598.21,
+    "float_shares": 6808114,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 63,
+    "symbol": "YJ",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146445+00:00",
+    "price_at_scan": 2.04,
+    "pct_change": 36.91275167785235,
+    "volume": 3605,
+    "rel_volume": 26.12,
+    "float_shares": 12503397,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 64,
+    "symbol": "MOGU",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146477+00:00",
+    "price_at_scan": 2.44,
+    "pct_change": 27.083333333333336,
+    "volume": 3398,
+    "rel_volume": 33.98,
+    "float_shares": 13233731,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 65,
+    "symbol": "CNCK",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146501+00:00",
+    "price_at_scan": 2.835,
+    "pct_change": 23.260869565217398,
+    "volume": 5345,
+    "rel_volume": 20.8,
+    "float_shares": 7356522,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 66,
+    "symbol": "PODC",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146523+00:00",
+    "price_at_scan": 2.91,
+    "pct_change": 20.24793388429753,
+    "volume": 4973,
+    "rel_volume": 16.04,
+    "float_shares": 11644284,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 67,
+    "symbol": "POAS",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146543+00:00",
+    "price_at_scan": 3.94,
+    "pct_change": 19.393939393939398,
+    "volume": 11071,
+    "rel_volume": 8.37,
+    "float_shares": 18314144,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 68,
+    "symbol": "SVACU",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146564+00:00",
+    "price_at_scan": 12.19,
+    "pct_change": 16.539196940726562,
+    "volume": 5228,
+    "rel_volume": 52.28,
+    "float_shares": 65879859,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": true,
+      "float": false
+    },
+    "missed_criteria": [
+      "Float > 20M"
+    ],
+    "reason_not_traded": "Missing: Float > 20M",
+    "news_headline": "SVACU SEC Filings - Spring Valley Acquisition Corp III 10-K, 10-Q, 8-K Forms - Stock Titan",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 69,
+    "symbol": "GDHG",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146600+00:00",
+    "price_at_scan": 2.12,
+    "pct_change": 13.978494623655912,
+    "volume": 700,
+    "rel_volume": 5.15,
+    "float_shares": 14305169,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 70,
+    "symbol": "GITS",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146621+00:00",
+    "price_at_scan": 3.8,
+    "pct_change": 13.77245508982036,
+    "volume": 63874,
+    "rel_volume": 14.19,
+    "float_shares": 5907918,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 71,
+    "symbol": "UNIT",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146648+00:00",
+    "price_at_scan": 8.325,
+    "pct_change": 10.557768924302776,
+    "volume": 395859,
+    "rel_volume": 6.0,
+    "float_shares": 10841338,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 72,
+    "symbol": "ISPR",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:44:23.146668+00:00",
+    "price_at_scan": 3.675,
+    "pct_change": 10.029940119760479,
+    "volume": 6845,
+    "rel_volume": 6.22,
+    "float_shares": 12485568,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 73,
+    "symbol": "ELPW",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:50:23.721936+00:00",
+    "price_at_scan": 4.91,
+    "pct_change": 990.8686958453677,
+    "volume": 223428,
+    "rel_volume": 29.14,
+    "float_shares": 12789146,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 74,
+    "symbol": "YI",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T12:50:23.722028+00:00",
+    "price_at_scan": 9.27,
+    "pct_change": 72.94776119402984,
+    "volume": 2250,
+    "rel_volume": 10.66,
+    "float_shares": 19758651,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 75,
+    "symbol": "CISS",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T13:01:59.370397+00:00",
+    "price_at_scan": 2.92,
+    "pct_change": 104.19580419580421,
+    "volume": 145854,
+    "rel_volume": 137.21,
+    "float_shares": 9600027,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 76,
+    "symbol": "AMCI",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158387+00:00",
+    "price_at_scan": 6.47,
+    "pct_change": 28.628230616302176,
+    "volume": 7326,
+    "rel_volume": 44.66,
+    "float_shares": 12560927,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 77,
+    "symbol": "CIGL",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158489+00:00",
+    "price_at_scan": 2.59,
+    "pct_change": 28.21782178217821,
+    "volume": 1266,
+    "rel_volume": 18.6,
+    "float_shares": 9288488,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 78,
+    "symbol": "CJMB",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158532+00:00",
+    "price_at_scan": 2.11,
+    "pct_change": 25.970149253731336,
+    "volume": 87131,
+    "rel_volume": 36.46,
+    "float_shares": 12619875,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 79,
+    "symbol": "SWVL",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158559+00:00",
+    "price_at_scan": 2.18,
+    "pct_change": 20.44198895027625,
+    "volume": 215576,
+    "rel_volume": 1401.28,
+    "float_shares": 18425773,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 80,
+    "symbol": "HYPD",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158596+00:00",
+    "price_at_scan": 4.22,
+    "pct_change": 20.22792022792023,
+    "volume": 11812,
+    "rel_volume": 5.35,
+    "float_shares": 19788293,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 81,
+    "symbol": "PMI",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158618+00:00",
+    "price_at_scan": 2.13,
+    "pct_change": 20.0,
+    "volume": 11211,
+    "rel_volume": 7.94,
+    "float_shares": 7935047,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 82,
+    "symbol": "WATT",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158640+00:00",
+    "price_at_scan": 9.185,
+    "pct_change": 17.90757381258024,
+    "volume": 14698,
+    "rel_volume": 16.66,
+    "float_shares": 13646470,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 83,
+    "symbol": "SNES",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158666+00:00",
+    "price_at_scan": 2.165,
+    "pct_change": 14.550264550264558,
+    "volume": 1080,
+    "rel_volume": 6.27,
+    "float_shares": 6936235,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 84,
+    "symbol": "LVWR",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158696+00:00",
+    "price_at_scan": 2.585,
+    "pct_change": 10.944206008583686,
+    "volume": 11799,
+    "rel_volume": 26.18,
+    "float_shares": 15502792,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 85,
+    "symbol": "VHUB",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:55:35.158722+00:00",
+    "price_at_scan": 8.81,
+    "pct_change": 10.125000000000007,
+    "volume": 25385,
+    "rel_volume": 11.6,
+    "float_shares": 16746279,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 86,
+    "symbol": "ROMA",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T18:59:36.648096+00:00",
+    "price_at_scan": 3.11,
+    "pct_change": 34.924078091106274,
+    "volume": 40556,
+    "rel_volume": 20.91,
+    "float_shares": 19562847,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 87,
+    "symbol": "FUSE",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T19:03:59.862339+00:00",
+    "price_at_scan": 2.62,
+    "pct_change": 63.74999999999999,
+    "volume": 1515701,
+    "rel_volume": 4190.42,
+    "float_shares": 17125053,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 88,
+    "symbol": "SRI",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T19:03:59.862471+00:00",
+    "price_at_scan": 7.77,
+    "pct_change": 18.085106382978715,
+    "volume": 14004,
+    "rel_volume": 5.42,
+    "float_shares": 12328111,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 89,
+    "symbol": "MAXN",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T19:07:37.264202+00:00",
+    "price_at_scan": 2.83,
+    "pct_change": 12.749003984063759,
+    "volume": 930,
+    "rel_volume": 6.77,
+    "float_shares": 12051697,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 90,
+    "symbol": "ASTI",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T19:10:00.925156+00:00",
+    "price_at_scan": 6.075,
+    "pct_change": 22.233400402414496,
+    "volume": 40253,
+    "rel_volume": 3.14,
+    "float_shares": 14583788,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": false,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [
+      "Rel Vol < 5x"
+    ],
+    "reason_not_traded": "Missing: Rel Vol < 5x",
+    "news_headline": "Ascent Solar Technologies (ASTI) Shares Surge 53% Amid Strategic Partnerships and Growth Plans - Intellectia AI",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 91,
+    "symbol": "JLHL",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T19:26:00.120614+00:00",
+    "price_at_scan": 5.34,
+    "pct_change": 28.51985559566786,
+    "volume": 5159,
+    "rel_volume": 16.96,
+    "float_shares": 14460357,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 92,
+    "symbol": "APYX",
+    "date": "2026-02-02",
+    "timestamp": "2026-02-02T19:26:00.120752+00:00",
+    "price_at_scan": 4.44,
+    "pct_change": 10.173697270471466,
+    "volume": 19623,
+    "rel_volume": 36.12,
+    "float_shares": 12252658,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 93,
+    "symbol": "WRAP",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T21:54:09.091450+00:00",
+    "price_at_scan": 2.64,
+    "pct_change": 66.0377358490566,
+    "volume": 967830,
+    "rel_volume": 63.61,
+    "float_shares": 6146021,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 94,
+    "symbol": "RPGL",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T21:54:09.091560+00:00",
+    "price_at_scan": 2.365,
+    "pct_change": 33.61581920903956,
+    "volume": 93046,
+    "rel_volume": 14.14,
+    "float_shares": 7791766,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 95,
+    "symbol": "RYOJ",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T21:54:09.091593+00:00",
+    "price_at_scan": 3.85,
+    "pct_change": 30.508474576271183,
+    "volume": 4328,
+    "rel_volume": 13.24,
+    "float_shares": 14520107,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 96,
+    "symbol": "SUNE",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T21:54:09.091621+00:00",
+    "price_at_scan": 2.55,
+    "pct_change": 26.237623762376227,
+    "volume": 208928,
+    "rel_volume": 9.97,
+    "float_shares": 24344949,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": true,
+      "float": false
+    },
+    "missed_criteria": [
+      "Float > 20M"
+    ],
+    "reason_not_traded": "Missing: Float > 20M",
+    "news_headline": "SUNE Stock Under Pressure As Suniva Merger Triggers Legal Scrutiny - timothysykes.com",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 97,
+    "symbol": "SRL",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T21:54:09.091645+00:00",
+    "price_at_scan": 5.44,
+    "pct_change": 23.917995444191362,
+    "volume": 2960,
+    "rel_volume": 14.8,
+    "float_shares": 16701377,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 98,
+    "symbol": "AAOG",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T21:54:09.091688+00:00",
+    "price_at_scan": 4.61,
+    "pct_change": 13.827160493827172,
+    "volume": 53602,
+    "rel_volume": 14.29,
+    "float_shares": 17012424,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 99,
+    "symbol": "TDTH",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T22:06:22.926728+00:00",
+    "price_at_scan": 2.6,
+    "pct_change": 42.46575342465754,
+    "volume": 93454,
+    "rel_volume": 17.13,
+    "float_shares": 15844950,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 100,
+    "symbol": "GSRFR",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T22:06:22.926828+00:00",
+    "price_at_scan": 2.28,
+    "pct_change": 29.545454545454536,
+    "volume": 304,
+    "rel_volume": 1.06,
+    "float_shares": 14870607,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": false,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [
+      "Rel Vol < 5x"
+    ],
+    "reason_not_traded": "Missing: Rel Vol < 5x",
+    "news_headline": "Enterprise value to EBITDA forward of GSR IV Acquisition Corp. \u2013 NASDAQ:GSRFR - TradingView",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 101,
+    "symbol": "KPLT",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T22:06:22.926884+00:00",
+    "price_at_scan": 7.69,
+    "pct_change": 14.776119402985078,
+    "volume": 212,
+    "rel_volume": 1.84,
+    "float_shares": 15316328,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": false,
+      "positive_news": true,
+      "float": true
+    },
+    "missed_criteria": [
+      "Rel Vol < 5x"
+    ],
+    "reason_not_traded": "Missing: Rel Vol < 5x",
+    "news_headline": "Board structure shifts at Katapult (NASDAQ: KPLT) ahead of Aaron\u2019s merger - Stock Titan",
+    "has_positive_news": true,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  },
+  {
+    "id": 102,
+    "symbol": "VRAX",
+    "date": "2026-07-09",
+    "timestamp": "2026-07-09T22:09:22.292743+00:00",
+    "price_at_scan": 5.6,
+    "pct_change": 84.81848184818482,
+    "volume": 195715,
+    "rel_volume": 274.11,
+    "float_shares": 19989793,
+    "criteria_count": 4,
+    "criteria_met": {
+      "price_range": true,
+      "pct_change": true,
+      "volume_ratio": true,
+      "positive_news": false,
+      "float": true
+    },
+    "missed_criteria": [
+      "No positive news"
+    ],
+    "reason_not_traded": "Missing: No positive news",
+    "news_headline": "No recent news found",
+    "has_positive_news": false,
+    "has_bull_flag": false,
+    "status": "missed",
+    "notes": "",
+    "price_at_close": null,
+    "potential_pnl": null
+  }
+]
