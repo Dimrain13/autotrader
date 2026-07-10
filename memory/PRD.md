@@ -60,6 +60,12 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 - Testing agent verified 100% pass (41/41 pytest + full TokenGate UX flow) — no functional regression, copy renders correctly.
 - Cleaned up test-artifact positions/trade-history entries left in the live paper account from verification testing.
 
+## Session 5 Update (2026-07-10) — VPS Deployment Readiness Check
+- Ran `deployment_agent` health check. Result: no real blockers for the Windows VPS target. One flagged "BLOCKER" (CORS_ORIGINS should be `*`) is a **false positive** — that rule is calibrated for Emergent's own `*.emergent.host` hosting, not this app's actual self-hosted-VPS target, and applying it would violate the explicit Phase 1 #3 security requirement (no `*` + credentials). Correctly NOT applied.
+- Fixed legitimate finding: added `/memory/` and `test_credentials.md` to `.gitignore` (contains live Alpaca paper secret + API_ACCESS_TOKEN, was not previously excluded from git).
+- Confirmed installed stack: Python 3.11.15, Node 20.20.2/Yarn 1.22.22, MongoDB 7.0.37; key backend deps `fastapi==0.110.1`, `alpaca-py==0.30.1`, `motor==3.3.1`, `slowapi==0.1.10`, `pydantic==2.12.4`; key frontend deps `react==19`, `react-router-dom==7`, `axios`, `lightweight-charts==4.1.3`, `tailwindcss==3.4`.
+- Backlog (non-blocking): unbounded Mongo `.to_list(length=10000)` reads in `trade_history_service.get_analytics()` / `missed_opportunities_service.get_analytics()` — add projections/date-bounding as trade volume grows.
+
 ## Deferred / Backlog (P1/P2)
 - Consider splitting `server.py` (1280+ lines) into per-domain routers (orders/settings/auto-trader/market) for maintainability (noted by testing agent, non-blocking).
 - Docker Desktop / `docker-compose.yml` path was NOT built (user chose Windows-native/NSSM) — available on request if preference changes later.
