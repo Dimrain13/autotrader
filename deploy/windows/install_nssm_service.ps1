@@ -58,7 +58,7 @@ Write-Host "`nInstalling MomentumXBackend service..." -ForegroundColor Yellow
 # Serves the pre-built React app. Rebuild with `yarn build` after any frontend change.
 $ServeCmd = "npx.cmd"
 Write-Host "`nInstalling MomentumXFrontend service..." -ForegroundColor Yellow
-& $NssmPath install MomentumXFrontend $ServeCmd "serve -s build -l 127.0.0.1:3000"
+& $NssmPath install MomentumXFrontend $ServeCmd "serve -s build -l tcp://127.0.0.1:3000"
 & $NssmPath set MomentumXFrontend AppDirectory $FrontendDir
 & $NssmPath set MomentumXFrontend DisplayName "MomentumX Trading Frontend"
 & $NssmPath set MomentumXFrontend Description "Static server for the built MomentumX React app"

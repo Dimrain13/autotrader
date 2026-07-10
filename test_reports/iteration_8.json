@@ -1,0 +1,31 @@
+{
+  "summary": "Validated the Linux/Windows deploy-script bug fix (serve v14.2.6 `-l` scheme requirement) purely via bash simulation, since no systemd/PID1 is available in this sandbox (confirmed `ls /run/systemd/system` -> not found). Reproduced the exact original failure, verified the fix resolves it, and confirmed all 4 files consistently use tcp:// scheme. Also did a lightweight regression check of the running sandbox app (unrelated to deploy scripts).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Root cause and fix confirmed 100% accurate: `serve --help` output explicitly states host:port form requires a scheme (`tcp://hostname:1234`), while bare port form (`-l 1234`) does not need one. Reproduced the original error verbatim: `serve -s <dir> -l 127.0.0.1:4999` throws 'Error: Unknown --listen endpoint scheme (protocol): 127.0.0.1:' and exits with code 1 -- confirmed even when run as root, unrelated to permissions.",
+    "New syntax `serve -s <dir> -l tcp://127.0.0.1:<port>` verified working: process stays alive, curl returns HTTP 200.",
+    "All 4 files (momentumx-frontend.service, linux/start.sh, windows/install_nssm_service.ps1, windows/start.bat) consistently use the tcp:// scheme now -- no leftover instances of the old buggy `-l host:port` syntax found.",
+    "Simulated the unprivileged system user scenario (useradd --system --no-create-home momentumx_testuser, sudo -u <user> env HOME=/tmp /usr/bin/serve ...) -- worked fine (200 OK) both with and without HOME set explicitly in this container. Could not fully replicate the permission theory since systemd's NoNewPrivileges/PrivateTmp sandboxing (which the agent's Environment=HOME=/tmp defense targets) isn't reproducible without a real systemd PID1 in this sandbox -- however the syntax fix alone is proven sufficient and reproducible as the actual root cause. The HOME=/tmp and chown -R defensive additions are harmless best-practice hardening and don't break anything, so no objection to keeping them even though they weren't strictly necessary to reproduce/fix the reported crash.",
+    "install_systemd_services.sh step [7/7]: confirmed `chown -R momentumx:momentumx \"$ROOT_DIR\"` is present right after the useradd line, before systemd unit copy/start -- as expected.",
+    "ExecStart in momentumx-frontend.service correctly uses direct binary path `/usr/bin/serve` (not npx) with tcp:// scheme, and Environment=HOME=/tmp is present. No other latent syntax issues found in that ExecStart line.",
+    "Regression check: sandbox app (frontend :3000, backend :8001 via supervisor) unaffected -- backend /api returns 401 (expected, auth-gated) and frontend renders the MomentumX unlock/token-entry screen correctly with no console errors."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (deploy-script bash validation task, not app UI testing)"},
+  "test_credentials": "Not required for this task (no auth-gated screen navigated into; only regression screenshot of unlock screen).",
+  "seed_data_creation": "None. Created and fully cleaned up a throwaway system user (momentumx_testuser) and a globally-installed `serve` npm package for simulation purposes only -- both removed after testing, confirmed via `id` and `which serve` post-cleanup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "This iteration validated ONLY the /app/deploy/linux and /app/deploy/windows script fixes via bash simulation (no systemd available in sandbox, confirmed by /run/systemd/system missing). The fix (tcp:// scheme for serve's -l flag) is proven correct and sufficient by direct reproduction of the original error and verification of the fix in an isolated environment. No app-level regressions found. Previous iterations (6, 7) covering scanner concurrency/float lookup/toast notifications were not re-tested per instructions, as this was out of scope.",
+  "rca of the issue": "serve v14.2.6 changed --listen (-l) flag parsing: host:port strings now require an explicit URI scheme prefix (tcp://) to disambiguate from other endpoint types (unix socket paths, Windows named pipes). The old command `npx serve -s build -l 127.0.0.1:4000` throws `Error: Unknown --listen endpoint scheme (protocol): 127.0.0.1:` in parseEndpoint() and process exits 1 -- this is a CLI syntax incompatibility, not a permissions/EACCES issue as a prior agent had assumed. Fix: use `tcp://127.0.0.1:4000`. Verified via serve --help output and direct reproduction/fix in bash."
+}

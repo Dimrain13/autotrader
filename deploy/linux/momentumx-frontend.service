@@ -5,8 +5,9 @@ After=network.target momentumx-backend.service
 [Service]
 Type=simple
 User=momentumx
+Environment=HOME=/tmp
 WorkingDirectory=/opt/momentumx/frontend
-ExecStart=/usr/bin/npx serve -s build -l 127.0.0.1:4000
+ExecStart=/usr/bin/serve -s build -l tcp://127.0.0.1:4000
 Restart=on-failure
 RestartSec=3
 

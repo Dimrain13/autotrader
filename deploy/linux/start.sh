@@ -31,7 +31,7 @@ cd "$ROOT_DIR/frontend"
 if [ ! -d "build" ]; then
     yarn build
 fi
-nohup npx serve -s build -l 127.0.0.1:4000 > frontend.log 2>&1 &
+nohup npx serve -s build -l tcp://127.0.0.1:4000 > frontend.log 2>&1 &
 echo "  Frontend PID: $!  (logs: frontend/frontend.log)"
 
 echo ""

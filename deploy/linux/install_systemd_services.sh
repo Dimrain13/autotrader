@@ -147,6 +147,8 @@ echo "  Frontend built."
 echo ""
 echo "[7/7] Installing systemd services..."
 useradd --system --no-create-home --shell /usr/sbin/nologin momentumx 2>/dev/null || true
+chown -R momentumx:momentumx "$ROOT_DIR"
+echo "  Repo ownership set to momentumx:momentumx so the service user can read it."
 
 cp "$SCRIPT_DIR/momentumx-backend.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/momentumx-frontend.service" /etc/systemd/system/

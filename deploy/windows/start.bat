@@ -25,7 +25,7 @@ start "MomentumX Backend" cmd /k "cd /d %ROOT%\backend && call venv\Scripts\acti
 
 echo.
 echo [3/3] Building and serving frontend (http://127.0.0.1:3000)...
-start "MomentumX Frontend" cmd /k "cd /d %ROOT%\frontend && (if not exist build yarn build) && npx serve -s build -l 127.0.0.1:3000"
+start "MomentumX Frontend" cmd /k "cd /d %ROOT%\frontend && (if not exist build yarn build) && npx serve -s build -l tcp://127.0.0.1:3000"
 
 echo.
 echo ============================================================
