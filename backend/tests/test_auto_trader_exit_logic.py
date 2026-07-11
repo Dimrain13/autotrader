@@ -273,6 +273,38 @@ class TestTradingHours:
         result = self.auto_trader.is_trading_hours()
         assert isinstance(result, bool)
 
+    def test_trading_hours_false_on_saturday(self):
+        """is_trading_hours must be False on Saturday even during 7AM-3:30PM ET window"""
+        eastern = pytz.timezone('US/Eastern')
+        saturday_10am = eastern.localize(datetime(2026, 7, 11, 10, 0))  # 2026-07-11 is a Saturday
+        with patch('services.auto_trader_service.datetime') as mock_dt:
+            mock_dt.now.return_value = saturday_10am
+            assert self.auto_trader.is_trading_hours() is False
+
+    def test_trading_hours_false_on_sunday(self):
+        """is_trading_hours must be False on Sunday even during 7AM-3:30PM ET window"""
+        eastern = pytz.timezone('US/Eastern')
+        sunday_10am = eastern.localize(datetime(2026, 7, 12, 10, 0))  # 2026-07-12 is a Sunday
+        with patch('services.auto_trader_service.datetime') as mock_dt:
+            mock_dt.now.return_value = sunday_10am
+            assert self.auto_trader.is_trading_hours() is False
+
+    def test_trading_hours_true_on_weekday_during_window(self):
+        """is_trading_hours must be True on a weekday within the 7AM-3:30PM ET window"""
+        eastern = pytz.timezone('US/Eastern')
+        monday_10am = eastern.localize(datetime(2026, 7, 13, 10, 0))  # 2026-07-13 is a Monday
+        with patch('services.auto_trader_service.datetime') as mock_dt:
+            mock_dt.now.return_value = monday_10am
+            assert self.auto_trader.is_trading_hours() is True
+
+    def test_entry_window_false_on_weekend(self):
+        """is_entry_window must be False on Saturday/Sunday even during 7AM-11AM ET window"""
+        eastern = pytz.timezone('US/Eastern')
+        saturday_8am = eastern.localize(datetime(2026, 7, 11, 8, 0))
+        with patch('services.auto_trader_service.datetime') as mock_dt:
+            mock_dt.now.return_value = saturday_8am
+            assert self.auto_trader.is_entry_window() is False
+
 
 # Run tests with pytest
 if __name__ == "__main__":

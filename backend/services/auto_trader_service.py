@@ -217,6 +217,9 @@ class AutoTraderService:
         eastern = pytz.timezone('US/Eastern')
         now_et = datetime.now(eastern)
 
+        if now_et.weekday() >= 5:  # Saturday = 5, Sunday = 6 - markets closed
+            return False
+
         if now_et.hour < self.trading_start_hour:
             return False
 
@@ -235,6 +238,8 @@ class AutoTraderService:
         """
         eastern = pytz.timezone('US/Eastern')
         now_et = datetime.now(eastern)
+        if now_et.weekday() >= 5:  # Saturday = 5, Sunday = 6 - markets closed
+            return False
         return 7 <= now_et.hour < 11
 
     def check_risk_limits(self, portfolio_value: float) -> Dict:

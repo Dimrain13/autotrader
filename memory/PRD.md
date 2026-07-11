@@ -91,6 +91,12 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 - `install_systemd_services.sh` step [7/7]: added `chown -R momentumx:momentumx "$ROOT_DIR"` after `useradd`, so the service user is guaranteed read access to built frontend/backend files regardless of who ran the installer.
 - **Testing**: `testing_agent_v4` validated via bash simulation (no systemd daemon in this sandbox) — reproduced original crash, verified fix resolves it (HTTP 200 as an unprivileged throwaway system user), confirmed all 4 files consistent, confirmed no regression in the running sandbox app. 100% pass, no action items. See `/app/test_reports/iteration_8.json`.
 
+## Session 10 Update (2026-02) — Trading Hours Timezone/Weekday Clarification + Weekend Bug Fix
+- User asked whether the 7AM-3:30PM trading window uses their local timezone. Clarified: intentionally hardcoded to `US/Eastern` (not user-local) since the Warrior Trading window is anchored to real NYSE/NASDAQ market hours, which are always defined in ET regardless of trader location.
+- **Bug found+fixed while verifying**: `auto_trader_service.is_trading_hours()` and `is_entry_window()` had no weekday check — would treat Saturday/Sunday 7AM-3:30PM ET as valid trading hours (unlike `eod_closer_service.py`, which already correctly skips weekends). Added `now_et.weekday() >= 5` guard to both methods, matching the EOD closer's existing pattern.
+- Also investigated user's earlier observation that "scanning only runs when on the page" — confirmed via live backend logs that the real auto-trader engine (`auto_trader_loop()`, 60s interval) already runs fully decoupled from the frontend (started at server boot, gated only by DB-persisted `active` flag) - not a bug. Only the Scanner page's own visual "Auto-Scan" results table is page-scoped (normal SPA component lifecycle), which is a UX nuance, not a functional trading gap.
+- Added 4 new regression tests (`TestTradingHours` in `test_auto_trader_exit_logic.py`) covering weekend rejection (Sat/Sun) and weekday acceptance for both `is_trading_hours()`/`is_entry_window()`. Full suite: 20/20 passing in that file.
+
 ## Deferred / Backlog (P1/P2)
 - Consider splitting `server.py` (1280+ lines) into per-domain routers (orders/settings/auto-trader/market) for maintainability (noted by testing agent, non-blocking).
 - Docker Desktop / `docker-compose.yml` path was NOT built (user chose Windows-native/NSSM) — available on request if preference changes later.
