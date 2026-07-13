@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import axios from "axios";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TrendingUp, TrendingDown, Activity, DollarSign, Target, AlertCircle, Newspaper, ChevronDown, ChevronRight } from "lucide-react";
@@ -132,6 +132,11 @@ export default function History() {
   };
 
   // Calculate daily P&L breakdown
+  // Uses US/Eastern calendar dates (not UTC or raw browser-local) since the
+  // trading day itself is defined in ET - keeps "TODAY" and date grouping
+  // consistent with when the market actually opened/closed for that session.
+  const getETDateKey = (date) => date.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
   const getDailyPerformance = () => {
     const dailyData = {};
     
@@ -140,9 +145,10 @@ export default function History() {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
-        weekday: 'short'
+        weekday: 'short',
+        timeZone: 'America/New_York'
       }) : 'Unknown';
-      const dateKey = trade.exit_time ? new Date(trade.exit_time).toISOString().split('T')[0] : 'unknown';
+      const dateKey = trade.exit_time ? getETDateKey(new Date(trade.exit_time)) : 'unknown';
       
       if (!dailyData[dateKey]) {
         dailyData[dateKey] = {
@@ -335,11 +341,13 @@ export default function History() {
                   </tr>
                 </thead>
                 <tbody>
-                  {getDailyPerformance().map((day, idx) => (
-                    <>
+                  {getDailyPerformance().map((day, idx) => {
+                    const isToday = day.dateKey === getETDateKey(new Date());
+                    return (
+                    <Fragment key={day.dateKey}>
                       <tr 
                         key={day.dateKey} 
-                        className={`text-sm border-b border-white/5 ${idx === 0 ? 'bg-white/5' : ''} cursor-pointer hover:bg-white/10 transition-colors`}
+                        className={`text-sm border-b border-white/5 ${isToday ? 'bg-white/5' : ''} cursor-pointer hover:bg-white/10 transition-colors`}
                         onClick={() => toggleDayExpanded(day.dateKey)}
                       >
                         <td className="py-3 pr-4">
@@ -349,9 +357,9 @@ export default function History() {
                             ) : (
                               <ChevronRight className="w-4 h-4 text-neutral-400" />
                             )}
-                            <span className={`font-mono ${idx === 0 ? 'text-green-400 font-bold' : 'text-white'}`}>
+                            <span className={`font-mono ${isToday ? 'text-green-400 font-bold' : 'text-white'}`}>
                               {day.date}
-                              {idx === 0 && <span className="ml-2 text-[10px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded">TODAY</span>}
+                              {isToday && <span className="ml-2 text-[10px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded">TODAY</span>}
                             </span>
                           </div>
                         </td>
@@ -431,8 +439,8 @@ export default function History() {
                           </td>
                         </tr>
                       )}
-                    </>
-                  ))}
+                    </Fragment>
+                  );})}
                 </tbody>
                 <tfoot>
                   <tr className="text-sm border-t border-white/20 bg-white/5">

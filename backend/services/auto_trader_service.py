@@ -558,7 +558,7 @@ class AutoTraderService:
                 'sma_fast': sma_check['sma_fast'],
                 'sma_slow': sma_check['sma_slow'],
                 'sma_crossover': sma_check['crossover'],
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
             logger.info(f"🎯 ENTRY SIGNAL: {symbol} @ ${entry_signal['entry_price']:.2f} (5/5 criteria)")
@@ -600,7 +600,7 @@ class AutoTraderService:
                     'profit_target': profit_target,
                     'partial_sell_done': False,
                     'breakeven_stop_active': False,
-                    'entry_time': datetime.now().isoformat(),
+                    'entry_time': datetime.now(timezone.utc).isoformat(),
                     'status': 'open'
                 }
 
@@ -776,7 +776,7 @@ class AutoTraderService:
                             'pnl_pct': pnl_pct,
                             'exit_reason': exit_reason,
                             'entry_time': position_data.get('entry_time'),
-                            'exit_time': datetime.now().isoformat()
+                            'exit_time': datetime.now(timezone.utc).isoformat()
                         })
 
                         await trade_history.log_trade({
@@ -788,7 +788,7 @@ class AutoTraderService:
                             'pnl_pct': pnl_pct,
                             'exit_reason': exit_reason,
                             'entry_time': position_data.get('entry_time'),
-                            'exit_time': datetime.now().isoformat(),
+                            'exit_time': datetime.now(timezone.utc).isoformat(),
                             'strategy': 'Auto-Trader (Warrior Trading)'
                         })
 
