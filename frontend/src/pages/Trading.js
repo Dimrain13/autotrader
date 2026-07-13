@@ -2017,7 +2017,7 @@ export default function Trading() {
                                 <div className="text-[9px] text-[#00E599] mt-1 font-bold">🚀 AUTO-TRADE READY</div>
                               )}
                               {entryConditions[stock.symbol] && !entryConditions[stock.symbol].is_trading_hours && (
-                                <div className="text-[8px] text-yellow-500 mt-1">⏰ Outside 7-11 AM ET</div>
+                                <div className="text-[8px] text-yellow-500 mt-1">⏰ Outside Trading Hours (7 AM - 3:30 PM ET)</div>
                               )}
                             </div>
                           )}

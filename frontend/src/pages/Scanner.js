@@ -380,7 +380,7 @@ export default function Scanner() {
                   {traderStatus.strategy?.name || "Warrior Trading - Small Cap Momentum"}
                 </div>
                 <div className="text-xs text-neutral-400 mt-1">
-                  {traderStatus.strategy?.trading_hours || "7:00 AM - 11:00 AM EST"} • Entry: Micro-Pullback + MACD + SMA20
+                  {traderStatus.strategy?.trading_hours || "7:00 AM - 3:30 PM EST"} • Entry: Micro-Pullback + MACD + SMA20
                 </div>
               </div>
               <div className="text-right">

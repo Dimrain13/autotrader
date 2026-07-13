@@ -297,14 +297,6 @@ class TestTradingHours:
             mock_dt.now.return_value = monday_10am
             assert self.auto_trader.is_trading_hours() is True
 
-    def test_entry_window_false_on_weekend(self):
-        """is_entry_window must be False on Saturday/Sunday even during 7AM-11AM ET window"""
-        eastern = pytz.timezone('US/Eastern')
-        saturday_8am = eastern.localize(datetime(2026, 7, 11, 8, 0))
-        with patch('services.auto_trader_service.datetime') as mock_dt:
-            mock_dt.now.return_value = saturday_8am
-            assert self.auto_trader.is_entry_window() is False
-
 
 # Run tests with pytest
 if __name__ == "__main__":

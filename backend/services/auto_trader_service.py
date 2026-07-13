@@ -14,7 +14,7 @@ mismatch and match what the code actually enforces):
    -> 2:1 profit-target:stop-loss ratio, matching Warrior Trading's core risk/reward rule
 5. Daily Max Loss: 1% of account (Ross Cameron's conservative starting rule) - HARD KILL SWITCH
 6. Max Consecutive Losses: 3 (then done for day) - "three strikes" rule
-7. Time Window: 7 AM - 11 AM EST entries (pre-market/morning momentum), manage/close by 3:30 PM EST
+7. Time Window: entries + position management 7 AM - 3:30 PM EST, all positions closed by 3:30 PM EST
 8. Exit Signals: trailing stop hit, MACD bearish crossover while losing, profit target hit, end of window
 9. Stock Selection (5 Pillars): $2-$20 price, <20M float, high relative volume, news catalyst, bullish MACD/bull flag
 
@@ -78,8 +78,8 @@ class AutoTraderService:
         self.exited_today = set()  # Symbols we've exited during current trading day
 
         # Trading Hours: 7 AM - 3:30 PM EST
-        # Entry signals evaluated during morning momentum (7-11 AM)
-        # Positions managed until 3:30 PM, then all positions closed
+        # Entries allowed and positions managed throughout this window,
+        # then all positions closed at 3:30 PM
         self.trading_start_hour = 7
         self.trading_end_hour = 15  # 3 PM (will check minutes too)
         self.trading_end_minute = 30  # 3:30 PM - auto-sell all positions
@@ -208,8 +208,7 @@ class AutoTraderService:
         """Check if within trading window (7 AM - 3:30 PM EST)
 
         Trading Schedule:
-        - 7:00 AM - 11:00 AM: Entry signals (morning momentum)
-        - 11:00 AM - 3:30 PM: Position management only (no new entries)
+        - 7:00 AM - 3:30 PM: Entries allowed + positions managed
         - 3:30 PM: Auto-sell ALL positions
 
         Manual trading can happen during full extended hours (4 AM - 8 PM ET)
@@ -229,18 +228,6 @@ class AutoTraderService:
             return False
 
         return True
-
-    def is_entry_window(self) -> bool:
-        """Check if within entry window (7 AM - 11 AM EST)
-
-        Only take new entries during morning momentum.
-        After 11 AM, only manage existing positions.
-        """
-        eastern = pytz.timezone('US/Eastern')
-        now_et = datetime.now(eastern)
-        if now_et.weekday() >= 5:  # Saturday = 5, Sunday = 6 - markets closed
-            return False
-        return 7 <= now_et.hour < 11
 
     def check_risk_limits(self, portfolio_value: float) -> Dict:
         """
@@ -823,7 +810,7 @@ class AutoTraderService:
             self.reset_daily_tracking(portfolio_value)
 
             if not self.is_trading_hours():
-                logger.info(f"Outside trading hours ({self.trading_start_hour} AM - {self.trading_end_hour}:{self.trading_end_minute:02d} PM EST)")
+                logger.info(f"Outside trading hours ({self.trading_start_hour} AM - {self.trading_end_hour - 12 if self.trading_end_hour > 12 else self.trading_end_hour}:{self.trading_end_minute:02d} PM EST)")
                 if self.open_positions:
                     await self.monitor_exits(portfolio_value)
                 return

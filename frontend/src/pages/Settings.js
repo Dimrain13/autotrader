@@ -71,7 +71,7 @@ export default function Settings() {
         <CardContent className="space-y-4">
           <div className="p-4 bg-[#00E599]/10 border border-[#00E599]/20 rounded-sm">
             <div className="text-sm text-[#00E599] font-bold mb-3">
-              Small Cap Momentum Strategy - Pre-Market Trading (7-11 AM EST)
+              Small Cap Momentum Strategy - Trading Window 7 AM - 3:30 PM EST
             </div>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
@@ -100,7 +100,7 @@ export default function Settings() {
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Trading Hours</div>
-                <div className="text-white font-mono font-bold">Entries 7-11 AM · Manage until 3:30 PM EST</div>
+                <div className="text-white font-mono font-bold">Entries + Management 7 AM - 3:30 PM EST</div>
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Risk/Reward Ratio</div>

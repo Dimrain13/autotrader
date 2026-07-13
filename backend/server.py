@@ -710,7 +710,7 @@ async def get_auto_trader_status():
             "stop_loss_pct": auto_trader.stop_loss_pct * 100,  # 1%
             "daily_max_loss_pct": auto_trader.daily_max_loss_pct * 100,  # 1%
             "max_consecutive_losses": auto_trader.max_consecutive_losses,  # 3
-            "trading_hours": f"{auto_trader.trading_start_hour}:00 AM - {auto_trader.trading_end_hour}:{auto_trader.trading_end_minute:02d} PM EST",
+            "trading_hours": f"{auto_trader.trading_start_hour}:00 AM - {auto_trader.trading_end_hour - 12 if auto_trader.trading_end_hour > 12 else auto_trader.trading_end_hour}:{auto_trader.trading_end_minute:02d} PM EST",
             "partial_sell_pct": auto_trader.partial_sell_pct * 100,  # 50%
             "partial_sell_trigger_pct": auto_trader.profit_target_pct * 100,  # 2%
             "move_to_breakeven": auto_trader.move_to_breakeven,  # True
@@ -904,7 +904,7 @@ async def check_entry_conditions(symbol: str):
             "ready_for_auto_trade": ready,
             "is_trading_hours": is_trading_hours,
             "already_in_position": already_in_position,
-            "trading_hours": f"{auto_trader.trading_start_hour}:00 AM - {auto_trader.trading_end_hour}:00 AM EST"
+            "trading_hours": f"{auto_trader.trading_start_hour}:00 AM - {auto_trader.trading_end_hour - 12 if auto_trader.trading_end_hour > 12 else auto_trader.trading_end_hour}:{auto_trader.trading_end_minute:02d} PM EST"
         }
         
     except Exception as e:
