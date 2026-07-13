@@ -41,15 +41,19 @@ class LoginRequest(BaseModel):
 @limiter.limit("10/minute")
 async def login(request: Request, body: LoginRequest):
     email = body.email.strip().lower()
-    identifier = f"{get_remote_address(request)}:{email}"
-    await check_lockout(identifier)
+    # Lockout is keyed by email only (not IP) - this is a single-user
+    # internal tool, and get_remote_address() was observed to be unstable
+    # through this environment's ingress proxy (different upstream IPs for
+    # the same real client across consecutive requests), which made an
+    # IP-based identifier unreliably split the failed-attempt count.
+    await check_lockout(email)
 
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
-        await record_failed_attempt(identifier)
+        await record_failed_attempt(email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    await clear_failed_attempts(identifier)
+    await clear_failed_attempts(email)
     token = create_access_token(email)
     return {"access_token": token, "email": email}
 
