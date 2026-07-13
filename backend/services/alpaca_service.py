@@ -19,6 +19,15 @@ class AlpacaService:
         secret_key = os.getenv('ALPACA_SECRET_KEY')
         base_url = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
 
+        # Market data (bars/quotes) is intentionally sourced from a SEPARATE
+        # live-account key pair (better data plan/access than the free paper
+        # account), while all actual order execution below still uses the
+        # paper trading_client above. Falls back to the paper keys if the
+        # live data keys aren't configured, so data fetches never silently
+        # break if ALPACA_DATA_API_KEY is left unset.
+        data_api_key = os.getenv('ALPACA_DATA_API_KEY') or api_key
+        data_secret_key = os.getenv('ALPACA_DATA_SECRET_KEY') or secret_key
+
         # Reuse a single session for the Yahoo/Nasdaq fallback data paths -
         # connection pooling/keep-alive avoids a fresh TCP/TLS handshake per
         # symbol when scanning many stocks, meaningfully speeding up scans.
@@ -67,7 +76,9 @@ class AlpacaService:
             self.data_client = None
         else:
             self.trading_client = TradingClient(api_key=api_key, secret_key=secret_key, paper=paper)
-            self.data_client = StockHistoricalDataClient(api_key=api_key, secret_key=secret_key)
+            self.data_client = StockHistoricalDataClient(api_key=data_api_key, secret_key=data_secret_key)
+            data_source = "LIVE account" if os.getenv('ALPACA_DATA_API_KEY') else "same paper account (no ALPACA_DATA_API_KEY set)"
+            logger.info(f"📊 Market data client: {data_source} | Trading client: {'PAPER' if paper else 'LIVE'} (orders only)")
     
     def get_account(self):
         if not self.trading_client:
@@ -642,8 +653,14 @@ class AlpacaService:
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=tf,
-            start=start_date,
-            end=end_date
+            start=start_date
+            # Deliberately no `end` param: passing an explicit end=now() makes
+            # Alpaca's free-tier data plan hard-reject the WHOLE request with
+            # "subscription does not permit querying recent SIP data" (even
+            # though older data in the same range is available). Omitting
+            # `end` lets Alpaca silently serve everything it's allowed to
+            # (respecting its own real-time embargo internally) instead of
+            # erroring out and forcing a fallback to Yahoo every time.
         )
         bars = self.data_client.get_stock_bars(request)
         df = bars.df

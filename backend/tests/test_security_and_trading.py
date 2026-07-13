@@ -18,7 +18,17 @@ import requests
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL').rstrip('/')
 LOCAL_URL = "http://localhost:8001"  # direct backend, bypasses preview proxy
-TOKEN = "sr7sWvLt5MicXQTC0jw-Sy0uwoYxR-i9FLAkOXcuH3VjUpqJ7GyMxhFEyduwFPDu"
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'daniel.r.millner@gmail.com')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Black0rkid5!')
+
+
+def _get_jwt():
+    r = requests.post(f"{BASE_URL}/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+TOKEN = _get_jwt()
 AUTH_HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 
@@ -180,7 +190,7 @@ class TestRealDataOnly:
         if r.status_code == 200:
             data = r.json()
             assert "source" in data
-            assert data["source"] in ["alpaca", "yahoo", "nasdaq", "none", "unknown"]
+            assert data["source"] in ["alpaca", "alpaca_iex", "yahoo", "nasdaq", "none", "unknown"]
 
     def test_entry_conditions_invalid_symbol_no_fake_data(self, session):
         r = session.get(f"{BASE_URL}/api/auto-trader/entry-conditions/ZZZZINVALIDSYMBOL")

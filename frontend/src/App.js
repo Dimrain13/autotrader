@@ -18,65 +18,73 @@ import "@/App.css";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-function TokenGate({ onAuthenticated }) {
-  const [tokenInput, setTokenInput] = useState("");
+function LoginForm({ onAuthenticated }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!tokenInput.trim()) return;
+    if (!email.trim() || !password) return;
     setChecking(true);
     setError("");
-    setToken(tokenInput.trim());
     try {
-      // Any authenticated endpoint works as a verification ping
-      await axios.get(`${API}/settings`);
+      const response = await axios.post(`${API}/auth/login`, {
+        email: email.trim(),
+        password
+      });
+      setToken(response.data.access_token);
       onAuthenticated();
     } catch (err) {
-      clearToken();
-      setError("Invalid access token. Make sure you're using API_ACCESS_TOKEN from backend/.env - not your Alpaca API key/secret.");
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "Invalid email or password.");
     } finally {
       setChecking(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#050505] flex items-center justify-center p-4" data-testid="token-gate-screen">
+    <div className="min-h-screen bg-[#050505] flex items-center justify-center p-4" data-testid="login-screen">
       <div className="w-full max-w-md bg-[#0A0A0A] border border-white/10 rounded-sm p-8">
         <h1 className="text-2xl font-black mb-2" style={{ fontFamily: 'Unbounded, sans-serif' }}>
           <span className="text-[#00E599]">Momentum</span><span className="text-white">X</span>
         </h1>
         <p className="text-sm text-neutral-500 mb-6">
-          Enter the <code className="text-[#00E599]">API_ACCESS_TOKEN</code> from your backend's
-          <code className="text-neutral-300"> .env</code> file to continue.
+          Sign in to continue.
         </p>
-        <form onSubmit={handleSubmit} className="space-y-4" data-testid="token-gate-form">
+        <form onSubmit={handleSubmit} className="space-y-4" data-testid="login-form">
           <input
-            type="password"
-            data-testid="token-gate-input"
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="API Access Token"
+            type="email"
+            data-testid="login-email-input"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
             className="w-full bg-[#121212] border border-white/10 rounded-sm px-4 py-3 text-white text-sm font-mono focus:outline-none focus:border-[#2E5CFF] transition-colors"
             autoFocus
+            autoComplete="username"
+          />
+          <input
+            type="password"
+            data-testid="login-password-input"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            className="w-full bg-[#121212] border border-white/10 rounded-sm px-4 py-3 text-white text-sm font-mono focus:outline-none focus:border-[#2E5CFF] transition-colors"
+            autoComplete="current-password"
           />
           {error && (
-            <div className="text-[#FF1A40] text-xs" data-testid="token-gate-error">{error}</div>
+            <div className="text-[#FF1A40] text-xs" data-testid="login-error">{error}</div>
           )}
           <button
             type="submit"
-            data-testid="token-gate-submit-button"
-            disabled={checking || !tokenInput.trim()}
+            data-testid="login-submit-button"
+            disabled={checking || !email.trim() || !password}
             className="w-full bg-[#00E599] text-black font-bold py-3 rounded-sm hover:bg-[#00E599]/90 transition-colors disabled:opacity-50"
           >
-            {checking ? "Verifying..." : "Unlock"}
+            {checking ? "Signing in..." : "Sign In"}
           </button>
         </form>
-        <p className="text-xs text-neutral-600 mt-4">
-          Note: this is the app's own <code className="text-neutral-400">API_ACCESS_TOKEN</code>,
-          not your Alpaca API key/secret. Find it in <code className="text-neutral-400">backend/.env</code>.
-        </p>
       </div>
     </div>
   );
@@ -315,7 +323,7 @@ function App() {
   };
 
   if (!authenticated) {
-    return <TokenGate onAuthenticated={() => setAuthenticated(true)} />;
+    return <LoginForm onAuthenticated={() => setAuthenticated(true)} />;
   }
 
   return (

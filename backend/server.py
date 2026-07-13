@@ -18,13 +18,44 @@ load_dotenv(ROOT_DIR / '.env')
 
 # Shared MongoDB connection (see database.py) - avoids circular imports with services
 from database import db, client
-from auth import verify_token
+from auth import (
+    verify_token, seed_user, create_access_token, verify_password,
+    check_lockout, record_failed_attempt, clear_failed_attempts
+)
 
 app = FastAPI(title="MomentumX Trading Platform")
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Auth routes live on their own unprotected router (no verify_token
+# dependency) since /login must be reachable without a token in hand.
+auth_router = APIRouter(prefix="/api/auth")
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+@auth_router.post("/login")
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginRequest):
+    email = body.email.strip().lower()
+    identifier = f"{get_remote_address(request)}:{email}"
+    await check_lockout(identifier)
+
+    user = await db.users.find_one({"email": email})
+    if not user or not verify_password(body.password, user["password_hash"]):
+        await record_failed_attempt(identifier)
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    await clear_failed_attempts(identifier)
+    token = create_access_token(email)
+    return {"access_token": token, "email": email}
+
+@auth_router.get("/me")
+async def get_me(email: str = Depends(verify_token)):
+    return {"email": email}
 
 api_router = APIRouter(prefix="/api", dependencies=[Depends(verify_token)])
 
@@ -1204,6 +1235,7 @@ async def auto_trader_loop():
             logger.error(f"Auto-trader loop error: {str(e)}")
         await asyncio.sleep(60)
 
+app.include_router(auth_router)
 app.include_router(api_router)
 
 # CORS (Phase 1 #3): explicit origins only, never '*' with allow_credentials=True
@@ -1225,8 +1257,11 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def startup_services():
     """Start background services"""
-    if not os.environ.get('API_ACCESS_TOKEN'):
-        logger.warning("⚠️  API_ACCESS_TOKEN is not set - the API will reject ALL requests until it is configured in .env")
+    if not os.environ.get('JWT_SECRET') or not os.environ.get('ADMIN_EMAIL') or not os.environ.get('ADMIN_PASSWORD'):
+        logger.warning("⚠️  JWT_SECRET/ADMIN_EMAIL/ADMIN_PASSWORD not fully set - login will not work until configured in .env")
+    else:
+        await seed_user()
+        logger.info(f"🔐 Auth seeded for {os.environ.get('ADMIN_EMAIL')}")
 
     trading_mode = "PAPER (safe/simulated)" if alpaca_service.paper else "🔴 LIVE — REAL MONEY AT RISK"
     logger.info("=" * 60)

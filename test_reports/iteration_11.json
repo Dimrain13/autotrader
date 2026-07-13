@@ -1,0 +1,45 @@
+{
+  "summary": "Tested the new email+password JWT auth flow (replacing old static API token), safety-critical paper-account verification, live-account market data source fix, and a full regression pass across all pages. Login flow works end-to-end in the browser (wrong creds error, correct creds success, JWT persists across refresh, old token fully removed). SAFETY-CRITICAL check PASSED: /api/account still returns paper account PA30RVV1A2DM. Market data fix confirmed: /api/market/bars/AAPL now returns source=alpaca_iex (previously falling back to yahoo). Found one real backend bug in the brute-force lockout mechanism (works correctly on direct localhost but is unreliable through the public ingress proxy due to IP-detection issue) - detailed below.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/auth/login (brute-force lockout in auth.py/server.py)",
+        "issue": "get_remote_address(request) (from slowapi) is used as part of the lockout identifier (f'{ip}:{email}') and also as the rate-limiter key. When hitting the PUBLIC preview URL (through the ingress/proxy), the same physical client's requests were observed alternating between TWO different source IPs seen by the backend (e.g. 10.208.128.9 and 10.208.128.10 - likely 2 backend/proxy pods or connection reuse pattern). This splits failed_count across two different identifiers, so 5 consecutive wrong-password attempts from the same real client do NOT reliably trigger the 429 lockout at exactly attempt #5 as designed - in one run it took the global per-IP rate-limiter (10/min) to eventually 429 instead of the intended lockout logic, and in another run 6 attempts all returned 401 with no lockout at all. Verified via direct localhost:8001 calls that the lockout logic itself is correct (5 fails -> 429 'Too many failed login attempts...') when the IP is stable - this is specifically a proxy/IP-detection problem in this environment, not a logic bug in auth.py. Real-world impact: brute-force protection is weaker than intended when accessed through the public URL/ingress; an attacker could get more than 5 attempts before being locked out.",
+        "priority": "MEDIUM"
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_auth_and_account_safety.py",
+    "/app/backend/tests/test_security_and_trading.py",
+    "/app/test_reports/pytest/pytest_auth_results.xml"
+  ],
+  "action_items": [
+    "Investigate why get_remote_address() sees an alternating/unstable client IP through the ingress proxy for this preview environment (consider trusting X-Forwarded-For header via slowapi's key_func, or use a stable identifier such as email-only + a global attempt cap, or request.client.host with proxy headers configured) so the brute-force lockout reliably triggers at exactly 5 failed attempts regardless of proxy IP variance.",
+    "No other action items - login flow, account safety, and market data source fix are all confirmed working correctly."
+  ],
+  "critical_code_review_comments": [
+    "auth.py is clean and well-commented: bcrypt hashing, idempotent seed_user() that updates the hash if ADMIN_PASSWORD changes in .env, JWT with 30-day expiry, and login_attempts collection correctly cleaned up by identifier (verified deletion after tests).",
+    "server.py correctly splits auth_router (unprotected, only /api/auth/login and /api/auth/me) from api_router (all other routes, protected by Depends(verify_token)) - clean separation, verified /api/auth/me requires a valid bearer token and every other /api/* route returns 401 without one.",
+    "Frontend LoginForm reuses the existing setToken()/getToken()/axiosConfig interceptor mechanism unchanged (same localStorage key momentumx_api_token), so zero changes needed elsewhere in the app - confirmed by testing that refresh keeps the session and all downstream pages (Dashboard/Scanner/Trade/History/Settings) work identically to before.",
+    "Old API_ACCESS_TOKEN is fully removed - confirmed absent from .env, absent from UI text, and a request with the old token value returns 401.",
+    "get_bars() fix (removing the hardcoded end=datetime.now() param) verified working: market/bars/AAPL now returns source='alpaca_iex' instead of falling back to yahoo, confirming the live-account market data keys are functioning for read-only data as intended."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_auth_and_account_safety.py (new)",
+    "/app/backend/tests/test_security_and_trading.py (updated allowed 'source' values to include 'alpaca_iex')"
+  ],
+  "success_rate": {"backend": "100% (34/34 pytest, after fixing one outdated assertion)", "frontend": "100% (all manual flows verified: login, wrong-creds error, refresh persistence, logout, Dashboard/Scanner/Trade/History/Settings navigation)"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md) - confirmed working for both curl and browser login",
+  "seed_data_creation": "None new; a pre-existing TEST_MOMX trade record (from a prior testing session's persistence test) is visible in History - not created by this session, harmless test artifact.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Auth replacement is solid: login screen renders correctly with all required data-testid attributes (login-screen, login-email-input, login-password-input, login-submit-button, login-error), wrong creds show error and stay on login screen, correct creds land on Dashboard, refresh persists session via localStorage JWT (momentumx_api_token, unchanged key), logout button (data-testid=logout-button, top-right exit icon) clears the token and returns to login screen. SAFETY VERIFIED: /api/account returns account_number=PA30RVV1A2DM (paper) via a live authenticated session, not just via code review. Market data source fix confirmed live: AAPL bars now source=alpaca_iex. The ONLY issue found is the brute-force lockout being unreliable through the public ingress URL due to inconsistent get_remote_address() results (verified this is an IP-detection/proxy issue, reproduced twice, and confirmed the lockout logic itself is correct when tested against localhost:8001 directly). login_attempts collection was cleaned up after all lockout testing (0 records remaining) so the real admin account is not blocked. Did not attempt to place any real trading orders (per instructions), relied on GET /api/account for the safety check as suggested.",
+  "rca of the issue": "Brute-force lockout identifier = f'{get_remote_address(request)}:{email}'. get_remote_address(request) resolves to request.client.host, which reflects whatever peer connected to the backend process directly. In this environment, requests reaching the backend through the public preview URL pass through an ingress/proxy layer that (based on observed behavior) presents at least 2 different upstream IPs for the same real client across consecutive requests (confirmed by inspecting db.login_attempts documents: 2 separate 'ip:email' identifiers accumulated failed_count in parallel for the same test client and email during a single rapid-fire test). This halves/splits the effective attempt count per identifier, so the 5-attempt threshold isn't reliably reached from the true client's perspective. Direct calls to http://localhost:8001 (bypassing the proxy) showed the lockout firing correctly and immediately at attempt #6 with the exact expected 429 + 'Too many failed login attempts. Try again in 15 minutes.' message, isolating the root cause to IP-detection/proxy behavior rather than the auth.py logic itself. Mitigation options: configure slowapi/FastAPI to trust X-Forwarded-For from the known proxy and use the first hop IP, or fall back to email-only (without IP) as the lockout identifier for this single-user internal tool where per-IP granularity provides little benefit."
+}

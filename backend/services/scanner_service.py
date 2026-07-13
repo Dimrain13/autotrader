@@ -46,11 +46,16 @@ class ScannerService:
         # Initialize Alpaca clients
         api_key = os.getenv('ALPACA_API_KEY')
         secret_key = os.getenv('ALPACA_SECRET_KEY')
+        # Market data + news are sourced from a separate live-account key
+        # pair (better data plan than the free paper account); actual order
+        # execution below always stays on the paper trading_client.
+        data_api_key = os.getenv('ALPACA_DATA_API_KEY') or api_key
+        data_secret_key = os.getenv('ALPACA_DATA_SECRET_KEY') or secret_key
         if api_key and secret_key:
             from alpaca.trading.client import TradingClient
             self.trading_client = TradingClient(api_key=api_key, secret_key=secret_key, paper=True)
-            self.data_client = StockHistoricalDataClient(api_key=api_key, secret_key=secret_key)
-            self.news_client = NewsClient(api_key=api_key, secret_key=secret_key)
+            self.data_client = StockHistoricalDataClient(api_key=data_api_key, secret_key=data_secret_key)
+            self.news_client = NewsClient(api_key=data_api_key, secret_key=data_secret_key)
             self._load_stock_universe()
         else:
             self.trading_client = None
@@ -503,8 +508,9 @@ class ScannerService:
             bars_request = StockBarsRequest(
                 symbol_or_symbols=symbols,
                 timeframe=TimeFrame(1, TimeFrameUnit.Day),
-                start=start_date,
-                end=end_date
+                start=start_date
+                # No explicit `end`: see get_bars() in alpaca_service.py for
+                # why passing end=now() causes SIP data plan rejections.
             )
             
             bars = self.data_client.get_stock_bars(bars_request)

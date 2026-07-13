@@ -9,7 +9,17 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL').rstrip('/')
-TOKEN = os.environ.get('API_ACCESS_TOKEN')
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'daniel.r.millner@gmail.com')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Black0rkid5!')
+
+
+def _get_jwt():
+    r = requests.post(f"{BASE_URL}/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+TOKEN = _get_jwt()
 
 
 @pytest.fixture
