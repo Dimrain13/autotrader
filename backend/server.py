@@ -1091,17 +1091,20 @@ async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_f
                 }
             return {'bars': bars, 'source': 'alpaca', 'symbol': symbol}
     except Exception as e:
-        # Real data unavailable - return an explicit error. NEVER fabricate bars.
+        # Real data unavailable - never fabricate bars, but also never return a
+        # 502: the platform's edge/CDN (Cloudflare) intercepts 502 responses and
+        # replaces the JSON body with its own generic HTML error page, which
+        # breaks frontend Promise.all() chart fetches. Return 200 with an
+        # explicit no_historical_data flag instead, matching the shape already
+        # used by the fallback branch above.
         logger.error(f"No real market data available for {symbol}: {e}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"No real market data available for {symbol}: {str(e)}"
-        )
-        logger.error(f"No real market data available for {symbol}: {e}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"No real market data available for {symbol}: {str(e)}"
-        )
+        return {
+            'bars': [],
+            'source': 'none',
+            'no_historical_data': True,
+            'warning': f'No real historical data available for {symbol}: {str(e)}',
+            'symbol': symbol
+        }
 
 @api_router.post("/settings")
 async def save_settings(settings: SmaSettingsUpdate):

@@ -148,7 +148,7 @@ export default function StockChartCard({ stock, symbol, currentPrice, pctChange,
                 vwap={data.vwap}
                 levels={levels}
               />
-            )}}
+            )}
             
             {/* Indicators Row 1 */}
             <div className="mt-3 grid grid-cols-4 gap-2 text-xs">
