@@ -1,0 +1,28 @@
+{
+  "summary": "Verified the bar-staleness fix in get_bars_with_fallback() (alpaca_service.py) via direct backend curl AND real browser E2E on the Trading page. Backend curl to /api/market/bars/{AAPL,TSLA,MSFT}?timeframe={1Min,5Min} all returned source='yahoo' with last-bar timestamps within 0.0 min of actual UTC wall-clock time (verified against `date -u`) - previously would have been 15-19 min stale via alpaca_iex. On the frontend, selected two live scanner tickers (RIBBU, FGI) on the Trade page (clicking a ticker adds it to the multi-chart view below the grid, ~20s load time) and captured the live Network responses for both 1Min and 5Min bar requests: RIBBU 1Min age=0.39min/5Min age=0.37min (source=yahoo), FGI 1Min age=0.36min/5Min age=0.35min (source=yahoo). This directly confirms the fix: intraday bars are now near-real-time instead of the previously reported 15+ min lag. The 1Day timeframe correctly still shows source=alpaca with an older timestamp (daily bars, not in scope/not stale in the buggy sense - end-of-day bar is expected to be from market close). Chart rendered correctly with candles, SMA20/SMA50/VWAP overlays, entry/stop/target lines. Light regression: login, Dashboard, Scanner, History pages all load with 0 console/DOM errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "No action items - the staleness fix is verified working correctly on both backend (curl) and frontend (live Network inspection) for multiple symbols (AAPL, TSLA, MSFT via backend; RIBBU, FGI via frontend E2E)."
+  ],
+  "critical_code_review_comments": [
+    "get_bars_with_fallback() timestamp-staleness check (age_minutes > 3 threshold) is well-commented and correctly scoped to intraday timeframes only (1Min/5Min), leaving 1Day bars unaffected as intended.",
+    "Minor observation (not a bug): the UI does not expose a manual ticker search box on the Trade page - stocks can only be selected from the live scanner grid. This didn't block testing (real scanner tickers like RIBBU/FGI were used) but is worth noting in case AAPL/TSLA/MSFT specifically need to be charted via UI in the future - would require adding them to the scanner or a manual watchlist/search feature."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md) - worked correctly for login.",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bar-staleness bug fix is fully verified via both backend curl (AAPL/TSLA/MSFT) and frontend live Network inspection (RIBBU/FGI, selected via clicking ticker cards on the Trade/Scanner grid - this adds the stock to a multi-chart panel below the grid that takes ~15-25s to load bar data, this is expected/normal latency from the Yahoo fallback, not a bug). All 1Min/5Min bars consistently returned source='yahoo' with sub-1-minute staleness during market hours (verified at 2026-07-13 ~16:00 UTC, which is within US market hours). No regressions found on Dashboard/Scanner/History/login flows.",
+  "rca_of_the_issue": "Original bug: get_bars_with_fallback() only validated Alpaca bar freshness via price-proximity to live quote (within 5%), never checking timestamp age directly. Low-volatility stocks could pass this check while being 15-19min stale due to Alpaca's free-tier embargo on recent intraday bars. Fix: added explicit age_minutes check (>3min triggers fallback) before the price-match check for intraday timeframes, causing correct fallback to Yahoo Finance (which appends a live-quote-based synthetic bar) whenever Alpaca data is too old. Verified fix resolves the reported user complaint about chart lag."
+}

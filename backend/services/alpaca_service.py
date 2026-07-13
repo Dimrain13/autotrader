@@ -8,7 +8,7 @@ import os
 import requests
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 logger = logging.getLogger(__name__)
@@ -827,22 +827,47 @@ class AlpacaService:
         except Exception as e:
             logger.warning(f"{symbol}: Alpaca bars failed: {e}")
         
-        # Check if Alpaca data looks complete (has recent bars with reasonable price range)
+        # Check if Alpaca data looks complete AND recent enough to display.
+        # IMPORTANT: price-similarity alone is not a reliable freshness
+        # signal - a low-volatility stock (e.g. AAPL) can easily stay within
+        # 5% of its current price for 15+ minutes, so a stale bar can pass
+        # the price check while still being far behind real-time. Alpaca's
+        # free-tier data plan embargoes the most recent ~15 minutes of bars
+        # (this is a real Alpaca data-plan limit, not a bug), so we must
+        # explicitly check the last bar's timestamp age and prefer the
+        # Yahoo/Nasdaq fallback (which serves more current data) whenever
+        # Alpaca's own data is too far behind "now" for intraday timeframes.
         if alpaca_bars and len(alpaca_bars) > 10:
-            # Get the latest quote to verify data accuracy
-            quote = self.get_latest_quote(symbol)
-            if quote:
-                quote_price = (quote['bid_price'] + quote['ask_price']) / 2 if quote['bid_price'] > 0 and quote['ask_price'] > 0 else quote['bid_price'] or quote['ask_price']
-                
-                # Check if any bar is within 5% of current quote price
-                bar_prices = [b['close'] for b in alpaca_bars[-20:]]  # Check last 20 bars
-                price_match = any(abs(p - quote_price) / quote_price < 0.05 for p in bar_prices)
-                
-                if price_match:
-                    # Alpaca data looks accurate
-                    return {'bars': alpaca_bars, 'source': 'alpaca_iex'}
-                else:
-                    logger.warning(f"{symbol}: Alpaca bars (${min(bar_prices):.2f}-${max(bar_prices):.2f}) don't match quote (${quote_price:.2f})")
+            is_intraday = timeframe.startswith(("1M", "1m", "5M", "5m"))
+            is_stale = False
+            if is_intraday:
+                try:
+                    last_bar_ts = alpaca_bars[-1]['timestamp']
+                    last_bar_dt = datetime.fromisoformat(last_bar_ts)
+                    if last_bar_dt.tzinfo is None:
+                        last_bar_dt = last_bar_dt.replace(tzinfo=timezone.utc)
+                    age_minutes = (datetime.now(timezone.utc) - last_bar_dt).total_seconds() / 60
+                    if age_minutes > 3:
+                        is_stale = True
+                        logger.warning(f"{symbol}: Alpaca's latest bar is {age_minutes:.1f} min old (free-tier data delay) - preferring fresher fallback source")
+                except Exception:
+                    pass  # If timestamp can't be parsed, fall through to price-match check
+
+            if not is_stale:
+                # Get the latest quote to verify data accuracy
+                quote = self.get_latest_quote(symbol)
+                if quote:
+                    quote_price = (quote['bid_price'] + quote['ask_price']) / 2 if quote['bid_price'] > 0 and quote['ask_price'] > 0 else quote['bid_price'] or quote['ask_price']
+
+                    # Check if any bar is within 5% of current quote price
+                    bar_prices = [b['close'] for b in alpaca_bars[-20:]]  # Check last 20 bars
+                    price_match = any(abs(p - quote_price) / quote_price < 0.05 for p in bar_prices)
+
+                    if price_match:
+                        # Alpaca data looks accurate AND recent
+                        return {'bars': alpaca_bars, 'source': 'alpaca_iex'}
+                    else:
+                        logger.warning(f"{symbol}: Alpaca bars (${min(bar_prices):.2f}-${max(bar_prices):.2f}) don't match quote (${quote_price:.2f})")
         
         # Fallback to Yahoo Finance first (best free intraday data), then Nasdaq
         logger.info(f"{symbol}: Using Yahoo Finance fallback for intraday data")
