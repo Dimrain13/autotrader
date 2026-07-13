@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,33 +8,27 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Search, TrendingUp, Volume2, DollarSign, Newspaper, Users, PlayCircle, PauseCircle, Bell } from "lucide-react";
-import { scannerCache } from "../utils/scannerCache";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-export default function Scanner() {
+export default function Scanner({ scanner }) {
   const navigate = useNavigate();
-  const [scanning, setScanning] = useState(false);
-  const [autoScan, setAutoScan] = useState(() => {
-    const saved = localStorage.getItem('autoScan');
-    return saved === 'true';
-  });
-  const [demoMode, setDemoMode] = useState(() => {
-    const saved = localStorage.getItem('demoMode');
-    return saved === 'true';
-  });
-  const [autoTrade, setAutoTrade] = useState(() => {
-    const saved = localStorage.getItem('autoTrade');
-    return saved === 'true';
-  });
-  const [results, setResults] = useState([]);
+  const {
+    scanning, results, setResults,
+    autoScan, setAutoScan,
+    demoMode, setDemoMode,
+    autoTrade,
+    traderStatus,
+    lastScanTime, scanCount, nextScanCountdown,
+    criteria, updateCriteria,
+    runScan
+  } = scanner;
   const [momentumStocks, setMomentumStocks] = useState([]); // Stocks building momentum
   const [activeTab, setActiveTab] = useState(() => {
     const saved = localStorage.getItem('scannerActiveTab');
     return saved || 'gappers';
   });
-  const [traderStatus, setTraderStatus] = useState({ active: false, open_positions: 0, positions: [] });
   
   // Fetch momentum stocks
   const fetchMomentumStocks = async () => {
@@ -97,255 +91,15 @@ export default function Scanner() {
     
     return sorted;
   };
-  const [lastScanTime, setLastScanTime] = useState(null);
-  const [scanCount, setScanCount] = useState(0);
-  const [nextScanCountdown, setNextScanCountdown] = useState(60);
   const [newsModalOpen, setNewsModalOpen] = useState(false);
   const [selectedStockNews, setSelectedStockNews] = useState(null);
   const [loadingNews, setLoadingNews] = useState(false);
-  const intervalRef = useRef(null);
-  const countdownRef = useRef(null);
-  const [criteria, setCriteria] = useState(() => {
-    const saved = localStorage.getItem('scannerCriteria');
-    if (saved) {
-      return JSON.parse(saved);
-    }
-    return {
-      min_price: 2,
-      max_price: 20,
-      min_change: 10,
-      min_volume_ratio: 5,
-      max_float: 20000000
-    };
-  });
 
-  useEffect(() => {
-    // Load cached results immediately on mount for instant display
-    const cached = scannerCache.get();
-    if (cached && cached.data) {
-      setResults(cached.data);
-    }
-    
-    // Fetch trader status on mount and when autoTrade changes
-    if (autoTrade) {
-      fetchTraderStatus();
-    }
-  }, [autoTrade]);
-
-  // Separate effect: Re-run scan when criteria changes (but only if auto-scan is active)
-  useEffect(() => {
-    if (autoScan && !scanning) {
-      console.log('⚙️ Criteria changed, re-running scan...');
-      runScan(true);
-    }
-  }, [criteria]);
-
-  useEffect(() => {
-    if (autoScan) {
-      // Run scan immediately when auto-scan is enabled
-      console.log('🔄 Auto-scan enabled, starting immediate scan...');
-      // Auto-scan active
-      runScan(true);
-      setNextScanCountdown(60);
-      
-      // Countdown timer (updates every second)
-      countdownRef.current = setInterval(() => {
-        setNextScanCountdown(prev => {
-          if (prev <= 1) {
-            return 60;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      
-      // Run scan every 60 seconds
-      intervalRef.current = setInterval(() => {
-        console.log('🔄 Auto-scan interval triggered');
-        runScan(true);
-        setNextScanCountdown(60);
-      }, 60000);
-      
-      console.log('✅ Auto-scan intervals set up');
-    } else {
-      console.log('⏸️ Auto-scan disabled, clearing intervals');
-      // Clear intervals when auto-scan is disabled
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      if (countdownRef.current) {
-        clearInterval(countdownRef.current);
-        countdownRef.current = null;
-      }
-    }
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-      if (countdownRef.current) {
-        clearInterval(countdownRef.current);
-      }
-    };
-  }, [autoScan]);
-
-  const fetchTraderStatus = async () => {
-    try {
-      const response = await axios.get(`${API}/auto-trader/status`);
-      setTraderStatus(response.data);
-    } catch (error) {
-      console.error('Failed to fetch trader status:', error);
-    }
-  };
-
-  const runScan = async (isAutoScan = false) => {
-    setScanning(true);
-    if (!isAutoScan) {
-      // Scan starting silently
-    }
-    
-    // Load cached results immediately for instant display
-    const cached = scannerCache.get();
-    if (cached && cached.data && results.length === 0) {
-      setResults(cached.data);
-    }
-    
-    try {
-      let response;
-      let scanResults;
-      if (demoMode) {
-        // Use demo endpoint
-        response = await axios.get(`${API}/scanner/demo`, { params: criteria });
-        scanResults = response.data.results;
-      } else {
-        // Use real Alpaca scanner
-        response = await axios.post(`${API}/scanner/scan`, criteria);
-        scanResults = response.data;
-      }
-      
-      // Cache the fresh results
-      scannerCache.set(scanResults);
-      
-      // If auto-trading is enabled, trigger auto-trader processing
-      if (autoTrade && !demoMode) {
-        try {
-          await axios.post(`${API}/auto-trader/process`);
-          // Fetch updated trader status after processing
-          await fetchTraderStatus();
-        } catch (error) {
-          console.error('Auto-trader processing error:', error);
-        }
-      }
-      
-      // Merge strategy: Keep existing + add new + update existing
-      const updatedResults = [...results];
-      const existingSymbols = new Set(updatedResults.map(r => r.symbol));
-      const currentSymbols = new Set(scanResults.map(s => s.symbol));
-      
-      // 1. Update existing stocks with fresh data
-      scanResults.forEach(newStock => {
-        const existingIndex = updatedResults.findIndex(r => r.symbol === newStock.symbol);
-        if (existingIndex >= 0) {
-          // Update existing stock data
-          updatedResults[existingIndex] = {
-            ...newStock,
-            first_detected: updatedResults[existingIndex].first_detected || new Date().toISOString()
-          };
-        } else {
-          // Add new stock
-          updatedResults.push({
-            ...newStock,
-            first_detected: new Date().toISOString()
-          });
-        }
-      });
-      
-      // 2. Remove stocks that no longer meet criteria (not in current scan)
-      let finalResults = updatedResults.filter(stock => currentSymbols.has(stock.symbol));
-      
-      // 3. Sort by criteria count (highest first), then by volume ratio (highest first)
-      finalResults.sort((a, b) => {
-        // First, sort by criteria count (5/5 at top, then 4/5, etc.)
-        const criteriaCompare = (b.criteria_count || 0) - (a.criteria_count || 0);
-        if (criteriaCompare !== 0) return criteriaCompare;
-        
-        // If same criteria count, sort by volume ratio (highest first)
-        return (b.volume_ratio || 0) - (a.volume_ratio || 0);
-      });
-      
-      // 4. Detect NEW opportunities for notifications
-      if (isAutoScan && results.length > 0) {
-        const newSymbols = scanResults.filter(
-          stock => !existingSymbols.has(stock.symbol)
-        );
-        
-        // Notify about all new stocks
-        if (newSymbols.length > 0) {
-          // New opportunities detected silently
-          // Play notification sound
-          if (window.AudioContext) {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            oscillator.frequency.value = 800;
-            oscillator.type = 'sine';
-            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-            oscillator.start();
-            oscillator.stop(audioContext.currentTime + 0.2);
-          }
-        }
-        
-        // Notify about stocks that fell out of criteria
-        const removedSymbols = results.filter(
-          stock => !currentSymbols.has(stock.symbol)
-        );
-        
-        if (removedSymbols.length > 0) {
-          // Stocks removed silently
-        }
-      }
-      
-      setResults(finalResults);
-      setLastScanTime(new Date());
-      setScanCount(prev => prev + 1);
-      
-      if (!isAutoScan) {
-        // Scan complete
-      }
-    } catch (error) {
-      if (!isAutoScan) {
-        console.error('Scan failed:', error.message);
-      }
-      console.error('Scan error:', error);
-    } finally {
-      setScanning(false);
-    }
-  };
-
-  const toggleAutoScan = () => {
-    const newState = !autoScan;
-    setAutoScan(newState);
-    localStorage.setItem('autoScan', newState.toString());
-    if (newState) {
-      // Auto-scan enabled
-    } else {
-      // Auto-scan disabled
-    }
-  };
+  const toggleAutoScan = () => setAutoScan(!autoScan);
 
   const toggleAutoTrade = async () => {
-    const newState = !autoTrade;
     try {
-      await axios.post(`${API}/auto-trader/toggle?enabled=${newState}`);
-      setAutoTrade(newState);
-      localStorage.setItem('autoTrade', newState.toString());
-      if (newState) {
-        // Auto-trading enabled
-      } else {
-        // Auto-trading disabled
-      }
+      await scanner.toggleAutoTrade();
     } catch (error) {
       toast.error('Failed to toggle auto-trading: ' + error.message);
     }
@@ -354,7 +108,6 @@ export default function Scanner() {
   const toggleDemoMode = () => {
     const newState = !demoMode;
     setDemoMode(newState);
-    localStorage.setItem('demoMode', newState.toString());
     if (newState) {
       toast.info('Demo Mode ON - Using simulated market data');
     } else {
@@ -564,8 +317,7 @@ export default function Scanner() {
                 value={criteria.min_price}
                 onChange={(e) => {
                   const newCriteria = {...criteria, min_price: parseFloat(e.target.value)};
-                  setCriteria(newCriteria);
-                  localStorage.setItem('scannerCriteria', JSON.stringify(newCriteria));
+                  updateCriteria(newCriteria);
                 }}
                 className="mt-1 bg-[#121212] border-white/10 text-white font-mono"
               />
@@ -579,8 +331,7 @@ export default function Scanner() {
                 value={criteria.max_price}
                 onChange={(e) => {
                   const newCriteria = {...criteria, max_price: parseFloat(e.target.value)};
-                  setCriteria(newCriteria);
-                  localStorage.setItem('scannerCriteria', JSON.stringify(newCriteria));
+                  updateCriteria(newCriteria);
                 }}
                 className="mt-1 bg-[#121212] border-white/10 text-white font-mono"
               />
@@ -594,8 +345,7 @@ export default function Scanner() {
                 value={criteria.min_change}
                 onChange={(e) => {
                   const newCriteria = {...criteria, min_change: parseFloat(e.target.value)};
-                  setCriteria(newCriteria);
-                  localStorage.setItem('scannerCriteria', JSON.stringify(newCriteria));
+                  updateCriteria(newCriteria);
                 }}
                 className="mt-1 bg-[#121212] border-white/10 text-white font-mono"
               />
@@ -609,8 +359,7 @@ export default function Scanner() {
                 value={criteria.min_volume_ratio}
                 onChange={(e) => {
                   const newCriteria = {...criteria, min_volume_ratio: parseFloat(e.target.value)};
-                  setCriteria(newCriteria);
-                  localStorage.setItem('scannerCriteria', JSON.stringify(newCriteria));
+                  updateCriteria(newCriteria);
                 }}
                 className="mt-1 bg-[#121212] border-white/10 text-white font-mono"
               />
@@ -624,8 +373,7 @@ export default function Scanner() {
                 value={criteria.max_float}
                 onChange={(e) => {
                   const newCriteria = {...criteria, max_float: parseInt(e.target.value)};
-                  setCriteria(newCriteria);
-                  localStorage.setItem('scannerCriteria', JSON.stringify(newCriteria));
+                  updateCriteria(newCriteria);
                 }}
                 className="mt-1 bg-[#121212] border-white/10 text-white font-mono"
               />

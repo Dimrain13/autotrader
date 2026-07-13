@@ -1,79 +1,9 @@
-import { useState, useEffect } from "react";
-import axios from "axios";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TrendingUp, TrendingDown, DollarSign, Activity, Search } from "lucide-react";
-import { scannerCache } from "../utils/scannerCache";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-export default function Dashboard({ account }) {
-  const [positions, setPositions] = useState([]);
-  const [recentOrders, setRecentOrders] = useState([]);
-  const [scannerResults, setScannerResults] = useState([]);
-  const [scannerLoading, setScannerLoading] = useState(true);
-
-  useEffect(() => {
-    // Load cached scanner results immediately
-    const cached = scannerCache.get();
-    if (cached && cached.data) {
-      setScannerResults(cached.data);
-      setScannerLoading(false);
-    }
-    
-    fetchPositions();
-    fetchRecentOrders();
-    
-    // Fetch fresh scanner results if cache is stale or missing
-    if (!cached || !cached.isFresh) {
-      fetchScannerResults();
-    }
-    
-    const interval = setInterval(() => {
-      fetchPositions();
-      fetchRecentOrders();
-      fetchScannerResults(); // Update scanner every 60s
-    }, 60000); // 60 seconds
-    
-    return () => clearInterval(interval);
-  }, []);
-
-  const fetchScannerResults = async () => {
-    try {
-      const response = await axios.post(`${API}/scanner/scan`, {
-        min_price: 2,
-        max_price: 20,
-        min_change: 10,
-        min_volume_ratio: 5,
-        max_float: 20000000
-      });
-      
-      setScannerResults(response.data);
-      scannerCache.set(response.data); // Cache results
-      setScannerLoading(false);
-    } catch (error) {
-      console.error('Failed to fetch scanner results:', error);
-      setScannerLoading(false);
-    }
-  };
-
-  const fetchPositions = async () => {
-    try {
-      const response = await axios.get(`${API}/positions`);
-      setPositions(response.data);
-    } catch (error) {
-      console.error('Failed to fetch positions:', error);
-    }
-  };
-
-  const fetchRecentOrders = async () => {
-    try {
-      const response = await axios.get(`${API}/orders?limit=5`);
-      setRecentOrders(response.data);
-    } catch (error) {
-      console.error('Failed to fetch orders:', error);
-    }
-  };
+export default function Dashboard({ account, positions, recentOrders, scanner }) {
+  const scannerResults = scanner.results;
+  const scannerLoading = scanner.scanning && scannerResults.length === 0;
 
   const totalPL = positions.reduce((sum, pos) => sum + pos.unrealized_pl, 0);
   const totalPLPercent = account?.portfolio_value 
@@ -150,9 +80,9 @@ export default function Dashboard({ account }) {
               {scannerLoading && (
                 <span className="text-xs text-neutral-500 font-normal">(Loading...)</span>
               )}
-              {!scannerLoading && scannerCache.getAge() !== null && (
+              {!scannerLoading && scanner.lastScanTime && (
                 <span className="text-xs text-neutral-500 font-normal">
-                  (Updated {scannerCache.getAge()}s ago)
+                  (Updated {Math.floor((Date.now() - scanner.lastScanTime.getTime()) / 1000)}s ago)
                 </span>
               )}
             </div>

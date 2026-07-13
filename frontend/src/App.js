@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-do
 import axios from "axios";
 import { toast } from "sonner";
 import { getToken, setToken, clearToken } from "./lib/axiosConfig";
+import { useGlobalScanner } from "./hooks/useGlobalScanner";
 import Dashboard from "./pages/Dashboard";
 import Scanner from "./pages/Scanner";
 import Trading from "./pages/Trading";
@@ -224,8 +225,11 @@ function NavBar({ account, onLogout }) {
 
 function App() {
   const [account, setAccount] = useState(null);
+  const [positions, setPositions] = useState([]);
+  const [recentOrders, setRecentOrders] = useState([]);
   const [loading, setLoading] = useState(false); // Start false for instant UI
   const [authenticated, setAuthenticated] = useState(!!getToken());
+  const scanner = useGlobalScanner();
 
   useEffect(() => {
     const handleUnauthorized = () => setAuthenticated(false);
@@ -233,10 +237,20 @@ function App() {
     return () => window.removeEventListener("momentumx-unauthorized", handleUnauthorized);
   }, []);
 
+  // Global polling for account, positions and recent orders - lives at the
+  // App root so this data stays fresh no matter which page is open, instead
+  // of resetting/going stale every time the user navigates away from
+  // Dashboard (which used to own this fetch itself).
   useEffect(() => {
     if (!authenticated) return;
     fetchAccount();
-    const interval = setInterval(fetchAccount, 30000);
+    fetchPositions();
+    fetchRecentOrders();
+    const interval = setInterval(() => {
+      fetchAccount();
+      fetchPositions();
+      fetchRecentOrders();
+    }, 30000);
     return () => clearInterval(interval);
   }, [authenticated]);
 
@@ -277,6 +291,24 @@ function App() {
     }
   };
 
+  const fetchPositions = async () => {
+    try {
+      const response = await axios.get(`${API}/positions`);
+      setPositions(response.data);
+    } catch (error) {
+      console.error('Failed to fetch positions:', error);
+    }
+  };
+
+  const fetchRecentOrders = async () => {
+    try {
+      const response = await axios.get(`${API}/orders?limit=5`);
+      setRecentOrders(response.data);
+    } catch (error) {
+      console.error('Failed to fetch orders:', error);
+    }
+  };
+
   const handleLogout = () => {
     clearToken();
     setAuthenticated(false);
@@ -297,8 +329,8 @@ function App() {
             </div>
           ) : (
             <Routes>
-              <Route path="/" element={<Dashboard account={account} />} />
-              <Route path="/scanner" element={<Scanner />} />
+              <Route path="/" element={<Dashboard account={account} positions={positions} recentOrders={recentOrders} scanner={scanner} />} />
+              <Route path="/scanner" element={<Scanner scanner={scanner} />} />
               <Route path="/trading" element={<Trading />} />
               <Route path="/history" element={<History />} />
               <Route path="/missed" element={<MissedOpportunities />} />
