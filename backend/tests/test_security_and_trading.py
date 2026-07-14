@@ -197,7 +197,7 @@ class TestRealDataOnly:
         if r.status_code == 200:
             data = r.json()
             assert "source" in data
-            assert data["source"] in ["alpaca", "alpaca_iex", "yahoo", "nasdaq", "none", "unknown"]
+            assert data["source"] in ["alpaca", "alpaca_iex", "realtime_quote_only", "none", "unknown"]
 
     def test_entry_conditions_invalid_symbol_no_fake_data(self, session):
         r = session.get(f"{BASE_URL}/api/auto-trader/entry-conditions/ZZZZINVALIDSYMBOL")

@@ -740,270 +740,40 @@ class AlpacaService:
 
         return result
     
-    def get_bars_yahoo(self, symbol: str, interval: str = "5m", range_str: str = "1d"):
-        """
-        Get intraday chart data from Yahoo Finance.
-        Much better coverage than Nasdaq for most stocks.
-        Includes pre-market and after-hours data.
-        
-        Args:
-            symbol: Stock ticker
-            interval: 1m, 5m, 15m, 30m, 1h, 1d
-            range_str: 1d, 5d, 1mo, etc.
-        """
-        try:
-            # includePrePost=true gets pre-market and after-hours data
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={range_str}&includePrePost=true"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            response = self._http_session.get(url, headers=headers, timeout=10)
-            
-            if response.status_code != 200:
-                logger.warning(f"Yahoo Finance returned {response.status_code} for {symbol}")
-                return None
-            
-            data = response.json()
-            result = data.get('chart', {}).get('result', [])
-            
-            if not result:
-                return None
-            
-            chart_result = result[0]
-            timestamps = chart_result.get('timestamp', [])
-            quote = chart_result.get('indicators', {}).get('quote', [{}])[0]
-            
-            opens = quote.get('open', [])
-            highs = quote.get('high', [])
-            lows = quote.get('low', [])
-            closes = quote.get('close', [])
-            volumes = quote.get('volume', [])
-            
-            if not timestamps or not closes:
-                return None
-            
-            # Convert to our standard bar format
-            bars = []
-            for i, ts in enumerate(timestamps):
-                try:
-                    close_price = closes[i] if i < len(closes) and closes[i] else None
-                    if close_price is None:
-                        continue
-                    
-                    bars.append({
-                        'timestamp': datetime.fromtimestamp(ts).isoformat(),
-                        'open': opens[i] if i < len(opens) and opens[i] else close_price,
-                        'high': highs[i] if i < len(highs) and highs[i] else close_price,
-                        'low': lows[i] if i < len(lows) and lows[i] else close_price,
-                        'close': close_price,
-                        'volume': int(volumes[i]) if i < len(volumes) and volumes[i] else 0
-                    })
-                except (ValueError, TypeError, IndexError):
-                    continue
-            
-            if bars:
-                valid_closes = [b['close'] for b in bars if b['close']]
-                logger.info(f"Yahoo data for {symbol}: {len(bars)} bars, range ${min(valid_closes):.2f}-${max(valid_closes):.2f}")
-            return bars if bars else None
-            
-        except Exception as e:
-            logger.error(f"Error fetching Yahoo data for {symbol}: {e}")
-            return None
-
-    def get_bars_nasdaq(self, symbol: str):
-        """
-        Get intraday chart data from Nasdaq's free API.
-        This provides consolidated market data (all exchanges), not just IEX.
-        Use this as a fallback when Alpaca IEX data is incomplete.
-        """
-        try:
-            url = f"https://api.nasdaq.com/api/quote/{symbol}/chart?assetclass=stocks"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json'
-            }
-            response = self._http_session.get(url, headers=headers, timeout=10)
-            
-            if response.status_code != 200:
-                logger.warning(f"Nasdaq API returned {response.status_code} for {symbol}")
-                return None
-            
-            data = response.json()
-            chart_data = data.get('data', {}).get('chart', [])
-            
-            if not chart_data:
-                return None
-            
-            # Convert Nasdaq format to our standard bar format
-            bars = []
-            for point in chart_data:
-                try:
-                    z_data = point.get('z') or {}  # Handle None z_data
-                    price = float(point.get('y', 0))
-                    timestamp_ms = point.get('x', 0)
-                    time_str = z_data.get('dateTime', '') if z_data else ''
-                    
-                    # Skip invalid data points (price=0 or no timestamp)
-                    if price <= 0 or not timestamp_ms:
-                        continue
-                    
-                    # Nasdaq provides single price points, not OHLC
-                    # We'll use the price for all OHLC values
-                    bars.append({
-                        'timestamp': datetime.fromtimestamp(timestamp_ms / 1000).isoformat() if timestamp_ms else None,
-                        'time_label': time_str,
-                        'open': price,
-                        'high': price,
-                        'low': price,
-                        'close': price,
-                        'volume': 0  # Nasdaq chart doesn't include volume
-                    })
-                except (ValueError, TypeError) as e:
-                    continue
-            
-            if bars:
-                logger.info(f"Nasdaq data for {symbol}: {len(bars)} points, range ${min(b['close'] for b in bars):.2f}-${max(b['close'] for b in bars):.2f}")
-            else:
-                logger.warning(f"Nasdaq returned no valid data for {symbol}")
-            return bars if bars else None
-            
-        except Exception as e:
-            logger.error(f"Error fetching Nasdaq data for {symbol}: {e}")
-            return None
-    
     def get_bars_with_fallback(self, symbol: str, timeframe: str = "5Min", limit: int = 100):
         """
-        Get bar data with automatic fallback to Nasdaq if Alpaca IEX data is incomplete.
-        ONLY returns REAL data - never generates fake/synthetic data.
-        This ensures we always show accurate consolidated market data.
-        
-        For intraday timeframes (1Min, 5Min), uses Nasdaq for today + Alpaca daily for historical.
+        Get bar data - ALPACA ONLY (the real production market-data feed).
+
+        No Yahoo/Nasdaq fallback: that was a stopgap used during testing,
+        before the real-time Alpaca WebSocket stream existed. Now that the
+        stream (services/market_data_stream_service.py) fills the free-tier
+        REST embargo's ~15 minute gap with genuine live Alpaca data - merged
+        in by callers via market_data_stream.merge_with_stream() - a second
+        data PROVIDER is no longer needed or wanted. If Alpaca has no
+        historical bars at all (rate-limited, unknown symbol, etc.), this
+        returns an explicit "no data" response rather than ever mixing in
+        data from a different provider.
         """
-        alpaca_bars = None
-        
-        # First try Alpaca
         try:
             alpaca_bars = self.get_bars(symbol, timeframe, limit)
         except Exception as e:
             logger.warning(f"{symbol}: Alpaca bars failed: {e}")
-        
-        # Check if Alpaca data looks complete AND recent enough to display.
-        # IMPORTANT: price-similarity alone is not a reliable freshness
-        # signal - a low-volatility stock (e.g. AAPL) can easily stay within
-        # 5% of its current price for 15+ minutes, so a stale bar can pass
-        # the price check while still being far behind real-time. Alpaca's
-        # free-tier data plan embargoes the most recent ~15 minutes of bars
-        # (this is a real Alpaca data-plan limit, not a bug), so we must
-        # explicitly check the last bar's timestamp age and prefer the
-        # Yahoo/Nasdaq fallback (which serves more current data) whenever
-        # Alpaca's own data is too far behind "now" for intraday timeframes.
-        if alpaca_bars and len(alpaca_bars) > 10:
-            is_intraday = timeframe.startswith(("1M", "1m", "5M", "5m"))
-            is_stale = False
-            if is_intraday:
-                try:
-                    last_bar_ts = alpaca_bars[-1]['timestamp']
-                    last_bar_dt = datetime.fromisoformat(last_bar_ts)
-                    if last_bar_dt.tzinfo is None:
-                        last_bar_dt = last_bar_dt.replace(tzinfo=timezone.utc)
-                    age_minutes = (datetime.now(timezone.utc) - last_bar_dt).total_seconds() / 60
-                    if age_minutes > 3:
-                        is_stale = True
-                        logger.warning(f"{symbol}: Alpaca's latest bar is {age_minutes:.1f} min old (free-tier data delay) - preferring fresher fallback source")
-                except Exception:
-                    pass  # If timestamp can't be parsed, fall through to price-match check
+            alpaca_bars = None
 
-            if not is_stale:
-                # Get the latest quote to verify data accuracy
-                quote = self.get_latest_quote(symbol)
-                if quote:
-                    quote_price = (quote['bid_price'] + quote['ask_price']) / 2 if quote['bid_price'] > 0 and quote['ask_price'] > 0 else quote['bid_price'] or quote['ask_price']
+        if alpaca_bars:
+            return {'bars': alpaca_bars, 'source': 'alpaca_iex'}
 
-                    # Check if any bar is within 5% of current quote price
-                    bar_prices = [b['close'] for b in alpaca_bars[-20:]]  # Check last 20 bars
-                    price_match = any(abs(p - quote_price) / quote_price < 0.05 for p in bar_prices)
-
-                    if price_match:
-                        # Alpaca data looks accurate AND recent
-                        return {'bars': alpaca_bars, 'source': 'alpaca_iex'}
-                    else:
-                        logger.warning(f"{symbol}: Alpaca bars (${min(bar_prices):.2f}-${max(bar_prices):.2f}) don't match quote (${quote_price:.2f})")
-        
-        # Fallback to Yahoo Finance first (best free intraday data), then Nasdaq
-        logger.info(f"{symbol}: Using Yahoo Finance fallback for intraday data")
-        
-        # Map timeframe to Yahoo interval - check start of string to avoid false matches
-        if timeframe.startswith("1M") or timeframe.startswith("1m"):
-            yahoo_interval = "1m"
-            yahoo_range = "5d"  # Yahoo allows max 7 days for 1m data
-        elif timeframe.startswith("5M") or timeframe.startswith("5m"):
-            yahoo_interval = "5m"
-            yahoo_range = "5d"  # 5 days of 5-min data
-        elif timeframe.startswith("1D") or timeframe.startswith("1d"):
-            yahoo_interval = "1d"
-            yahoo_range = "1y"  # 1 year of daily data
-        else:
-            yahoo_interval = "5m"
-            yahoo_range = "5d"
-        
-        fallback_bars = self.get_bars_yahoo(symbol, yahoo_interval, yahoo_range)
-        
-        # If Yahoo fails, try Nasdaq
-        if not fallback_bars or len(fallback_bars) < 10:
-            logger.info(f"{symbol}: Yahoo insufficient, trying Nasdaq fallback")
-            nasdaq_bars = self.get_bars_nasdaq(symbol)
-            if nasdaq_bars and len(nasdaq_bars) > len(fallback_bars or []):
-                fallback_bars = nasdaq_bars
-        
-        if fallback_bars and len(fallback_bars) > 0:
-            combined_bars = list(fallback_bars)  # Today's real data
-            
-            # CRITICAL: Add a real-time bar using the current quote to ensure chart is up-to-date
-            try:
-                quote = self.get_latest_quote(symbol)
-                if quote:
-                    current_price = (quote['bid_price'] + quote['ask_price']) / 2 if quote['bid_price'] > 0 and quote['ask_price'] > 0 else quote['bid_price'] or quote['ask_price']
-                    
-                    # Check if the last bar is stale (more than 5 minutes old)
-                    now = datetime.now()
-                    last_bar_time = combined_bars[-1].get('timestamp', '')
-                    
-                    # Add a current-time bar with the real-time quote price
-                    realtime_bar = {
-                        'timestamp': now.isoformat(),
-                        'open': current_price,
-                        'high': current_price,
-                        'low': current_price,
-                        'close': current_price,
-                        'volume': 0,
-                        'realtime': True  # Mark as real-time quote data
-                    }
-                    combined_bars.append(realtime_bar)
-                    logger.info(f"{symbol}: Added real-time bar @ ${current_price:.2f}")
-            except Exception as quote_err:
-                logger.warning(f"{symbol}: Could not add real-time bar: {quote_err}")
-            
-            # Determine source for logging
-            source = 'yahoo' if fallback_bars == combined_bars[:-1] or (len(combined_bars) > 10 and any(b.get('volume', 0) > 0 for b in combined_bars)) else 'nasdaq'
-            
-            # Return ONLY real data - no synthetic/fake historical data
-            return {
-                'bars': combined_bars[-limit:],
-                'source': source,
-                'real_bars': len(combined_bars),
-            }
-        
-        # If BOTH Alpaca and Nasdaq fail, return only the real-time quote as a single data point
-        # DO NOT generate fake/synthetic historical data
-        logger.warning(f"{symbol}: No historical bar data available from Alpaca or Nasdaq")
+        # No historical bars from Alpaca - fall back to just the real-time
+        # Alpaca quote (still Alpaca, still real data, just a single point)
+        # rather than showing a completely blank chart.
+        logger.warning(f"{symbol}: No historical bar data available from Alpaca")
         try:
             quote = self.get_latest_quote(symbol)
             if quote:
                 current_price = (quote['bid_price'] + quote['ask_price']) / 2 if quote['bid_price'] > 0 and quote['ask_price'] > 0 else quote['bid_price'] or quote['ask_price']
                 if current_price > 0:
-                    # Return ONLY the real-time quote - no fake historical data
                     realtime_bar = {
-                        'timestamp': datetime.now().isoformat(),
+                        'timestamp': datetime.now(timezone.utc).isoformat(),
                         'open': current_price,
                         'high': current_price,
                         'low': current_price,
@@ -1011,7 +781,6 @@ class AlpacaService:
                         'volume': 0,
                         'realtime': True
                     }
-                    
                     logger.info(f"{symbol}: Returning real-time quote only @ ${current_price:.2f} - NO historical data available")
                     return {
                         'bars': [realtime_bar],
@@ -1022,11 +791,11 @@ class AlpacaService:
                     }
         except Exception as e:
             logger.error(f"{symbol}: Failed to get quote: {e}")
-        
+
         # No data at all
         return {
-            'bars': [], 
-            'source': 'none', 
+            'bars': [],
+            'source': 'none',
             'no_historical_data': True,
             'warning': 'NO DATA AVAILABLE'
         }

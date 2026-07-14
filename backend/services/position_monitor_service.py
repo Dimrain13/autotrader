@@ -238,7 +238,16 @@ class PositionMonitorService:
             if profit_pct >= 0:
                 return False
 
-            bars = await asyncio.to_thread(alpaca_service.get_bars_yahoo, symbol, "5m", "1d")
+            result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, "5Min", 100)
+            bars = [] if result.get('no_historical_data') else result.get('bars', [])
+            try:
+                from services.market_data_stream_service import market_data_stream
+                await market_data_stream.subscribe([symbol])
+                if bars:
+                    bars = market_data_stream.merge_with_stream(symbol, bars, "5Min", 100)
+            except Exception as e:
+                logger.debug(f"{symbol}: real-time stream merge skipped: {e}")
+
             if not bars or len(bars) < 50:
                 return False
 
