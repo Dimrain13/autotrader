@@ -143,11 +143,17 @@ class ScannerService:
             alpaca_rate_limiter.acquire()
             news_set = self.news_client.get_news(news_request)
 
-            if not news_set or not hasattr(news_set, 'news') or not news_set.news:
+            # IMPORTANT: alpaca-py's NewsSet model does NOT expose a `.news`
+            # attribute directly (that always raises/misses, silently making
+            # this check look like "no news" every single time and forcing
+            # 100% reliance on the slower Google News fallback) - the actual
+            # articles live under `.data['news']`.
+            news_list = news_set.data.get('news', []) if news_set and hasattr(news_set, 'data') else []
+            if not news_list:
                 return {'has_news': False, 'articles': []}
 
             articles = []
-            for article in news_set.news[:limit]:
+            for article in news_list[:limit]:
                 headline = str(getattr(article, 'headline', '') or '')
                 if not headline:
                     continue
@@ -177,7 +183,7 @@ class ScannerService:
             return {'has_news': False, 'articles': []}
 
         except Exception as e:
-            logger.debug(f"Error checking Alpaca news for {symbol}: {str(e)}")
+            logger.warning(f"{symbol}: Alpaca/Benzinga news check failed, falling back to Google News: {str(e)}")
             return {'has_news': False, 'articles': []}
     
     def check_bull_flag_pattern(self, bars: List[Dict]) -> bool:
