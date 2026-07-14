@@ -4,14 +4,62 @@ from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockQuotesRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+from requests.adapters import HTTPAdapter
 import os
 import requests
 import time
 import threading
+from collections import deque
 from datetime import datetime, timedelta, timezone
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class AlpacaRateLimiter:
+    """
+    Sliding-window rate limiter shared by every Alpaca Market Data API caller
+    in this app (scanner batch scans, quotes, bars, news) so concurrent usage
+    across services never collectively exceeds Alpaca's real account-level
+    cap (200 requests/minute on the free/Basic data plan). Without this,
+    bursty parallel scanning (10 ThreadPoolExecutor workers x 128+ batches)
+    reliably triggers "too many requests" 429s and silently drops candidates.
+    Capped below the real 200/min limit to leave headroom for other Alpaca
+    calls happening at the same time (Trading page quotes, auto-trader).
+    """
+    def __init__(self, max_per_minute: int = 170):
+        self.max_per_minute = max_per_minute
+        self._timestamps = deque()
+        self._lock = threading.Lock()
+
+    def acquire(self):
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._timestamps and now - self._timestamps[0] > 60:
+                    self._timestamps.popleft()
+                if len(self._timestamps) < self.max_per_minute:
+                    self._timestamps.append(now)
+                    return
+                wait_time = 60 - (now - self._timestamps[0]) + 0.05
+            time.sleep(max(wait_time, 0.05))
+
+
+alpaca_rate_limiter = AlpacaRateLimiter(max_per_minute=170)
+
+
+def mount_larger_connection_pool(session, pool_size: int = 20):
+    """
+    Alpaca's SDK clients each own a single shared `requests.Session()` used
+    by every concurrent ThreadPoolExecutor worker. The default urllib3
+    HTTPAdapter pool_maxsize is only 10, so 10 concurrent threads hitting
+    the same host can exceed it and trigger noisy "Connection pool is full,
+    discarding connection" warnings/churn. Mount a larger pool on the same
+    session so concurrent workers get a stable connection instead.
+    """
+    adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
 
 class AlpacaService:
     def __init__(self):
@@ -89,6 +137,8 @@ class AlpacaService:
         self.trading_client = self._paper_client
 
         self.data_client = StockHistoricalDataClient(api_key=data_api_key, secret_key=data_secret_key) if (data_api_key and data_secret_key) else None
+        if self.data_client:
+            mount_larger_connection_pool(self.data_client._session)
         data_source = "LIVE account" if os.getenv('ALPACA_DATA_API_KEY') else "same paper account (no ALPACA_DATA_API_KEY set)"
         logger.info(f"📊 Market data client: {data_source}")
 
@@ -165,6 +215,8 @@ class AlpacaService:
             # Get current quote to set a limit price that will fill immediately
             try:
                 quote = self.get_latest_quote(symbol)
+                if not quote:
+                    raise Exception(f"No quote data available for {symbol} - cannot safely place an extended-hours limit order")
                 ask_price = quote.get('ask_price', 0)
                 bid_price = quote.get('bid_price', 0)
 
@@ -614,6 +666,7 @@ class AlpacaService:
     def get_quotes(self, symbols):
         if not self.data_client:
             raise Exception("Alpaca API not configured")
+        alpaca_rate_limiter.acquire()
         request = StockLatestQuoteRequest(symbol_or_symbols=symbols)
         quotes = self.data_client.get_stock_latest_quote(request)
         result = {}
@@ -647,6 +700,7 @@ class AlpacaService:
         """Get latest quote for a single symbol with spread calculation"""
         if not self.data_client:
             raise Exception("Alpaca API not configured")
+        alpaca_rate_limiter.acquire()
         request = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
         quotes = self.data_client.get_stock_latest_quote(request)
         if symbol in quotes:
@@ -677,6 +731,7 @@ class AlpacaService:
     def get_bars(self, symbol: str, timeframe: str = "1Day", limit: int = 100):
         if not self.data_client:
             raise Exception("Alpaca API not configured")
+        alpaca_rate_limiter.acquire()
         end_date = datetime.now()
         
         # Map timeframe string to TimeFrame object

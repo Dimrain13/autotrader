@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import logging
 import threading
+import time
 from typing import List, Dict
 import pandas as pd
 import numpy as np
@@ -10,6 +11,8 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest
 import os
+
+from services.alpaca_service import alpaca_rate_limiter, mount_larger_connection_pool
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,8 @@ class ScannerService:
             self.trading_client = TradingClient(api_key=api_key, secret_key=secret_key, paper=True)
             self.data_client = StockHistoricalDataClient(api_key=data_api_key, secret_key=data_secret_key)
             self.news_client = NewsClient(api_key=data_api_key, secret_key=data_secret_key)
+            mount_larger_connection_pool(self.data_client._session)
+            mount_larger_connection_pool(self.news_client._session)
             self._load_stock_universe()
         else:
             self.trading_client = None
@@ -135,6 +140,7 @@ class ScannerService:
                 start=datetime.now(timezone.utc) - timedelta(hours=hours_back),
                 limit=limit
             )
+            alpaca_rate_limiter.acquire()
             news_set = self.news_client.get_news(news_request)
 
             if not news_set or not hasattr(news_set, 'news') or not news_set.news:
@@ -229,15 +235,30 @@ class ScannerService:
         lock = threading.Lock()
         
         def process_batch(batch_data):
-            """Process a single batch of stocks"""
+            """Process a single batch of stocks - rate-limited + retried on
+            Alpaca 429s so a transient rate-limit spike drops a batch's
+            candidates only as a last resort, not on the first hiccup."""
             batch_num, batch = batch_data
             local_results = []
-            
+
+            snapshots = None
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                try:
+                    alpaca_rate_limiter.acquire()
+                    snapshot_request = StockSnapshotRequest(symbol_or_symbols=batch)
+                    snapshots = self.data_client.get_stock_snapshot(snapshot_request)
+                    break
+                except Exception as e:
+                    if "too many requests" in str(e).lower() and attempt < max_retries:
+                        wait_s = 5 * (attempt + 1)
+                        logger.warning(f"Batch {batch_num}: rate limited, retrying in {wait_s}s (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_s)
+                        continue
+                    logger.error(f"Error processing batch {batch_num}: {str(e)}")
+                    return []
+
             try:
-                # Get snapshots for entire batch at once
-                snapshot_request = StockSnapshotRequest(symbol_or_symbols=batch)
-                snapshots = self.data_client.get_stock_snapshot(snapshot_request)
-                
                 # Filter by PRICE RANGE and % CHANGE
                 for symbol in batch:
                     if symbol not in snapshots:
@@ -277,10 +298,12 @@ class ScannerService:
                 logger.error(f"Error processing batch {batch_num}: {str(e)}")
                 return []
         
-        # Process batches in parallel (10 concurrent workers for optimal performance)
-        logger.info(f"⚡ PARALLEL SCAN: Processing {total_batches} batches with 10 concurrent workers")
+        # Process batches in parallel (6 concurrent workers - tuned to stay
+        # under Alpaca's 200 req/min data-API cap alongside the shared
+        # alpaca_rate_limiter, instead of just bursting and retrying)
+        logger.info(f"⚡ PARALLEL SCAN: Processing {total_batches} batches with 6 concurrent workers")
         
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             # Submit all batch jobs
             futures = {executor.submit(process_batch, (i, batch)): i 
                       for i, batch in enumerate(stock_batches)}
@@ -513,6 +536,7 @@ class ScannerService:
                 # why passing end=now() causes SIP data plan rejections.
             )
             
+            alpaca_rate_limiter.acquire()
             bars = self.data_client.get_stock_bars(bars_request)
             
             # Calculate average volume for each symbol
