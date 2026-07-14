@@ -95,6 +95,16 @@ class MarketDataStreamManager:
         if not self.is_configured:
             logger.warning("⚠️ Market data stream NOT started - ALPACA_DATA_API_KEY/SECRET (or ALPACA_API_KEY/SECRET) not configured")
             return
+        if os.getenv('MARKET_STREAM_ENABLED', 'true').lower() == 'false':
+            # Alpaca only allows ONE active WebSocket connection per API key
+            # pair at a time. Set MARKET_STREAM_ENABLED=false on any
+            # environment (e.g. a dev/preview instance) that shares the same
+            # ALPACA_DATA_API_KEY with a production deployment you don't want
+            # to contest the connection slot with (causes repeated "406
+            # connection limit exceeded" / "401 not authenticated" errors on
+            # whichever side loses the race).
+            logger.info("📡 Market data stream disabled via MARKET_STREAM_ENABLED=false")
+            return
         if self._task is None or self._task.done():
             self._stop_event.clear()
             self._task = asyncio.create_task(self._run_forever())
