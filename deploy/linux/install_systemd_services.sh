@@ -7,8 +7,9 @@
 # backend/.env (would destroy your entered Alpaca keys), and not letting
 # `useradd` hard-fail if the service user already exists.
 #
-# Run with sudo. Assumes the repo lives at /opt/momentumx (adjust paths in
-# the .service files if you placed it elsewhere).
+# Run with sudo. Works from wherever you clone the repo - it auto-detects
+# its own location and patches the systemd unit files to match (no need to
+# use /opt/momentumx specifically, though that's the recommended default).
 set -e
 
 if [ "$EUID" -ne 0 ]; then
@@ -187,6 +188,16 @@ echo "  Repo ownership set to momentumx:momentumx so the service user can read i
 
 cp "$SCRIPT_DIR/momentumx-backend.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/momentumx-frontend.service" /etc/systemd/system/
+# The checked-in .service files hardcode /opt/momentumx as a readable
+# default/example path. Substitute in the REAL detected repo location so
+# this works no matter what the repo folder is actually named/cloned to
+# (e.g. /opt/Internal-trader) - only rewrite if it actually differs, so
+# this stays a no-op on the common case.
+if [ "$ROOT_DIR" != "/opt/momentumx" ]; then
+    sed -i "s|/opt/momentumx|$ROOT_DIR|g" /etc/systemd/system/momentumx-backend.service
+    sed -i "s|/opt/momentumx|$ROOT_DIR|g" /etc/systemd/system/momentumx-frontend.service
+    echo "  Repo is at $ROOT_DIR (not /opt/momentumx) - patched systemd unit paths to match."
+fi
 systemctl daemon-reload
 systemctl enable momentumx-backend.service momentumx-frontend.service
 systemctl restart momentumx-backend.service
