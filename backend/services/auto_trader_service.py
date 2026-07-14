@@ -531,20 +531,34 @@ class AutoTraderService:
 
     async def _get_real_bars(self, symbol: str, timeframe: str = "5Min", limit: int = 100) -> Optional[List[Dict]]:
         """
-        Fetch bars using the real-data-only fallback chain (Alpaca -> Yahoo -> Nasdaq).
-        Never fabricates data. Returns None if no real data is available so callers
-        can skip the symbol instead of trading on fake bars.
+        Fetch bars using the real-data-only fallback chain (Alpaca -> Yahoo -> Nasdaq),
+        merged with the real-time Alpaca WebSocket stream to fill the free-tier's
+        ~15 minute REST embargo gap. This is what makes "First Pullback" entry
+        timing accurate - the newest 1-3 candles (the pullback itself) are exactly
+        what REST alone can't deliver in real time.
+
+        Never fabricates data. Returns None if no real data is available at all
+        so callers can skip the symbol instead of trading on fake bars.
         """
+        bars = None
         try:
             result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, timeframe, limit)
-            if result.get('no_historical_data'):
-                logger.warning(f"{symbol}: No real historical data available - skipping")
-                return None
-            bars = result.get('bars', [])
-            return bars if bars else None
+            if not result.get('no_historical_data'):
+                bars = result.get('bars', []) or None
         except Exception as e:
             logger.warning(f"{symbol}: Failed to fetch real bars: {e}")
-            return None
+
+        try:
+            from services.market_data_stream_service import market_data_stream
+            await market_data_stream.subscribe([symbol])
+            if bars:
+                bars = market_data_stream.merge_with_stream(symbol, bars, timeframe, limit)
+        except Exception as e:
+            logger.debug(f"{symbol}: real-time stream merge skipped: {e}")
+
+        if not bars:
+            logger.warning(f"{symbol}: No real historical data available - skipping")
+        return bars if bars else None
 
     async def check_entry_signals(self, stock: Dict) -> Optional[Dict]:
         """

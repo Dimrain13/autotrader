@@ -1,8 +1,9 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
 import logging
+import jwt
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Dict, Literal
@@ -61,6 +62,59 @@ async def login(request: Request, body: LoginRequest):
 async def get_me(email: str = Depends(verify_token)):
     return {"email": email}
 
+# WebSocket endpoint lives on its own unprotected router - browsers cannot
+# set custom Authorization headers on a WebSocket handshake, so the JWT is
+# passed as a `?token=` query param and verified manually below instead of
+# via the shared Header-based verify_token() dependency.
+ws_router = APIRouter()
+
+@ws_router.websocket("/api/ws/market-data")
+async def market_data_ws(websocket: WebSocket, token: Optional[str] = Query(None)):
+    """
+    Real-time market data push to the frontend - trades/quotes/minute-bars
+    forwarded live from the Alpaca IEX WebSocket stream (see
+    services/market_data_stream_service.py). Client sends
+    {"action": "subscribe", "symbols": ["AAPL", ...]} to add symbols of
+    interest; only messages for subscribed symbols are forwarded back.
+    """
+    if not token:
+        await websocket.close(code=4401)
+        return
+    try:
+        payload = jwt.decode(token, os.environ["JWT_SECRET"], algorithms=["HS256"])
+        if payload.get("type") != "access":
+            raise ValueError("Invalid token type")
+    except Exception:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept()
+    listener_queue = market_data_stream.register_listener()
+    client_symbols: set = set()
+
+    async def forward_stream():
+        while True:
+            msg = await listener_queue.get()
+            symbol = msg.get("S")
+            if symbol is None or symbol in client_symbols:
+                await websocket.send_json(msg)
+
+    forward_task = asyncio.create_task(forward_stream())
+    try:
+        while True:
+            data = await websocket.receive_json()
+            if data.get("action") == "subscribe":
+                symbols = [str(s).upper() for s in data.get("symbols", []) if s]
+                client_symbols.update(symbols)
+                await market_data_stream.subscribe(symbols)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.debug(f"market_data_ws client loop ended: {e}")
+    finally:
+        forward_task.cancel()
+        market_data_stream.unregister_listener(listener_queue)
+
 api_router = APIRouter(prefix="/api", dependencies=[Depends(verify_token)])
 
 # Import services
@@ -71,6 +125,7 @@ from services.position_monitor_service import position_monitor
 from services.eod_closer_service import eod_closer
 from services.trade_history_service import trade_history
 from services.missed_opportunities_service import missed_opportunities
+from services.market_data_stream_service import market_data_stream
 import asyncio
 
 class TradeOrder(BaseModel):
@@ -856,9 +911,13 @@ async def check_entry_conditions(symbol: str):
     """
     try:
         # Get bars for analysis - REAL DATA ONLY (Alpaca -> Yahoo -> Nasdaq fallback
-        # chain). Never fabricate bars; if no real data is available, skip this symbol.
+        # chain), merged with the real-time WebSocket stream to fill the free-tier's
+        # ~15 minute REST embargo gap. Never fabricate bars; if no real data is
+        # available, skip this symbol.
+        await market_data_stream.subscribe([symbol])
         bars_result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, "5Min", 100)
         bars = [] if bars_result.get('no_historical_data') else bars_result.get('bars', [])
+        bars = market_data_stream.merge_with_stream(symbol, bars, "5Min", 100)
         
         if not bars or len(bars) < 20:
             return {
@@ -1093,21 +1152,47 @@ async def run_demo_scan(
 async def get_quotes(symbols: str):
     try:
         symbol_list = symbols.split(",")
-        quotes = await asyncio.to_thread(alpaca_service.get_quotes, symbol_list)
-        return quotes
+        # Serve from the real-time stream cache wherever we have a fresh
+        # (<8s old) quote - falls back to REST only for symbols not
+        # actively streamed yet.
+        result = {}
+        rest_needed = []
+        for s in symbol_list:
+            cached = market_data_stream.get_cached_quote(s)
+            if cached:
+                result[s.upper()] = cached
+            else:
+                rest_needed.append(s)
+        if rest_needed:
+            rest_quotes = await asyncio.to_thread(alpaca_service.get_quotes, rest_needed)
+            result.update(rest_quotes)
+        asyncio.create_task(market_data_stream.subscribe(symbol_list))
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.get("/market/quote/{symbol}")
 async def get_quote(symbol: str):
     try:
+        cached = market_data_stream.get_cached_quote(symbol)
+        if cached:
+            asyncio.create_task(market_data_stream.subscribe([symbol]))
+            return cached
         quotes = await asyncio.to_thread(alpaca_service.get_quotes, [symbol])
+        asyncio.create_task(market_data_stream.subscribe([symbol]))
         if quotes and symbol in quotes:
             return quotes[symbol]
         else:
             raise HTTPException(status_code=404, detail=f"Quote not found for {symbol}")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/market/stream-status")
+async def get_stream_status():
+    """Debug/UI endpoint - current Alpaca real-time WebSocket stream health."""
+    return market_data_stream.get_status()
 
 @api_router.get("/market/bars/{symbol}")
 async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_fallback: bool = True):
@@ -1116,17 +1201,23 @@ async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_f
 
     Never generates synthetic/fake OHLC data. If no real data is available
     from Alpaca, Yahoo, or Nasdaq, returns an explicit "no data" response
-    instead of fabricating bars.
+    instead of fabricating bars. For intraday timeframes, the free-tier's
+    ~15 minute REST embargo gap is filled in with genuinely real-time bars
+    from the Alpaca WebSocket stream (subscribing this symbol as a side effect).
     """
     try:
         if use_fallback and timeframe in ["5Min", "1Min"]:
+            # Keep this symbol streaming going forward (fire-and-forget -
+            # doesn't block this request; benefits the NEXT call/tick).
+            asyncio.create_task(market_data_stream.subscribe([symbol]))
             # Use fallback method for intraday data - run in thread pool to avoid blocking
             result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, timeframe, limit)
+            bars = market_data_stream.merge_with_stream(symbol, result.get('bars', []), timeframe, limit)
             return {
-                'bars': result.get('bars', []),
+                'bars': bars,
                 'source': result.get('source', 'unknown'),
                 'warning': result.get('warning'),
-                'no_historical_data': result.get('no_historical_data', False),
+                'no_historical_data': result.get('no_historical_data', False) and not bars,
                 'symbol': symbol
             }
         else:
@@ -1301,6 +1392,13 @@ async def auto_trader_loop():
                     "max_float": 20_000_000
                 }
                 scanner_results = await asyncio.to_thread(scanner_service.scan_stocks, criteria)
+                # Keep the WebSocket stream fed with every scanner candidate
+                # so entry-signal bar checks below have real-time data to
+                # merge with the REST fallback chain (fills the free-tier's
+                # ~15 min embargo gap right as candidates emerge).
+                candidate_symbols = [s.get('symbol') for s in scanner_results if s.get('symbol')]
+                if candidate_symbols:
+                    await market_data_stream.subscribe(candidate_symbols)
                 account = await asyncio.to_thread(alpaca_service.get_account)
                 portfolio_value = account.get('portfolio_value', 0)
                 await auto_trader.process_scanner_results(scanner_results, portfolio_value)
@@ -1309,6 +1407,7 @@ async def auto_trader_loop():
         await asyncio.sleep(60)
 
 app.include_router(auth_router)
+app.include_router(ws_router)
 app.include_router(api_router)
 
 # CORS (Phase 1 #3): explicit origins only, never '*' with allow_credentials=True
@@ -1376,7 +1475,13 @@ async def startup_services():
     # Start the real auto-trader background loop (Phase 3 #9) - runs
     # unattended on the VPS, independent of the frontend/browser being open.
     asyncio.create_task(auto_trader_loop())
-    
+
+    # Start the real-time Alpaca WebSocket market data stream - replaces
+    # REST polling (15-min free-tier embargo) for anything actively
+    # subscribed. Always uses the LIVE/data key pair regardless of the
+    # paper/live trading-mode toggle (see market_data_stream_service.py).
+    market_data_stream.start()
+
     # IMPORTANT: Auto-sync all existing positions to monitoring on startup
     # This ensures stop-loss and take-profit are active for ALL positions
     try:
@@ -1401,12 +1506,18 @@ async def startup_services():
                     synced_count += 1
             if synced_count > 0:
                 logger.info(f"📊 Auto-synced {synced_count} existing position(s) to monitoring")
+
+        # Immediately start streaming live data for any open positions -
+        # no need to wait for the auto-trader loop's next scan cycle.
+        if existing_positions:
+            await market_data_stream.subscribe([p['symbol'] for p in existing_positions])
     except Exception as e:
         logger.error(f"Failed to auto-sync positions on startup: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
     position_monitor.stop()
+    await market_data_stream.stop()
     eod_closer.stop()
     client.close()
     logger.info("🛑 Services shut down")

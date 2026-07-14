@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { DollarSign, TrendingUp, TrendingDown, Activity, Search, Loader2 } from "lucide-react";
 import StockChartCard from "@/components/StockChartCard";
 import { scannerCache } from "../utils/scannerCache";
+import { useMarketDataSocket } from "../hooks/useMarketDataSocket";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -148,6 +149,44 @@ export default function Trading() {
   const [stockData, setStockData] = useState({}); // {symbol: {bars, quote, sma20}}
   const [stockNews, setStockNews] = useState({}); // {symbol: {has_news, articles, last_updated}}
   const [loading, setLoading] = useState(false); // Start with false for instant display
+
+  // Real-time Alpaca WebSocket market data (replaces REST polling for price
+  // ticks - REST's free-tier data is ~15min delayed, this is genuinely live).
+  const { quotes: liveQuotes, connected: wsConnected, subscribe: wsSubscribe } = useMarketDataSocket();
+
+  // Keep the live stream subscribed to every symbol currently visible on
+  // screen (selected charts + open positions + top scanner candidates).
+  useEffect(() => {
+    const symbols = new Set(selectedStocks);
+    positions.forEach(p => symbols.add(p.symbol));
+    scannerResults.slice(0, 20).forEach(s => symbols.add(s.symbol));
+    momentumStocks.slice(0, 10).forEach(s => symbols.add(s.symbol));
+    if (symbols.size > 0) wsSubscribe(Array.from(symbols));
+  }, [selectedStocks, positions, scannerResults, momentumStocks, wsSubscribe]);
+
+  // Merge live WS quote ticks straight into stockData - instant bid/ask/price
+  // updates for any symbol with a chart open, between the 15s REST poll ticks.
+  useEffect(() => {
+    setStockData(prev => {
+      let changed = false;
+      const next = { ...prev };
+      Object.keys(prev).forEach(symbol => {
+        const q = liveQuotes[symbol];
+        if (!q) return;
+        next[symbol] = {
+          ...next[symbol],
+          quote: { ...next[symbol].quote, ...q },
+          bid: q.bid_price ?? next[symbol].bid,
+          ask: q.ask_price ?? next[symbol].ask,
+          spread_pct: (q.bid_price > 0 && q.ask_price > 0)
+            ? ((q.ask_price - q.bid_price) / ((q.bid_price + q.ask_price) / 2)) * 100
+            : next[symbol].spread_pct
+        };
+        changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [liveQuotes]);
 
   // Fetch market status
   useEffect(() => {
@@ -1326,8 +1365,9 @@ export default function Trading() {
                     {sellingAll ? 'SELLING...' : `SELL ALL (${positions.length})`}
                   </Button>
                 )}
-                <div className="text-[10px] text-neutral-500">
-                  Auto-refresh: 30s
+                <div className="text-[10px] text-neutral-500 flex items-center gap-1.5" data-testid="stream-status-indicator">
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-[#00E599] animate-pulse' : 'bg-neutral-600'}`} />
+                  {wsConnected ? 'Live stream connected' : 'Reconnecting...'}
                 </div>
               </div>
             </div>
