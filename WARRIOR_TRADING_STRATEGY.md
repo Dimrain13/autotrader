@@ -2,7 +2,13 @@
 
 ## 📋 Overview
 
-This auto-trader implements Ross Cameron's **Small Cap Momentum Strategy** for pre-market/morning entries (7 AM - 11 AM EST), managing and closing positions until 3:30 PM EST.
+This auto-trader implements Ross Cameron's **"First Pullback" Small Cap
+Momentum Strategy** for entries throughout 7 AM - 3:30 PM EST, managing
+and closing all positions by 3:30 PM EST.
+
+> **For the full rule-by-rule breakdown with diagrams**, see
+> [`WARRIOR_TRADING_FIRST_PULLBACK_STRATEGY.md`](./WARRIOR_TRADING_FIRST_PULLBACK_STRATEGY.md) —
+> this file is the quick-reference summary.
 
 ---
 
@@ -21,10 +27,11 @@ All stocks must meet these criteria before consideration:
 
 ### **Entry Signals (All Must Be Met)**
 
-1. **Micro-Pullback Pattern** (required)
-   - Recent high established (rally peak)
-   - 1-3 green candle pullback pattern
-   - Price breaking above high (new breakout)
+1. **First Pullback Pattern** (required)
+   - Initial high-volume surge, then a recent high established
+   - 1-3 RED candle pullback (profit-taking)
+   - The 50% Rule: pullback must hold at least 50% of the initial surge
+   - Entry: first candle to break the high of the preceding red candle
 
 2. **Volume Confirmation**
    - Green volume bars after a red bar (buying pressure)
@@ -55,7 +62,7 @@ Examples:
 
 This sizing allows for:
 - Multiple positions (up to 5 concurrent)
-- Room for losses without major damage (tight 1% stop keeps per-trade risk low)
+- Room for losses without major damage (structural stop is safety-capped at 3% of entry)
 - Steady account growth through base hits
 
 ---
@@ -64,14 +71,15 @@ This sizing allows for:
 
 | Metric | Value | Formula |
 |--------|-------|---------|
-| **Profit Target** | +2% | Entry × 1.02 (sell 50%, move stop to breakeven) |
-| **Stop Loss** | -1% | Entry × 0.99 (trailing) |
+| **Stop Loss** | Structural | Low of the pullback candles (capped at 3% of entry, safety limit) |
+| **Profit Target** | 2:1 | Entry + 2 × (Entry - Stop) — sell 50%, move stop to breakeven |
 | **Risk/Reward** | 2:1 | Ross Cameron / Warrior Trading core rule |
 
 **Example Trade:**
-- Entry: $10.00
-- Stop Loss: $9.90 (-1%)
-- Profit Target: $10.20 (+2%, sell half + breakeven stop on rest)
+- Entry: $10.00 (breakout above the pullback high)
+- Stop Loss: $9.90 (the actual low of the pullback candles)
+- Risk: $0.10/share
+- Profit Target: $10.20 (2:1 — sell half, move stop to breakeven on the rest)
 - On 100 shares:
   - Risk: $10
   - Reward: $20
@@ -82,17 +90,17 @@ This sizing allows for:
 
 The auto-trader monitors positions and exits when:
 
-1. **Profit Target Hit** (+2%)
+1. **Profit Target Hit** (2:1 reward:risk)
    - Sell 50% of the position, move stop to break-even on the rest
    - Lock in gains while letting a winner run
 
-2. **Trailing Stop Hit** (-1%)
+2. **Structural Stop Hit** (low of the pullback)
    - Cut losses fast
    - Don't hold and hope
 
-3. **MACD Bearish Cross (while losing)**
-   - MACD crosses below signal line and position is negative
-   - Exit early instead of waiting for the stop
+3. **"Breakout or Bailout"** (90s time-stop)
+   - If the trade hasn't moved into profit within 90 seconds of entry, exit immediately
+   - True momentum resolves almost instantly — don't wait for the full stop to hit
 
 4. **End of Trading Window** (3:30 PM EST)
    - Close all positions
@@ -113,9 +121,10 @@ The auto-trader monitors positions and exits when:
 - **STOP TRADING** for the day
 - Reset next trading day
 
-#### **Trading Hours: Entries 7:00 AM - 11:00 AM EST, managed until 3:30 PM EST**
-- Pre-market and morning momentum window for new entries
-- After 11 AM: manage existing positions only, no new entries
+#### **Trading Hours: Entries + Management 7:00 AM - 3:30 PM EST**
+- Entries and position management run the full window (already-fixed
+  dead code that once restricted entries to a false "7-11 AM" window
+  has been removed - see Session 11 in `/app/memory/PRD.md`)
 - Auto-close all positions at 3:30 PM EST
 - Software-managed stops (pre-market/extended hours has no broker stops)
 
@@ -131,9 +140,9 @@ The auto-trader monitors positions and exits when:
 
 ### **Pre-Market Safety**
 - **No broker stop-loss orders** (not available pre-market)
-- **Software monitors every 30 seconds**
-- **Automatic exits** on stop loss or profit target
-- **MACD exit signals** for momentum reversal
+- **Software monitors every 60 seconds** (auto-trader background loop)
+- **Automatic exits** on structural stop, breakout-or-bailout, or profit target
+- **"Breakout or bailout"** time-stop for stalled entries
 
 ### **Position Limits**
 - Max 5 concurrent positions
@@ -175,14 +184,15 @@ SMA_LONG=50         # Slow SMA (default: 50)
 Located in `/app/backend/services/auto_trader_service.py`:
 
 ```python
-self.position_size_pct = 0.10          # 10% of account per trade
-self.profit_target_pct = 0.02          # 2% profit target (sell 50%, breakeven stop on rest)
-self.stop_loss_pct = 0.01              # 1% trailing stop loss
-self.daily_max_loss_pct = 0.01         # 1% max daily loss (hard kill switch)
-self.max_consecutive_losses = 3         # Max 3 losses then done
-self.require_micro_pullback = True      # 1-3 green candle pullback required for entry
-self.trading_start_hour = 7             # 7 AM EST (entries)
-self.trading_end_hour = 15              # 3:30 PM EST (manage/close)
+self.position_size_pct = 0.10               # 10% of account per trade
+self.pullback_retracement_max_pct = 0.50    # The 50% Rule
+self.max_stop_distance_pct = 0.03           # Safety cap on structural stop distance
+self.breakout_bailout_seconds = 90          # Time-stop if trade never turns profitable
+self.daily_max_loss_pct = 0.01              # 1% max daily loss (hard kill switch)
+self.max_consecutive_losses = 3             # Max 3 losses then done
+self.require_micro_pullback = True          # First-pullback pattern required for entry
+self.trading_start_hour = 7                 # 7 AM EST (entries)
+self.trading_end_hour = 15                  # 3:30 PM EST (manage/close)
 self.trading_end_minute = 30
 ```
 
@@ -194,8 +204,8 @@ When auto-trader is active, the Scanner page shows:
 
 ### **Strategy Metrics**
 - Position Size: 10%
-- Profit Target: +2% (partial)
-- Stop Loss: -1% (trailing)
+- Profit Target: 2:1 reward:risk (partial)
+- Stop Loss: structural (low of pullback, capped at 3%)
 - Daily P&L: Real-time tracking
 - Loss Streak: X / 3
 
@@ -219,7 +229,7 @@ When auto-trader is active, the Scanner page shows:
 - Review open positions
 
 ### **3. Let It Run**
-- System trades automatically 7-11 AM EST
+- System trades automatically 7 AM - 3:30 PM EST
 - Follows all rules precisely
 - No emotion, no deviation
 
@@ -259,9 +269,9 @@ Based on Ross Cameron's courses:
 - **Sample-Trading-Plan.pdf** - Position sizing & risk management
 
 ### **Key Concepts**
-- **Micro-pullbacks**: 1-3% retracements on front side of momentum
+- **First Pullback**: 1-3 red candles after a surge, must hold 50%+, entry breaks the pullback high
 - **Base hits over home runs**: Consistent small wins
-- **Cut losses fast**: Don't hold and hope
+- **Cut losses fast**: Don't hold and hope (structural stop + breakout-or-bailout time-stop)
 - **Quality over quantity**: Only A+ setups
 
 ---
@@ -270,7 +280,7 @@ Based on Ross Cameron's courses:
 
 ### **Week 1: Observation**
 - Watch scanner results
-- Study micro-pullback patterns
+- Study first-pullback patterns
 - Note MACD signals
 
 ### **Week 2: Small Positions**
@@ -312,7 +322,7 @@ Based on Ross Cameron's courses:
 ## 🛠️ Troubleshooting
 
 ### **Auto-Trader Not Executing**
-1. Check if within trading hours (7-11 AM EST)
+1. Check if within trading hours (7 AM - 3:30 PM EST)
 2. Verify risk limits not breached
 3. Confirm scanner has 5/5 stocks
 4. Check logs for entry signal details

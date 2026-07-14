@@ -84,11 +84,11 @@ export default function Settings() {
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Profit Target</div>
-                <div className="text-[#00E599] font-mono font-bold">+2% (sell 50%, move stop to breakeven)</div>
+                <div className="text-[#00E599] font-mono font-bold">2:1 vs. risk (sell 50%, move stop to breakeven)</div>
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Stop Loss</div>
-                <div className="text-[#FF1A40] font-mono font-bold">-1% trailing</div>
+                <div className="text-[#FF1A40] font-mono font-bold">Low of the pullback (structural, capped at 3%)</div>
               </div>
               <div>
                 <div className="text-neutral-500 text-xs uppercase mb-1">Daily Max Loss</div>
@@ -109,13 +109,13 @@ export default function Settings() {
             </div>
             <div className="mt-4 pt-4 border-t border-white/10">
               <div className="text-neutral-400 text-xs">
-                <strong>Entry Signals:</strong> Micro-pullback (1-3 green candles, required) + MACD Bullish Crossover + SMA20/50 Crossover + Volume confirmation + Scanner 5/5
+                <strong>Entry Signals:</strong> First Pullback (1-3 red candles, breaks prior high, holds the 50% Rule, required) + MACD Bullish Crossover + SMA20/50 Crossover + Volume confirmation + Scanner 5/5
               </div>
               <div className="text-neutral-400 text-xs mt-1">
-                <strong>Exit Signals:</strong> Partial profit +2% (sell 50%, breakeven stop) | Trailing stop -1% | MACD Bearish Crossover while losing | End of window (3:30 PM)
+                <strong>Exit Signals:</strong> Structural stop (pullback low) hit | 2:1 profit target (sell 50%, breakeven stop) | Breakout-or-Bailout (exit if not in profit within 90s) | End of window (3:30 PM)
               </div>
               <div className="text-neutral-400 text-xs mt-2">
-                <strong>Note:</strong> All stops are software-managed (pre-market/extended hours have no broker stops). Params match Ross Cameron's documented Warrior Trading rules (2:1 reward:risk, 1% conservative daily-loss limit, 3-strikes circuit breaker, $2-$20 low-float momentum universe).
+                <strong>Note:</strong> All stops are software-managed (pre-market/extended hours have no broker stops). Params match Ross Cameron's documented "First Pullback" Warrior Trading rules (2:1 reward:risk off the pullback low, 1% conservative daily-loss limit, 3-strikes circuit breaker, $2-$20 low-float momentum universe).
               </div>
             </div>
           </div>

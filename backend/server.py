@@ -755,6 +755,9 @@ async def get_auto_trader_status():
             "pullback_min_candles": auto_trader.pullback_min_candles,
             "pullback_max_candles": auto_trader.pullback_max_candles,
             "pullback_lookback_bars": auto_trader.pullback_lookback_bars,
+            "pullback_retracement_max_pct": auto_trader.pullback_retracement_max_pct * 100,
+            "max_stop_distance_pct": auto_trader.max_stop_distance_pct * 100,
+            "breakout_bailout_seconds": auto_trader.breakout_bailout_seconds,
             "require_micro_pullback": auto_trader.require_micro_pullback,
             "require_macd_crossover": auto_trader.require_macd_crossover,
             "require_sma_crossover": auto_trader.require_sma_crossover,
@@ -789,6 +792,9 @@ async def update_auto_trader_settings(settings: dict):
                 "pullback_min_candles": auto_trader.pullback_min_candles,
                 "pullback_max_candles": auto_trader.pullback_max_candles,
                 "pullback_lookback_bars": auto_trader.pullback_lookback_bars,
+                "pullback_retracement_max_pct": auto_trader.pullback_retracement_max_pct * 100,
+                "max_stop_distance_pct": auto_trader.max_stop_distance_pct * 100,
+                "breakout_bailout_seconds": auto_trader.breakout_bailout_seconds,
                 "require_micro_pullback": auto_trader.require_micro_pullback,
                 "require_macd_crossover": auto_trader.require_macd_crossover,
                 "require_sma_crossover": auto_trader.require_sma_crossover,
@@ -832,8 +838,8 @@ async def check_entry_conditions(symbol: str):
     Check entry conditions for a specific stock.
     Returns which conditions are met vs pending for the auto-trader.
     
-    Entry conditions (Warrior Trading Strategy):
-    1. Micro-pullback pattern (1-3% retracement)
+    Entry conditions (Warrior Trading "First Pullback" Strategy):
+    1. First pullback pattern (1-3 red candles, breaks prior high, holds the 50% Rule)
     2. MACD bullish (above signal line)
     3. Price above SMA20 (uptrend)
     4. Bull flag pattern (optional bonus)
@@ -854,13 +860,13 @@ async def check_entry_conditions(symbol: str):
         # Check each condition
         conditions = {}
         
-        # 1. Micro-pullback pattern check (1-3 green candles)
-        pullback_check = auto_trader.check_micro_pullback(bars)
-        green_candles = pullback_check.get('green_candles', 0)
+        # 1. First-pullback pattern check (1-3 red candles, then breaks the prior candle's high, holding the 50% Rule)
+        pullback_check = auto_trader.check_first_pullback(bars)
+        pullback_candles = pullback_check.get('pullback_candles', 0)
         conditions['micro_pullback'] = {
             'met': pullback_check['is_valid'],
-            'label': 'Pullback (1-3 green)',
-            'detail': f"{green_candles} green candle{'s' if green_candles != 1 else ''}" if pullback_check['is_valid'] else f"{green_candles} green candle{'s' if green_candles != 1 else ''} (need 1-3)"
+            'label': 'First Pullback (1-3 red)',
+            'detail': pullback_check.get('pattern') if pullback_check['is_valid'] else pullback_check.get('reason', f"{pullback_candles} red candle{'s' if pullback_candles != 1 else ''} found")
         }
         
         # 2. MACD check (crossover or just above, based on settings)

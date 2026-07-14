@@ -2,21 +2,30 @@
 Warrior Trading Momentum Auto-Trader
 Based on Ross Cameron's Small Cap Momentum Strategy (Warrior Trading "5 Pillars")
 
-STRATEGY RULES (aligned with Ross Cameron's documented Warrior Trading rules,
-see warriortrading.com/momentum-day-trading-strategy, /position-sizing,
-/daily-goal - reconciled 2026 to remove the earlier 5%/10%/5%/10% doc
-mismatch and match what the code actually enforces):
-1. Entry: Micro-pullback (1-3 green candles) on the front side of momentum,
-   confirmed by MACD bullish crossover + SMA20/50 crossover + volume + 5/5 scanner criteria
-2. Position Size: 10% of account per trade (up to 5 concurrent = 50% max exposure)
-3. Profit Target: +2% - sell 50% (partial), move stop to break-even
-4. Stop Loss: -1% trailing, managed in software (pre-market/extended hours has no broker stops)
-   -> 2:1 profit-target:stop-loss ratio, matching Warrior Trading's core risk/reward rule
-5. Daily Max Loss: 1% of account (Ross Cameron's conservative starting rule) - HARD KILL SWITCH
-6. Max Consecutive Losses: 3 (then done for day) - "three strikes" rule
-7. Time Window: entries + position management 7 AM - 3:30 PM EST, all positions closed by 3:30 PM EST
-8. Exit Signals: trailing stop hit, MACD bearish crossover while losing, profit target hit, end of window
-9. Stock Selection (5 Pillars): $2-$20 price, <20M float, high relative volume, news catalyst, bullish MACD/bull flag
+STRATEGY RULES (aligned with Ross Cameron's documented "First Pullback"
+Warrior Trading rules - see /app/WARRIOR_TRADING_FIRST_PULLBACK_STRATEGY.md
+for the full breakdown with screenshots):
+1. Entry ("First Pullback"): after a high-volume surge, wait for 1-3 RED
+   candles (profit-taking), then buy the first candle to break the high of
+   the immediately preceding red candle - confirmed by MACD bullish
+   crossover + SMA20/50 crossover + volume + 5/5 scanner criteria.
+2. The 50% Rule: the pullback must hold at least 50% of the initial surge -
+   if it retraces further than the surge's midpoint, the setup is discarded
+   (too weak / low conviction).
+3. Position Size: 10% of account per trade (up to 5 concurrent = 50% max exposure)
+4. Stop Loss: structural - the LOW of the pullback (not an arbitrary %),
+   capped at max_stop_distance_pct for safety (skip the trade entirely if
+   the structural stop is further away than that cap - too risky).
+5. Profit Target: a true 2:1 reward:risk off the structural stop
+   (entry + 2 x (entry - stop)) - sell 50% there, move stop to break-even.
+6. "Breakout or Bailout": if the trade hasn't moved into profit within
+   breakout_bailout_seconds, exit immediately rather than waiting for the
+   full stop to be hit - true momentum resolves almost instantly.
+7. Daily Max Loss: 1% of account (Ross Cameron's conservative starting rule) - HARD KILL SWITCH
+8. Max Consecutive Losses: 3 (then done for day) - "three strikes" rule
+9. Time Window: entries + position management 7 AM - 3:30 PM EST, all positions closed by 3:30 PM EST
+10. Exit Signals: structural stop hit, breakout-or-bailout time-stop, profit target hit, end of window
+11. Stock Selection (5 Pillars): $2-$20 price, <20M float, high relative volume, news catalyst, bullish MACD/bull flag
 
 Risk/position state (open_positions, daily_pnl, consecutive_losses,
 exited_today, trade_history) is persisted to MongoDB so it survives a
@@ -53,15 +62,18 @@ class AutoTraderService:
         self.max_consecutive_losses = 3  # "Three strikes" rule - done for the day
 
         # Entry condition settings (adjustable)
-        self.pullback_min_candles = 1  # Minimum green candles in pullback
-        self.pullback_max_candles = 3  # Maximum green candles in pullback
-        self.pullback_lookback_bars = 10  # Number of bars to look back for pullback pattern
-        self.require_micro_pullback = True  # Require 1-3 green candle micro-pullback pattern (Warrior Trading core entry trigger)
+        self.pullback_min_candles = 1  # Minimum red pullback candles
+        self.pullback_max_candles = 3  # Maximum red pullback candles
+        self.pullback_lookback_bars = 10  # Number of bars to look back for the first-pullback pattern
+        self.pullback_retracement_max_pct = 0.50  # The 50% Rule: pullback must hold >= 50% of the initial surge
+        self.max_stop_distance_pct = 0.03  # Safety cap: skip trade if structural (pullback-low) stop is further than this from entry
+        self.require_micro_pullback = True  # Require the 1-3 red-candle "first pullback" pattern (Warrior Trading core entry trigger)
         self.require_macd_crossover = True  # Require MACD to cross above signal (not just be above)
         self.require_sma_crossover = True   # Require price to cross above SMA (not just be above)
         self.require_bull_flag = False  # Require bull flag pattern (bonus condition)
         self.require_volume_confirmation = True  # Require green volume bars after red
         self.sma_period = 20
+        self.breakout_bailout_seconds = 90  # "Breakout or bailout": exit if not in profit within this many seconds of entry
 
         # Daily tracking
         self.daily_pnl = 0.0
@@ -149,6 +161,12 @@ class AutoTraderService:
             self.pullback_max_candles = int(settings['pullback_max_candles'])
         if 'pullback_lookback_bars' in settings:
             self.pullback_lookback_bars = int(settings['pullback_lookback_bars'])
+        if 'pullback_retracement_max_pct' in settings:
+            self.pullback_retracement_max_pct = float(settings['pullback_retracement_max_pct']) / 100
+        if 'max_stop_distance_pct' in settings:
+            self.max_stop_distance_pct = float(settings['max_stop_distance_pct']) / 100
+        if 'breakout_bailout_seconds' in settings:
+            self.breakout_bailout_seconds = int(settings['breakout_bailout_seconds'])
         if 'require_micro_pullback' in settings:
             self.require_micro_pullback = bool(settings['require_micro_pullback'])
         if 'require_macd_crossover' in settings:
@@ -328,61 +346,115 @@ class AutoTraderService:
             'prev_signal': prev_signal
         }
 
-    def check_micro_pullback(self, bars: List[Dict]) -> Dict:
+    def check_first_pullback(self, bars: List[Dict]) -> Dict:
         """
-        Check for micro-pullback pattern (1-3 green candles after a move up)
+        Ross Cameron's "First Pullback" entry pattern (Warrior Trading):
+
+        1. An initial high-volume surge moves the stock up rapidly (already
+           screened for by the 5-pillar scanner before this is ever called).
+        2. The FIRST pullback after that surge is 1-3 RED candles
+           (profit-taking) - this is "the pullback".
+        3. The 50% Rule: the pullback must hold at least 50% of the initial
+           surge. If price retraces below the surge's midpoint, the setup
+           is too weak and must be discarded.
+        4. Entry trigger: the first candle to make a new high above the
+           high of the immediately preceding red pullback candle - the
+           moment the trend shifts back from down to up.
+        5. The structural stop-loss is the LOW of the pullback (not an
+           arbitrary %) - this is what `check_entry_signals` uses to size
+           the trade's real risk and 2:1 profit target.
         """
         lookback = self.pullback_lookback_bars
         if len(bars) < lookback:
-            return {'is_valid': False, 'green_candles': 0, 'entry_price': 0, 'lookback': lookback}
+            return {'is_valid': False, 'pullback_candles': 0, 'entry_price': 0, 'lookback': lookback}
 
         recent_bars = bars[-lookback:]
+        if len(recent_bars) < 6:
+            return {'is_valid': False, 'pullback_candles': 0, 'entry_price': 0, 'lookback': lookback}
 
-        if len(recent_bars) < 5:
-            return {'is_valid': False, 'green_candles': 0, 'entry_price': 0, 'lookback': lookback}
+        breakout_bar = recent_bars[-1]
+        is_breakout_green = breakout_bar['close'] > breakout_bar['open']
 
-        recent_high = max(b['high'] for b in recent_bars[:-3])
+        # Walk backward collecting the consecutive RED candles immediately
+        # preceding the latest (potential breakout) bar - this is "the pullback".
+        red_candles = []
+        i = len(recent_bars) - 2
+        while i >= 0 and recent_bars[i]['close'] < recent_bars[i]['open']:
+            red_candles.append(recent_bars[i])
+            i -= 1
 
-        green_candle_count = 0
-        pullback_started = False
-
-        for i in range(len(recent_bars) - 1, max(len(recent_bars) - 5, 0), -1):
-            bar = recent_bars[i]
-            is_green = bar['close'] > bar['open']
-            is_red = bar['close'] < bar['open']
-
-            if is_green:
-                green_candle_count += 1
-                pullback_started = True
-            elif is_red and pullback_started:
-                break
-            elif is_red and not pullback_started:
-                continue
-
-        is_valid_pullback = 1 <= green_candle_count <= 3
-
-        current_price = bars[-1]['close']
-        current_bar = bars[-1]
-        is_current_green = current_bar['close'] > current_bar['open']
-
-        near_high = current_price >= current_bar['high'] * 0.98
-
-        if is_valid_pullback and is_current_green and near_high:
+        pullback_count = len(red_candles)
+        if pullback_count == 0:
             return {
-                'is_valid': True,
-                'green_candles': green_candle_count,
-                'entry_price': current_price,
-                'recent_high': recent_high,
-                'lookback': lookback,
-                'pattern': f'{green_candle_count} green candle pullback'
+                'is_valid': False, 'pullback_candles': 0, 'entry_price': 0,
+                'reason': 'No red pullback candles found before the latest bar', 'lookback': lookback
             }
 
+        if not (self.pullback_min_candles <= pullback_count <= self.pullback_max_candles):
+            return {
+                'is_valid': False, 'pullback_candles': pullback_count, 'entry_price': 0,
+                'reason': f'{pullback_count} red candles (need {self.pullback_min_candles}-{self.pullback_max_candles})',
+                'lookback': lookback
+            }
+
+        # The candle immediately before the breakout bar (most recent red candle)
+        prev_candle_high = red_candles[0]['high']
+        breaks_prior_high = breakout_bar['high'] > prev_candle_high
+
+        if not (is_breakout_green and breaks_prior_high):
+            return {
+                'is_valid': False, 'pullback_candles': pullback_count, 'entry_price': 0,
+                'reason': f'Latest bar has not yet broken the pullback high of ${prev_candle_high:.2f}',
+                'lookback': lookback
+            }
+
+        # Identify the initial surge (bars BEFORE the pullback started) to
+        # measure the 50% retracement rule against.
+        surge_bars = recent_bars[:i + 1]
+        surge_window = surge_bars[-8:] if len(surge_bars) > 8 else surge_bars
+        if len(surge_window) < 2:
+            return {
+                'is_valid': False, 'pullback_candles': pullback_count, 'entry_price': 0,
+                'reason': 'Not enough bars before the pullback to measure the initial surge',
+                'lookback': lookback
+            }
+
+        surge_peak = max(b['high'] for b in surge_window)
+        surge_start_low = min(b['low'] for b in surge_window)
+        pullback_low = min(b['low'] for b in red_candles)
+        pullback_high = max(b['high'] for b in red_candles)
+
+        surge_size = surge_peak - surge_start_low
+        if surge_size <= 0:
+            return {
+                'is_valid': False, 'pullback_candles': pullback_count, 'entry_price': 0,
+                'reason': 'No measurable initial surge before the pullback', 'lookback': lookback
+            }
+
+        retracement_pct = (surge_peak - pullback_low) / surge_size * 100
+        max_retracement_pct = self.pullback_retracement_max_pct * 100
+
+        if retracement_pct > max_retracement_pct:
+            return {
+                'is_valid': False, 'pullback_candles': pullback_count, 'entry_price': 0,
+                'reason': f'Pullback retraced {retracement_pct:.0f}% of the initial move (>{max_retracement_pct:.0f}% limit) - too weak',
+                'retracement_pct': retracement_pct, 'lookback': lookback
+            }
+
+        entry_price = breakout_bar['close']
+
         return {
-            'is_valid': False,
-            'green_candles': green_candle_count,
-            'entry_price': 0,
-            'reason': 'Not 1-3 green candles' if not is_valid_pullback else 'Current bar not showing strength',
-            'lookback': lookback
+            'is_valid': True,
+            'pullback_candles': pullback_count,
+            'entry_price': entry_price,
+            'stop_loss_price': pullback_low,
+            'pullback_high': pullback_high,
+            'pullback_low': pullback_low,
+            'surge_peak': surge_peak,
+            'surge_start_low': surge_start_low,
+            'retracement_pct': retracement_pct,
+            'lookback': lookback,
+            'pattern': f'{pullback_count} red-candle pullback, broke high of ${prev_candle_high:.2f} (held {100 - retracement_pct:.0f}% of surge)'
         }
 
     def check_sma_confirmation(self, bars: List[Dict]) -> Dict:
@@ -476,16 +548,18 @@ class AutoTraderService:
 
     async def check_entry_signals(self, stock: Dict) -> Optional[Dict]:
         """
-        Check entry conditions (Warrior Trading Strategy):
+        Check entry conditions (Warrior Trading "First Pullback" Strategy):
 
         1. Stock meets 5/5 scanner criteria
-        2. Micro-pullback pattern (1-3 green candles after a move up)
-        3. Green volume bars after red bar (buying pressure)
-        4. MACD bullish (crossover or above signal)
-        5. SMA(short) > SMA50 (crossover or just above)
-        6. Within trading hours
-        7. Not already in position
-        8. Not exited today (no re-entry rule)
+        2. First-pullback pattern (1-3 red candles, then breaks the prior
+           candle's high) with the 50% Rule holding
+        3. Structural stop (pullback low) is not further than max_stop_distance_pct away
+        4. Green volume bars after red bar (buying pressure)
+        5. MACD bullish (crossover or above signal)
+        6. SMA(short) > SMA50 (crossover or just above)
+        7. Within trading hours
+        8. Not already in position
+        9. Not exited today (no re-entry rule)
         """
         symbol = stock.get('symbol')
         try:
@@ -507,9 +581,25 @@ class AutoTraderService:
                 logger.debug(f"{symbol}: Only {criteria_count}/5 criteria met - need 5/5")
                 return None
 
-            pullback_check = self.check_micro_pullback(bars)
-            if self.require_micro_pullback and not pullback_check['is_valid']:
-                logger.debug(f"{symbol}: No valid micro-pullback pattern - {pullback_check.get('reason', 'n/a')}")
+            pullback_check = self.check_first_pullback(bars)
+            if self.require_micro_pullback:
+                if not pullback_check['is_valid']:
+                    logger.debug(f"{symbol}: No valid first-pullback pattern - {pullback_check.get('reason', 'n/a')}")
+                    return None
+                entry_price = pullback_check['entry_price']
+                stop_loss_price = pullback_check['stop_loss_price']
+            else:
+                entry_price = bars[-1]['close']
+                stop_loss_price = entry_price * (1 - self.stop_loss_pct)
+
+            risk_per_share = entry_price - stop_loss_price
+            if risk_per_share <= 0:
+                logger.debug(f"{symbol}: Invalid structural stop (>= entry price) - skipping")
+                return None
+
+            risk_pct = risk_per_share / entry_price
+            if risk_pct > self.max_stop_distance_pct:
+                logger.debug(f"{symbol}: Structural stop too far ({risk_pct*100:.1f}% > {self.max_stop_distance_pct*100:.0f}% max) - too risky, skipping")
                 return None
 
             volume_check = self.check_volume_confirmation(bars)
@@ -545,12 +635,15 @@ class AutoTraderService:
                     logger.debug(f"{symbol}: No bull flag pattern - no entry")
                     return None
 
-            current_price = bars[-1]['close']
+            target_price = entry_price + (2 * risk_per_share)  # True 2:1 reward:risk off the structural stop
             entry_signal = {
                 'symbol': symbol,
-                'entry_price': current_price,
+                'entry_price': entry_price,
+                'stop_loss_price': stop_loss_price,
+                'target_price': target_price,
+                'risk_per_share': risk_per_share,
                 'criteria_count': criteria_count,
-                'micro_pullback': pullback_check,
+                'first_pullback': pullback_check,
                 'volume_confirmation': volume_check,
                 'macd': macd_check['macd'],
                 'macd_signal': macd_check['signal'],
@@ -561,7 +654,7 @@ class AutoTraderService:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
-            logger.info(f"🎯 ENTRY SIGNAL: {symbol} @ ${entry_signal['entry_price']:.2f} (5/5 criteria)")
+            logger.info(f"🎯 ENTRY SIGNAL: {symbol} @ ${entry_price:.2f} (5/5 criteria) | Stop: ${stop_loss_price:.2f} | Target (2:1): ${target_price:.2f}")
             logger.info(f"   Pullback: {pullback_check.get('pattern', 'n/a')} | Volume: {volume_check['green_after_red']} green after red | MACD: {'crossover' if macd_check['crossover'] else 'bullish'} | SMA{self.sma_period}/50: {'crossover' if sma_check['crossover'] else 'confirmed'}")
 
             return entry_signal
@@ -571,7 +664,7 @@ class AutoTraderService:
             return None
 
     async def execute_entry(self, signal: Dict, portfolio_value: float) -> bool:
-        """Execute buy order with trailing stop loss management"""
+        """Execute buy order with structural stop-loss (pullback low) + 2:1 profit target"""
         try:
             symbol = signal['symbol']
             entry_price = signal['entry_price']
@@ -582,8 +675,8 @@ class AutoTraderService:
                 logger.warning(f"Position size too small for {symbol}")
                 return False
 
-            initial_stop = entry_price * (1 - self.trailing_stop_pct)
-            profit_target = entry_price * (1 + self.profit_target_pct)
+            initial_stop = signal['stop_loss_price']
+            profit_target = signal['target_price']
 
             order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "buy")
 
@@ -598,6 +691,7 @@ class AutoTraderService:
                     'trailing_stop': initial_stop,
                     'highest_price': entry_price,
                     'profit_target': profit_target,
+                    'risk_per_share': signal.get('risk_per_share'),
                     'partial_sell_done': False,
                     'breakeven_stop_active': False,
                     'entry_time': datetime.now(timezone.utc).isoformat(),
@@ -608,8 +702,8 @@ class AutoTraderService:
                 await self.save_state()
 
                 logger.info(f"✅ AUTO-BUY: {symbol} - {shares} shares @ ${entry_price:.2f}")
-                logger.info(f"   Trailing Stop: ${initial_stop:.2f} ({self.trailing_stop_pct*100:.1f}%) | Target: ${profit_target:.2f} ({self.profit_target_pct*100:.1f}%)")
-                logger.info(f"   At {self.profit_target_pct*100:.0f}% profit: Sell {self.partial_sell_pct*100:.0f}% and move stop to break-even")
+                logger.info(f"   Structural Stop (pullback low): ${initial_stop:.2f} | 2:1 Target: ${profit_target:.2f} | Bailout: {self.breakout_bailout_seconds}s if no follow-through")
+                logger.info(f"   At target: Sell {self.partial_sell_pct*100:.0f}% and move stop to break-even")
 
                 return True
 
@@ -652,11 +746,12 @@ class AutoTraderService:
 
     async def monitor_exits(self, portfolio_value: float):
         """
-        Monitor positions for exit signals (SOFTWARE-MANAGED TRAILING STOP):
+        Monitor positions for exit signals (SOFTWARE-MANAGED):
 
-        1. Trailing stop hit (trailing_stop_pct below highest price)
-        2. Profit target hit - Sell partial_sell_pct, move stop to break-even
-        3. End of trading window
+        1. Structural/trailing stop hit
+        2. "Breakout or Bailout" time-stop - not in profit within breakout_bailout_seconds
+        3. Profit target hit (2:1) - sell partial_sell_pct, move stop to break-even
+        4. End of trading window
         """
         try:
             if not self.open_positions:
@@ -698,7 +793,7 @@ class AutoTraderService:
                 if not position_data.get('partial_sell_done', False) and current_price >= position_data['profit_target']:
                     partial_shares = int(shares * self.partial_sell_pct)
                     if partial_shares >= 1:
-                        logger.info(f"📈 PARTIAL PROFIT: {symbol} hit {self.profit_target_pct*100:.0f}% target!")
+                        logger.info(f"📈 PARTIAL PROFIT: {symbol} hit 2:1 target (${position_data['profit_target']:.2f})!")
 
                         success = await self.sell_with_retry(symbol, partial_shares, f"PARTIAL PROFIT ({self.partial_sell_pct*100:.0f}%)")
 
@@ -717,6 +812,21 @@ class AutoTraderService:
                             state_changed = True
                             continue
 
+                # "Breakout or Bailout" - Ross Cameron's rule: true momentum
+                # resolves almost instantly. If a fresh entry hasn't moved
+                # into profit within breakout_bailout_seconds, get out now
+                # rather than waiting for the full structural stop to hit.
+                bailout_triggered = False
+                if not position_data.get('partial_sell_done', False) and current_price <= entry_price:
+                    entry_time_str = position_data.get('entry_time')
+                    if entry_time_str:
+                        try:
+                            entry_dt = datetime.fromisoformat(entry_time_str)
+                            seconds_since_entry = (datetime.now(timezone.utc) - entry_dt).total_seconds()
+                            bailout_triggered = seconds_since_entry >= self.breakout_bailout_seconds
+                        except Exception:
+                            bailout_triggered = False
+
                 should_exit = False
                 exit_reason = ""
                 shares_to_sell = int(float(current_position['qty']))
@@ -726,7 +836,11 @@ class AutoTraderService:
                     if position_data.get('breakeven_stop_active'):
                         exit_reason = f"BREAKEVEN STOP HIT ${current_price:.2f} <= ${trailing_stop:.2f}"
                     else:
-                        exit_reason = f"TRAILING STOP HIT ${current_price:.2f} <= ${trailing_stop:.2f} ({pnl_pct:.2f}%)"
+                        exit_reason = f"STRUCTURAL STOP HIT ${current_price:.2f} <= ${trailing_stop:.2f} ({pnl_pct:.2f}%)"
+
+                elif bailout_triggered:
+                    should_exit = True
+                    exit_reason = f"BREAKOUT OR BAILOUT - no follow-through within {self.breakout_bailout_seconds}s ({pnl_pct:.2f}%)"
 
                 elif past_trading_hours:
                     should_exit = True
