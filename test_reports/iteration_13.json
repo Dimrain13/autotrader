@@ -1,0 +1,32 @@
+{
+  "summary": "Verified the sed-based path-substitution fix in /app/deploy/linux/install_systemd_services.sh (lines 189-200) that resolves the custom-clone-directory systemd bug. All test scenarios PASSED via offline simulation (no live systemd used, as instructed).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "No code changes required - fix is verified correct.",
+    "Optional/non-blocking: README.md (deploy/linux/README.md lines 14-17) still states the systemd files 'assume this exact path' (/opt/momentumx) and instructs users to move their clone there - this text is now stale since the installer auto-patches paths. Consider updating README wording to mention custom-directory support, but this is documentation-only and not a functional bug."
+  ],
+  "critical_code_review_comments": [
+    "install_systemd_services.sh passes `bash -n` syntax check with zero errors.",
+    "Sed substitution logic (lines 196-200) correctly guards with `if [ \"$ROOT_DIR\" != \"/opt/momentumx\" ]` before running the two sed -i commands, making it a true no-op for the documented default path.",
+    "start.sh (separate manual-run script) already computed ROOT_DIR dynamically via BASH_SOURCE and never hardcodes /opt/momentumx - no bug there.",
+    "uninstall_systemd_services.sh has no path assumptions (uses static service names only) - no bug there.",
+    "No other deploy/linux files require changes."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A - not tested per request scope"},
+  "test_credentials": "None required for this test",
+  "seed_data_creation": "None - created only temporary throwaway .service file copies in /tmp for simulation, cleaned up after test",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "This iteration exclusively covered the deploy/linux/install_systemd_services.sh custom-directory sed-substitution fix (lines 189-200). Verified via direct simulation (copied momentumx-backend.service/momentumx-frontend.service templates + extracted sed logic into /tmp, ran against both a custom ROOT_DIR=/tmp/test_install/Internal-trader and the default ROOT_DIR=/opt/momentumx) - did NOT touch the live running MomentumX app (frontend/backend) which is unrelated to this test, per the request scope. No app-level regression testing was done in this pass.",
+  "rca_of_the_issue": "Original bug: two static systemd .service templates hardcoded /opt/momentumx in WorkingDirectory/PATH/ExecStart; when repo was cloned to /opt/Internal-trader, the deployed unit files still pointed at /opt/momentumx which doesn't exist, causing systemd to fail starting the backend/frontend. Fix: script now computes SCRIPT_DIR/ROOT_DIR from its own real location and, only when ROOT_DIR differs from /opt/momentumx, runs sed -i to replace all /opt/momentumx occurrences in both copied unit files with the real ROOT_DIR before daemon-reload/enable/start. Verified: (1) custom dir case -> WorkingDirectory, PATH env, and ExecStart binary path in momentumx-backend.service and WorkingDirectory in momentumx-frontend.service all correctly rewritten to /tmp/test_install/Internal-trader/... with zero remaining /opt/momentumx references (grep count = 0 on both files); (2) default /opt/momentumx case -> sed block skipped entirely (guard condition false), files remained byte-identical to source templates (diff = empty, grep count unchanged: 3 refs in backend.service, 1 in frontend.service) confirming true no-op regression safety; (3) bash -n syntax check on full script passed with no errors; (4) reviewed start.sh, uninstall_systemd_services.sh, and README.md - no other hardcoded-path bugs found (start.sh already dynamically derives ROOT_DIR; uninstall script has no path deps; README references to /opt/momentumx are advisory documentation only, not functional, minor staleness noted as non-blocking action item)."
+}
