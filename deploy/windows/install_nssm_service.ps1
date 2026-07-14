@@ -18,7 +18,7 @@ PREREQUISITES:
   4. MongoDB Community installed as a Windows service (its own installer
      offers "Install as a Service" - tick that box), or run separately.
   5. backend\.env configured (copy from .env.example) with a real
-     API_ACCESS_TOKEN and your Alpaca paper keys.
+     JWT_SECRET, ADMIN_EMAIL/ADMIN_PASSWORD, and your Alpaca paper keys.
 
 USAGE (run as Administrator in PowerShell):
   cd deploy\windows

@@ -29,10 +29,12 @@ notepad .env
 ```
 
 Fill in:
-- `API_ACCESS_TOKEN` — a long random string (Phase 1 #1). Generate one with:
-  `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+- `JWT_SECRET` — a long random string used to sign login sessions. Generate one with:
+  `python -c "import secrets; print(secrets.token_hex(32))"`
+- `ADMIN_EMAIL` / `ADMIN_PASSWORD` — the single login account for this app (used on the login screen)
 - `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` — from alpaca.markets (use **paper**
-  keys until you've verified everything works)
+  keys until you've verified everything works) - used for ALL order execution
+- `ALPACA_DATA_API_KEY` / `ALPACA_DATA_SECRET_KEY` — optional, a separate key pair (can be a live account) used only for read-only market data/news, never trading
 - `CORS_ORIGINS` — leave as `http://localhost:3000,http://127.0.0.1:3000` for
   the RDP-only setup
 
@@ -91,8 +93,8 @@ Open a browser **on the VPS itself** (via RDP) and go to:
 ```
 http://127.0.0.1:3000
 ```
-You should see the MomentumX token gate — enter the `API_ACCESS_TOKEN` from
-your `.env` file to unlock the app.
+You should see the MomentumX login screen — sign in with the
+`ADMIN_EMAIL`/`ADMIN_PASSWORD` you set in your `.env` file.
 
 ## 7. Alternative: Docker Desktop
 
@@ -103,7 +105,7 @@ Windows is a fully supported alternative if you change your mind later.
 
 ## Security notes (Phase 1 recap)
 - The backend rejects **every** `/api` request without a valid
-  `Authorization: Bearer <API_ACCESS_TOKEN>` header.
+  `Authorization: Bearer <JWT>` header, obtained by logging in at `/api/auth/login`.
 - Alpaca API key/secret are **never** returned by the API in plaintext, and
   are managed **only** via `backend\.env` — there is no in-app way to edit
   or view them (by design, to remove the runtime `.env`-rewriting risk).

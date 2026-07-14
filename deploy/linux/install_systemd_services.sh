@@ -83,35 +83,70 @@ cd "$ROOT_DIR/backend"
 
 if [ -f ".env" ]; then
     echo "  backend/.env already exists - leaving it untouched (won't overwrite your keys)."
+    if ! grep -q "^JWT_SECRET=" .env; then
+        echo "  WARNING: your existing .env predates email+password login and is missing"
+        echo "  JWT_SECRET/ADMIN_EMAIL/ADMIN_PASSWORD - add these lines to backend/.env"
+        echo "  manually, then restart momentumx-backend:"
+        echo '    JWT_SECRET="'$(python3 -c "import secrets; print(secrets.token_hex(32))")'"'
+        echo '    ADMIN_EMAIL="your-email@example.com"'
+        echo '    ADMIN_PASSWORD="your-chosen-password"'
+        echo "  Also remove the old API_ACCESS_TOKEN line if present - it's no longer used."
+    fi
 else
     # Written directly here (not `cp .env.example`) so this script never
     # depends on that template file existing/being tracked in the repo.
-    GENERATED_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
+    GENERATED_JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     cat > .env << EOF
 MONGO_URL="mongodb://localhost:27017"
 DB_NAME="momentumx"
 CORS_ORIGINS="http://localhost:4000,http://127.0.0.1:4000"
-API_ACCESS_TOKEN="${GENERATED_TOKEN}"
+JWT_SECRET="${GENERATED_JWT_SECRET}"
+ADMIN_EMAIL=""
+ADMIN_PASSWORD=""
 ALPACA_API_KEY=""
 ALPACA_SECRET_KEY=""
 ALPACA_BASE_URL="https://paper-api.alpaca.markets"
 ALPACA_PAPER="true"
+ALPACA_DATA_API_KEY=""
+ALPACA_DATA_SECRET_KEY=""
 SMA_SHORT="20"
 SMA_LONG="50"
 EOF
-    echo "  Created backend/.env (generated a random API_ACCESS_TOKEN for you)."
+    echo "  Created backend/.env (generated a random JWT_SECRET for you)."
 
     if [ -t 0 ]; then
         echo ""
+        echo "  Set your login email + password for this app (used for the login screen):"
+        read -rp "    Login email: " ADMIN_EMAIL_INPUT
+        read -rp "    Login password: " ADMIN_PASSWORD_INPUT
+        if [ -n "$ADMIN_EMAIL_INPUT" ]; then
+            sed -i "s|^ADMIN_EMAIL=\"\"|ADMIN_EMAIL=\"${ADMIN_EMAIL_INPUT}\"|" .env
+        fi
+        if [ -n "$ADMIN_PASSWORD_INPUT" ]; then
+            sed -i "s|^ADMIN_PASSWORD=\"\"|ADMIN_PASSWORD=\"${ADMIN_PASSWORD_INPUT}\"|" .env
+        fi
+        echo ""
         echo "  Enter your Alpaca PAPER trading keys (from alpaca.markets) - or press"
         echo "  Enter to skip and fill them into backend/.env manually later:"
-        read -rp "    ALPACA_API_KEY: " ALPACA_KEY_INPUT
-        read -rp "    ALPACA_SECRET_KEY: " ALPACA_SECRET_INPUT
+        read -rp "    ALPACA_API_KEY (paper, used for orders): " ALPACA_KEY_INPUT
+        read -rp "    ALPACA_SECRET_KEY (paper, used for orders): " ALPACA_SECRET_INPUT
         if [ -n "$ALPACA_KEY_INPUT" ]; then
             sed -i "s|^ALPACA_API_KEY=\"\"|ALPACA_API_KEY=\"${ALPACA_KEY_INPUT}\"|" .env
         fi
         if [ -n "$ALPACA_SECRET_INPUT" ]; then
             sed -i "s|^ALPACA_SECRET_KEY=\"\"|ALPACA_SECRET_KEY=\"${ALPACA_SECRET_INPUT}\"|" .env
+        fi
+        echo ""
+        echo "  Optional: a SEPARATE Alpaca key pair used only for market data/news"
+        echo "  (can be a live account - never used for trading). Press Enter to skip"
+        echo "  and fall back to using your paper keys above for data too:"
+        read -rp "    ALPACA_DATA_API_KEY (optional, data/news only): " ALPACA_DATA_KEY_INPUT
+        read -rp "    ALPACA_DATA_SECRET_KEY (optional, data/news only): " ALPACA_DATA_SECRET_INPUT
+        if [ -n "$ALPACA_DATA_KEY_INPUT" ]; then
+            sed -i "s|^ALPACA_DATA_API_KEY=\"\"|ALPACA_DATA_API_KEY=\"${ALPACA_DATA_KEY_INPUT}\"|" .env
+        fi
+        if [ -n "$ALPACA_DATA_SECRET_INPUT" ]; then
+            sed -i "s|^ALPACA_DATA_SECRET_KEY=\"\"|ALPACA_DATA_SECRET_KEY=\"${ALPACA_DATA_SECRET_INPUT}\"|" .env
         fi
     fi
 fi
@@ -164,6 +199,10 @@ systemctl status momentumx-backend --no-pager -l | head -5
 echo "------------------------------------------------------------"
 systemctl status momentumx-frontend --no-pager -l | head -5
 echo "============================================================"
+if grep -qE '^ADMIN_EMAIL=""$' "$ROOT_DIR/backend/.env" 2>/dev/null; then
+    echo "REMINDER: backend/.env still has an empty ADMIN_EMAIL/ADMIN_PASSWORD - the"
+    echo "  login screen won't work until you set these, then run: sudo systemctl restart momentumx-backend"
+fi
 if grep -qE '^ALPACA_API_KEY=""$' "$ROOT_DIR/backend/.env" 2>/dev/null; then
     echo "REMINDER: backend/.env still has an empty ALPACA_API_KEY/ALPACA_SECRET_KEY."
     echo "  Edit it, then run: sudo systemctl restart momentumx-backend"

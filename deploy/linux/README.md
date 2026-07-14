@@ -33,10 +33,14 @@ idempotent by nature - it won't destroy anything already configured):
    apt package is often years out of date and can't build this app's React
    19 frontend), MongoDB (via its official repo), and `yarn`/`serve`.
 2. Creates `backend/.env` from the template (auto-generates a random
-   `API_ACCESS_TOKEN`) and interactively prompts for your Alpaca paper
-   keys — press Enter to skip and fill them in later if you don't have
+   `JWT_SECRET`) and interactively prompts for your login email/password
+   plus your Alpaca paper trading keys (and optionally a separate live-
+   account key pair used only for market data/news, never trading) - press
+   Enter to skip any of these and fill them in later if you don't have
    them yet. **If `backend/.env` already exists, it's left untouched** so
-   a re-run never wipes out keys you've already entered.
+   a re-run never wipes out keys you've already entered (if it predates
+   the email+password login feature, the script prints exactly what to
+   add manually).
 3. Creates the Python virtualenv and installs backend dependencies.
 4. Creates `frontend/.env` from the template, installs frontend
    dependencies, and builds it.
@@ -66,8 +70,8 @@ the install script once, even if you plan to manage it manually afterward).
 ```bash
 ssh -L 4000:127.0.0.1:4000 -L 9001:127.0.0.1:9001 your-user@your-vps-ip
 ```
-Then open **http://localhost:4000** in your local browser. Enter the
-`API_ACCESS_TOKEN` from your `.env` on the token-gate screen.
+Then open **http://localhost:4000** in your local browser. Log in with the
+email/password you set as `ADMIN_EMAIL`/`ADMIN_PASSWORD` in your `.env`.
 
 Keep that SSH session open while you use the app (or use `-f -N` to run the
 tunnel in the background: `ssh -f -N -L 4000:127.0.0.1:4000 -L 9001:127.0.0.1:9001 user@vps-ip`).
@@ -81,8 +85,8 @@ tunnel in the background: `ssh -f -N -L 4000:127.0.0.1:4000 -L 9001:127.0.0.1:90
   so slow network calls never block other requests.
 
 ## Security recap
-- Every `/api` request requires `Authorization: Bearer <API_ACCESS_TOKEN>`.
-- Alpaca keys live only in `backend/.env`, never returned by the API in plaintext.
+- Every `/api` request requires `Authorization: Bearer <JWT>`, issued by `POST /api/auth/login` with your `ADMIN_EMAIL`/`ADMIN_PASSWORD`. Passwords are bcrypt-hashed in MongoDB, never stored in plaintext. 5 failed login attempts locks out further attempts for 15 minutes.
+- Alpaca keys live only in `backend/.env`, never returned by the API in plaintext. `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` (paper) are used for ALL order execution; the optional `ALPACA_DATA_API_KEY`/`ALPACA_DATA_SECRET_KEY` pair is used only for read-only market data/news, never trading.
 - CORS restricted to explicit origins, rate limiting on order/scan endpoints.
 - Hard server-side daily-loss kill switch blocks new buy orders past the limit.
 - No port is ever exposed beyond `127.0.0.1` - the SSH tunnel is your only door in.
