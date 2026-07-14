@@ -43,6 +43,22 @@ export default function Trading() {
   // poll tick. Cleared for a symbol when its chart is closed, so reopening
   // it later fetches fresh data again.
   const loadedChartsRef = useRef(new Set());
+
+  // Mirror the latest selectedStocks/positions/scannerResults/momentumStocks
+  // in refs so the 15s chartUpdateInterval (created once, deps=[demoMode,
+  // criteriaFilter]) always reads CURRENT values instead of a stale closure
+  // captured at mount time - without needing to recreate the interval (and
+  // the other scanner/positions intervals alongside it) on every selection.
+  const selectedStocksRef = useRef(selectedStocks);
+  const positionsRef = useRef(positions);
+  const scannerResultsRef = useRef(scannerResults);
+  const momentumStocksRef = useRef(momentumStocks);
+  useEffect(() => {
+    selectedStocksRef.current = selectedStocks;
+    positionsRef.current = positions;
+    scannerResultsRef.current = scannerResults;
+    momentumStocksRef.current = momentumStocks;
+  }, [selectedStocks, positions, scannerResults, momentumStocks]);
   
   // Auto-Trader Entry Condition Settings
   const [autoTraderSettings, setAutoTraderSettings] = useState({
@@ -231,17 +247,20 @@ export default function Trading() {
     // incremental updates so the newest 1-min candle shows up ASAP - this
     // only fetches the last 10 bars via updateStockData, not a full reload).
     const chartUpdateInterval = setInterval(async () => {
-      // Only update if we have selected stocks or positions
-      const symbolsToUpdate = new Set([...selectedStocks]);
-      positions.forEach(p => symbolsToUpdate.add(p.symbol));
+      // Read from refs, not the closed-over selectedStocks/positions/etc
+      // state - this interval is only ever created once per
+      // demoMode/criteriaFilter change, so it must not rely on a stale
+      // snapshot from whenever it was last (re)created.
+      const symbolsToUpdate = new Set([...selectedStocksRef.current]);
+      positionsRef.current.forEach(p => symbolsToUpdate.add(p.symbol));
       
       if (symbolsToUpdate.size > 0 && symbolsToUpdate.size <= 5) {
         // Only update if reasonable number of symbols (prevent spam)
         for (const symbol of symbolsToUpdate) {
-          let stock = scannerResults.find(s => s.symbol === symbol);
-          if (!stock) stock = momentumStocks.find(s => s.symbol === symbol);
+          let stock = scannerResultsRef.current.find(s => s.symbol === symbol);
+          if (!stock) stock = momentumStocksRef.current.find(s => s.symbol === symbol);
           if (!stock) {
-            const position = positions.find(p => p.symbol === symbol);
+            const position = positionsRef.current.find(p => p.symbol === symbol);
             if (position) {
               stock = {
                 symbol: position.symbol,

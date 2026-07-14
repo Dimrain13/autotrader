@@ -149,13 +149,27 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 - Applied the one non-blocking doc suggestion: `deploy/linux/README.md` step 1 updated to state any clone directory under `/opt` works (installer auto-patches paths) instead of implying `/opt/momentumx` is a hard requirement.
 - User can now safely run `sudo ./install_systemd_services.sh` from `/opt/Internal-trader/deploy/linux` — see reinstall instructions given in-chat (git pull → run installer → `systemctl status` to verify → SSH tunnel to access).
 
-## Next Action Items
-1. Market Holiday awareness (P1) — auto-trader currently only skips weekends, will still attempt to trade on market holidays (e.g. Thanksgiving).
-2. Refactor `server.py` (1200+ lines) into modular `/app/backend/routes/` files (P2, tech debt).
-3. Telegram/SMS alerts for new 5/5 scanner hits + trade executions (P2, optional — pending user confirmation).
-4. Follow `/app/deploy/windows/README.md` to deploy on the Windows Server VPS if that target is revisited.
-5. After a period of verified paper trading, flip `ALPACA_PAPER=false` deliberately (bold warning banner logs on startup) to go live with tiny size, per the rollout/safety plan in the original problem statement.
-6. Monitor the intermittent 502 on `/api/auto-trader/process` under heavy multi-symbol live data fetch load (flagged by testing agent, pre-existing, self-heals, non-blocking) — consider raising the ingress gateway timeout if it recurs.
+## Session 17 Update (2026-07) — Paper↔Live Trading Toggle + Chart Data Pipeline Fix (Both Verified)
+
+### Paper ↔ Live Trading Mode Toggle (NEW feature, user-requested)
+- User: "We should have a toggle for changing between paper and prod trading based on the keys" — the live Alpaca key pair (`ALPACA_DATA_API_KEY`/`SECRET`) was previously data/news-only; now usable for real order execution too, gated behind an explicit toggle.
+- Confirmed design: Settings page UI toggle (instant switch, "GO LIVE" typed-confirmation modal required only when switching TO live), auto-trader permanently blocked from running in LIVE mode (manual orders only, no unattended bot with real money), risk limits unchanged between modes, persistent red "LIVE — REAL MONEY AT RISK" banner app-wide when live.
+- **Where it lives**: Settings page → "Trading Mode" toggle (Paper/Live switch). Switching to live requires typing "GO LIVE" in a confirmation dialog. A red banner appears at the top of every page + the nav badge turns "🔴 LIVE" whenever active.
+- Backend: `alpaca_service.py` now holds two separate `TradingClient` instances (`_paper_client` always `paper=True` on `ALPACA_API_KEY`, `_live_client` always `paper=False` on `ALPACA_DATA_API_KEY`, only "available" if genuinely a different key pair). `self.trading_client` is an alias reassigned by `set_trading_mode()`. Mode persists in `db.app_config._id='trading_mode'`, restored on startup (defaults to paper if never set). Auto-trader force-disabled on entering live mode and on startup if it somehow restored active+live together.
+- New endpoints: `GET/POST /api/trading-mode`. Guard added to `POST /api/auto-trader/toggle` (400 if enabling while live) and the `auto_trader_loop()` background task (skips processing while live, defense-in-depth).
+- **Verified via `testing_agent_v4`** (`iteration_15.json`): 100% pass — confirm-text gating (case-sensitive "GO LIVE"), auto-trader block while live, account_number actually differs between modes (proves real order routing switch, not cosmetic), restart persistence, banner/badge across all pages, environment left in PAPER mode as required.
+
+### Chart Data Pipeline Fix (user-reported bug + perf request)
+- User: "I do not see a proper chart... prod API should be faster... start on 1M charts... last 2 days... asap for next candles... each chart a single call."
+- Root causes found + fixed:
+  1. `Trading.js` useEffect re-triggered a FULL heavy chart reload (4 parallel requests, 1170+234+30 bars) for EVERY open chart on EVERY unrelated background poll (scanner ~60s/momentum ~120s/positions ~15s) — fixed with a `loadedChartsRef` guard so each chart's full history loads exactly once per open (cleared on close, so reopening re-fetches fresh).
+  2. `alpaca_service.get_bars()` computed the intraday lookback window using literal elapsed minutes, not calendar days — a 780-bar "2 day" request only looked back 13 hours regardless of weekends/market-closure. Rewrote to pad the start_date by calendar days (accounting for ~390/78 bars per trading day + weekend/holiday buffer) and trim server-side to the most recent N bars.
+  3. `StockChartCard.js` defaulted to 5Min; changed default to 1Min.
+  4. Incremental refresh tightened from 30s→15s for faster new-candle visibility; fixed a latent bug where the first incremental update silently trimmed the just-loaded 2-day window back to 1 day (trim caps now match the fetch window: 780/156).
+  5. Fixed a stale-closure bug (found by testing agent) where the 15s interval closed over `selectedStocks`/`positions`/etc. from mount time — now reads from refs kept in sync via a small effect.
+  6. Also fixed test-isolation flakiness in the pytest suite (`auto_trader.active` race between `test_security_and_trading.py` and `test_trading_mode_toggle.py` under xdist parallelism) via module-level `xdist_group` pinning + retry-resilient test cleanup.
+- Note for user: chart data source may still show `yahoo` instead of `alpaca` for intraday bars — this is expected; Alpaca's free-tier IEX feed embargoes the most recent ~15 min regardless of which key pair (paper or live) is used, so the app correctly falls back to Yahoo for freshness. A paid Alpaca "Algo Trader Plus" data subscription on the live account would be needed to get real-time SIP data directly from Alpaca instead.
+- **Verified via `testing_agent_v4`** (`iteration_16.json`, plus a follow-up fix + reverification for the stale-closure bug it found): chart opens in 1Min by default, renders real data, each open chart issues exactly one initial burst + lightweight 15s incremental calls (no more redundant full reloads), bar counts scale correctly with requested limit. Full pytest suite: 83/83 passing (excluding the pre-existing, documented, load-induced 502 flake on `/auto-trader/process` under heavy repeated stress-testing, self-heals, not a regression).
 
 ## Session 16 Update (2026-02) — "First Pullback" Strategy Correction (Verified)
 - User provided a full Ross Cameron Warrior Trading class transcript on the exact "First Pullback" entry pattern and explicitly requested the LIVE auto-trader logic be corrected to match ("This is how we need to be trading so we can do it properly"), not just documentation.
@@ -194,4 +208,12 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 
 ### Testing (Session 2)
 - Testing agent independently re-verified: 41/41 pytest pass, auto-trader/status reflects new params, settings bug fix confirmed, code-review of micro-pullback gating + slippage guard ordering, Settings.js UI text reconciled, all 7 frontend pages smoke-tested, logout regression re-confirmed. Zero bugs found (1 cosmetic stale code comment, fixed).
+
+## Next Action Items
+1. Market Holiday awareness (P1) — auto-trader currently only skips weekends, will still attempt to trade on market holidays (e.g. Thanksgiving).
+2. Refactor `server.py` (1200+ lines) into modular `/app/backend/routes/` files (P2, tech debt).
+3. Telegram/SMS alerts for new 5/5 scanner hits + trade executions (P2, optional — pending user confirmation).
+4. Follow `/app/deploy/windows/README.md` to deploy on the Windows Server VPS if that target is revisited.
+5. Consider a paid Alpaca "Algo Trader Plus" data subscription on the live account if truly real-time (non-15-min-delayed) SIP intraday data is desired instead of the Yahoo fallback.
+6. Monitor the intermittent 502 on `/api/auto-trader/process` under heavy multi-symbol live data fetch load (pre-existing, self-heals, non-blocking) — consider raising the ingress gateway timeout if it recurs frequently in real usage (not just under back-to-back stress-testing).
 

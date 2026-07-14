@@ -31,6 +31,13 @@ def _get_jwt():
 TOKEN = _get_jwt()
 AUTH_HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
+# This module's TestAutoTrader class shares global auto_trader.active state
+# with test_trading_mode_toggle.py. Pinning the WHOLE module (not just that
+# one class) to the same xdist group guarantees no other class here can ever
+# run concurrently on a different worker while that shared state is in flux
+# (a cross-worker race was observed - see iteration_16.json action items).
+pytestmark = pytest.mark.xdist_group(name="trading_mode_toggle")
+
 
 @pytest.fixture(scope="module")
 def session():
@@ -222,8 +229,14 @@ class TestAutoTrader:
         assert status_r.status_code == 200
         assert status_r.json()["active"] is True
 
-        # cleanup - disable again
-        session.post(f"{BASE_URL}/api/auto-trader/toggle", params={"enabled": False})
+        # cleanup - disable again (retry-resilient, see note on the sibling
+        # test below - a transient 502 here would otherwise leave active=True
+        # stuck for whichever test runs next in this xdist group)
+        for _ in range(3):
+            cleanup_r = session.post(f"{BASE_URL}/api/auto-trader/toggle", params={"enabled": False})
+            if cleanup_r.status_code == 200:
+                break
+            time.sleep(1)
 
     def test_manual_process_trigger_no_arity_bug(self, session):
         """
@@ -245,8 +258,18 @@ class TestAutoTrader:
         finally:
             # Always disable auto-trader afterward, even if an assertion above
             # fails - this test toggles it on and must not leave it running
-            # against the live paper account.
-            session.post(f"{BASE_URL}/api/auto-trader/toggle", params={"enabled": False})
+            # against the live paper account. Retries a few times because
+            # under the same load-induced 502 this test itself is checking
+            # for, the cleanup call can ALSO transiently 502 and silently
+            # fail to reach the app, leaving active=True stuck for whichever
+            # test runs next (see iteration_16/17 - this was the true root
+            # cause of the observed cross-test auto_trader_active flakiness,
+            # not a genuine xdist worker race).
+            for _ in range(3):
+                cleanup_r = session.post(f"{BASE_URL}/api/auto-trader/toggle", params={"enabled": False})
+                if cleanup_r.status_code == 200:
+                    break
+                time.sleep(1)
 
 
 # ============ EVENT LOOP NOT BLOCKED (Phase 3 #11) ============

@@ -52,6 +52,16 @@ pytestmark = pytest.mark.xdist_group(name="trading_mode_toggle")
 
 class TestTradingModeInitialState:
     def test_get_trading_mode_initial(self, api_client):
+        # Self-healing: this module's xdist_group only guarantees no OTHER
+        # test in the group runs CONCURRENTLY with these - it does not
+        # guarantee this specific test is the first one dequeued within the
+        # group's worker (collection order across files isn't something to
+        # rely on). Explicitly reset auto-trader off first so this test's
+        # real intent (mode=paper, both accounts available) is verified
+        # deterministically instead of depending on running before any
+        # other test in the group that happens to toggle it on.
+        api_client.post(f"{BASE_URL}/api/auto-trader/toggle", params={"enabled": False})
+
         resp = api_client.get(f"{BASE_URL}/api/trading-mode")
         assert resp.status_code == 200
         data = resp.json()
