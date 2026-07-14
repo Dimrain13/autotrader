@@ -151,11 +151,23 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 
 ## Next Action Items
 1. Market Holiday awareness (P1) — auto-trader currently only skips weekends, will still attempt to trade on market holidays (e.g. Thanksgiving).
-2. UX clarity on "Ready to Trade (5/5)" label (P2) — user confused why 5/5 scanner hits don't always auto-buy (MACD/SMA triggers must also align); needs copy/UX improvement.
-3. Refactor `server.py` (1200+ lines) into modular `/app/backend/routes/` files (P2, tech debt).
-4. Telegram/SMS alerts for new 5/5 scanner hits + trade executions (P2, optional — pending user confirmation).
-5. Follow `/app/deploy/windows/README.md` to deploy on the Windows Server VPS if that target is revisited.
-6. After a period of verified paper trading, flip `ALPACA_PAPER=false` deliberately (bold warning banner logs on startup) to go live with tiny size, per the rollout/safety plan in the original problem statement.
+2. Refactor `server.py` (1200+ lines) into modular `/app/backend/routes/` files (P2, tech debt).
+3. Telegram/SMS alerts for new 5/5 scanner hits + trade executions (P2, optional — pending user confirmation).
+4. Follow `/app/deploy/windows/README.md` to deploy on the Windows Server VPS if that target is revisited.
+5. After a period of verified paper trading, flip `ALPACA_PAPER=false` deliberately (bold warning banner logs on startup) to go live with tiny size, per the rollout/safety plan in the original problem statement.
+6. Monitor the intermittent 502 on `/api/auto-trader/process` under heavy multi-symbol live data fetch load (flagged by testing agent, pre-existing, self-heals, non-blocking) — consider raising the ingress gateway timeout if it recurs.
+
+## Session 16 Update (2026-02) — "First Pullback" Strategy Correction (Verified)
+- User provided a full Ross Cameron Warrior Trading class transcript on the exact "First Pullback" entry pattern and explicitly requested the LIVE auto-trader logic be corrected to match ("This is how we need to be trading so we can do it properly"), not just documentation.
+- **4 real gaps found + fixed** in `auto_trader_service.py`:
+  1. Pullback candle color was inverted — the code treated the pullback as 1-3 GREEN candles; the real pattern is 1-3 RED candles (profit-taking) after a surge, then a GREEN breakout candle that breaks the high of the immediately preceding red candle. Rewrote `check_micro_pullback()` → `check_first_pullback()` with correct red-candle detection + breakout-trigger logic.
+  2. **The 50% Rule was completely missing** — added: the pullback must hold at least `pullback_retracement_max_pct` (default 50%) of the initial surge, or the setup is discarded as "too weak".
+  3. **Stop-loss was a flat 1% trailing %** instead of the structural "low of the pullback" Ross Cameron actually uses. Now `stop_loss_price` = the real pullback low, with a `max_stop_distance_pct` (default 3%) safety cap that skips the trade entirely if the structural stop is too far from entry (too risky/low-conviction). Profit target is now a TRUE 2:1 reward:risk off the real structural risk (`entry + 2*(entry-stop)`), not a flat 2%.
+  4. **No "breakout or bailout" time-stop existed** — added: if a fresh entry hasn't moved into profit within `breakout_bailout_seconds` (default 90s), `monitor_exits()` now exits immediately rather than waiting for the full stop to hit.
+- New settings (`pullback_retracement_max_pct`, `max_stop_distance_pct`, `breakout_bailout_seconds`) exposed via `POST /api/auto-trader/settings` and `GET /api/auto-trader/status`. Updated `entry-conditions/{symbol}` label/detail text to red-candle terminology.
+- Created `/app/backend/tests/test_first_pullback_strategy.py` (12 new unit tests covering pattern detection, the 50% rule, breakout-trigger requirement, structural stop, 2:1 target formula, safety cap, bailout timing).
+- Created `/app/WARRIOR_TRADING_FIRST_PULLBACK_STRATEGY.md` — full rule-by-rule breakdown with 4 diagrams (the user's originally-provided screenshot URLs were dead/404, so accurate replacement diagrams were AI-generated) and the complete lesson transcript. Updated the older `/app/WARRIOR_TRADING_STRATEGY.md` quick-reference (fixed several stale "7-11 AM" references left over from Session 11, updated to the new structural-stop/2:1-target/bailout language). Updated `Settings.js` strategy info card copy to match.
+- **Verified via `testing_agent_v4`** (`iteration_14.json`): 70/71 pytest passing (1 pre-existing unrelated flaky 502 on `/auto-trader/process` under live multi-symbol fetch load, self-heals, not caused by this change). Live API verification against real market data (AAPL/TSLA/MSFT/NVDA) confirmed correct new fields/labels/text. Settings persist/reset round-trip confirmed. Frontend Settings page renders the new copy correctly, no console errors. `auto_trader.active` confirmed OFF throughout — no real/paper orders were placed during verification.
 
 ## Session 3 Update (2026-07-10) — Real Alpaca Paper Verification
 - User provided real Alpaca paper credentials (key `PKRBZGHKVX2SGHWQZZVRJLXRPN`, account `PA30RVV1A2DM`). Configured in `backend/.env`.
