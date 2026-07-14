@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import axios from "axios";
+import { toast } from "sonner";
 import { scannerCache } from "../utils/scannerCache";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -182,10 +183,15 @@ export function useGlobalScanner() {
 
   const toggleAutoTrade = async () => {
     const newState = !autoTrade;
-    await axios.post(`${API}/auto-trader/toggle?enabled=${newState}`);
-    setAutoTradeState(newState);
-    localStorage.setItem('autoTrade', newState.toString());
-    return newState;
+    try {
+      await axios.post(`${API}/auto-trader/toggle?enabled=${newState}`);
+      setAutoTradeState(newState);
+      localStorage.setItem('autoTrade', newState.toString());
+      return newState;
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || 'Failed to toggle auto-trader');
+      return autoTrade;
+    }
   };
 
   return {

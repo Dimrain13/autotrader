@@ -4,9 +4,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Settings as SettingsIcon, Key, Server } from "lucide-react";
+import { Settings as SettingsIcon, Key, Server, AlertTriangle } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -17,14 +19,53 @@ export default function Settings() {
   const [secretKeyMasked, setSecretKeyMasked] = useState('');
   const [hasSecretKey, setHasSecretKey] = useState(false);
   const [baseUrl, setBaseUrl] = useState('https://paper-api.alpaca.markets');
-  const [paperTrading, setPaperTrading] = useState(true);
   const [smaShort, setSmaShort] = useState(20);
   const [smaLong, setSmaLong] = useState(50);
   const [saving, setSaving] = useState(false);
 
+  const [tradingMode, setTradingMode] = useState({ mode: 'paper', paper_available: true, live_available: false, auto_trader_active: false });
+  const [showGoLiveModal, setShowGoLiveModal] = useState(false);
+  const [goLiveConfirmText, setGoLiveConfirmText] = useState('');
+  const [switchingMode, setSwitchingMode] = useState(false);
+
   useEffect(() => {
     fetchSettings();
+    fetchTradingMode();
   }, []);
+
+  const fetchTradingMode = async () => {
+    try {
+      const response = await axios.get(`${API}/trading-mode`);
+      setTradingMode(response.data);
+    } catch (error) {
+      console.error('Failed to fetch trading mode:', error);
+    }
+  };
+
+  const applyTradingMode = async (mode, confirm) => {
+    setSwitchingMode(true);
+    try {
+      const response = await axios.post(`${API}/trading-mode`, { mode, confirm });
+      setTradingMode(response.data);
+      toast.success(response.data.message || `Switched to ${mode.toUpperCase()} trading mode`, mode === 'live' ? {
+        description: 'The auto-trader is disabled while in LIVE mode. All orders are now manual only.'
+      } : undefined);
+      setShowGoLiveModal(false);
+      setGoLiveConfirmText('');
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || 'Failed to switch trading mode');
+    } finally {
+      setSwitchingMode(false);
+    }
+  };
+
+  const handleTradingModeToggle = (checked) => {
+    if (checked) {
+      setShowGoLiveModal(true);
+    } else {
+      applyTradingMode('paper');
+    }
+  };
 
   const fetchSettings = async () => {
     try {
@@ -34,7 +75,6 @@ export default function Settings() {
       setSecretKeyMasked(response.data.secret_key_masked || '');
       setHasSecretKey(response.data.has_secret_key || false);
       setBaseUrl(response.data.base_url || 'https://paper-api.alpaca.markets');
-      setPaperTrading(response.data.paper_trading !== false);
       setSmaShort(response.data.sma_short || 20);
       setSmaLong(response.data.sma_long || 50);
     } catch (error) {
@@ -170,26 +210,88 @@ export default function Settings() {
           </div>
 
           <div>
-            <Label className="text-xs text-neutral-500">
-              <Server className="inline mr-1" size={14} />
-              Trading Mode
-            </Label>
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-neutral-500">
+                <Server className="inline mr-1" size={14} />
+                Trading Mode — which account actually executes orders
+              </Label>
+              <div className="flex items-center gap-3" data-testid="trading-mode-toggle-group">
+                <span className={`text-xs font-bold uppercase tracking-wider ${tradingMode.mode === 'paper' ? 'text-[#2E5CFF]' : 'text-neutral-500'}`}>Paper</span>
+                <Switch
+                  data-testid="trading-mode-switch"
+                  checked={tradingMode.mode === 'live'}
+                  onCheckedChange={handleTradingModeToggle}
+                  disabled={switchingMode || !tradingMode.live_available}
+                />
+                <span className={`text-xs font-bold uppercase tracking-wider ${tradingMode.mode === 'live' ? 'text-[#FF1A40]' : 'text-neutral-500'}`}>Live</span>
+              </div>
+            </div>
             <div
               data-testid="trading-mode-display"
-              className="mt-1 bg-[#121212] border border-white/10 rounded-sm px-3 py-2 text-white text-sm font-mono"
+              className="mt-2 bg-[#121212] border border-white/10 rounded-sm px-3 py-2 text-white text-sm font-mono"
             >
               {baseUrl}
             </div>
             <div className="mt-2 text-xs text-neutral-500">
-              {paperTrading ? (
-                <span className="text-[#2E5CFF]">✓ Paper trading mode - No real money at risk</span>
+              {tradingMode.mode === 'paper' ? (
+                <span className="text-[#2E5CFF]" data-testid="trading-mode-status-paper">✓ Paper trading mode - No real money at risk</span>
               ) : (
-                <span className="text-[#FF1A40]">⚠ LIVE TRADING MODE - Real money is at risk</span>
+                <span className="text-[#FF1A40] font-bold" data-testid="trading-mode-status-live">⚠ LIVE TRADING MODE — Real money is at risk. Auto-trader is disabled; manual orders only.</span>
               )}
             </div>
+            {!tradingMode.live_available && (
+              <div className="mt-2 text-xs text-yellow-500">
+                Live trading unavailable — configure a separate <code>ALPACA_DATA_API_KEY</code>/<code>ALPACA_DATA_SECRET_KEY</code> pair (a real, non-paper Alpaca account) in <code>.env</code> to enable this toggle.
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={showGoLiveModal} onOpenChange={(open) => { setShowGoLiveModal(open); if (!open) setGoLiveConfirmText(''); }}>
+        <DialogContent data-testid="go-live-confirm-modal" className="bg-[#0A0A0A] border-[#FF1A40]/40 text-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[#FF1A40]">
+              <AlertTriangle size={20} />
+              Switch to LIVE Trading
+            </DialogTitle>
+            <DialogDescription className="text-neutral-400 pt-2">
+              This switches order execution to your real, funded Alpaca account. Every buy/sell placed
+              from the Trading page from this point on will use <strong className="text-white">real money</strong>.
+              The auto-trader will be automatically disabled — no unattended trades are ever placed live.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <Label className="text-xs text-neutral-500">Type <span className="text-white font-mono font-bold">GO LIVE</span> to confirm</Label>
+            <Input
+              data-testid="go-live-confirm-input"
+              value={goLiveConfirmText}
+              onChange={(e) => setGoLiveConfirmText(e.target.value)}
+              placeholder="GO LIVE"
+              className="mt-1 bg-[#121212] border-white/10 text-white font-mono"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              data-testid="go-live-cancel-button"
+              onClick={() => { setShowGoLiveModal(false); setGoLiveConfirmText(''); }}
+              className="text-neutral-400 hover:text-white"
+            >
+              Cancel
+            </Button>
+            <Button
+              data-testid="go-live-confirm-button"
+              disabled={goLiveConfirmText !== 'GO LIVE' || switchingMode}
+              onClick={() => applyTradingMode('live', goLiveConfirmText)}
+              className="bg-[#FF1A40] text-white font-bold hover:bg-[#CC1433] rounded-sm uppercase tracking-wider text-xs"
+            >
+              {switchingMode ? 'Switching...' : 'Confirm — Go Live'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card className="bg-[#0A0A0A] border-white/5" data-testid="sma-settings-card">
         <CardHeader>

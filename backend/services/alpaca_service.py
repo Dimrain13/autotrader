@@ -51,34 +51,80 @@ class AlpacaService:
         self._sec_ticker_map_fetched_at = 0
         self._sec_headers = {'User-Agent': 'MomentumX-Trading-App (contact: admin@momentumx.local)'}
 
-        # Determine paper vs live deliberately - never assume paper=True blindly.
-        # ALPACA_PAPER env var takes precedence if explicitly set; otherwise infer
-        # from the base URL. This makes going live an intentional, logged action.
-        alpaca_paper_env = os.getenv('ALPACA_PAPER')
-        if alpaca_paper_env is not None and alpaca_paper_env.strip() != '':
-            paper = alpaca_paper_env.strip().lower() == 'true'
-        else:
-            paper = 'paper' in base_url.lower()
-        self.paper = paper
+        # Determine paper vs live TRADING ACCOUNT explicitly. This app now
+        # maintains TWO separate, always-instantiated TradingClient objects -
+        # one for each key pair - and switches which one actually executes
+        # orders via set_trading_mode()/self.trading_mode, controlled by the
+        # Settings page UI toggle (persisted in MongoDB by server.py, not by
+        # this env var). ALPACA_PAPER is only used to decide the SAFE DEFAULT
+        # on a completely fresh install (no persisted mode yet) - it can
+        # never silently leave the app in live mode; every explicit switch
+        # to live is a deliberate, logged, confirmed action.
         self.base_url = base_url
-
-        if paper:
-            logger.info(f"📝 PAPER TRADING MODE ACTIVE (base_url={base_url}) - no real money at risk")
-        else:
-            logger.warning("#" * 70)
-            logger.warning("# ⚠️  LIVE TRADING MODE ACTIVE — REAL MONEY AT RISK  ⚠️")
-            logger.warning(f"# base_url={base_url} | ALPACA_PAPER={alpaca_paper_env}")
-            logger.warning("#" * 70)
+        self.trading_mode = 'paper'
+        self.paper = True
 
         if not api_key or not secret_key:
-            logger.warning("Alpaca API keys not configured")
-            self.trading_client = None
-            self.data_client = None
+            logger.warning("Alpaca PAPER trading keys not configured (ALPACA_API_KEY/ALPACA_SECRET_KEY)")
+            self._paper_client = None
         else:
-            self.trading_client = TradingClient(api_key=api_key, secret_key=secret_key, paper=paper)
-            self.data_client = StockHistoricalDataClient(api_key=data_api_key, secret_key=data_secret_key)
-            data_source = "LIVE account" if os.getenv('ALPACA_DATA_API_KEY') else "same paper account (no ALPACA_DATA_API_KEY set)"
-            logger.info(f"📊 Market data client: {data_source} | Trading client: {'PAPER' if paper else 'LIVE'} (orders only)")
+            self._paper_client = TradingClient(api_key=api_key, secret_key=secret_key, paper=True)
+            logger.info("📝 Paper trading client ready (no real money at risk)")
+
+        # A LIVE trading client only counts as "available" if a genuinely
+        # separate key pair is configured - falling back to the paper keys
+        # for data (ALPACA_DATA_API_KEY unset) must NEVER enable live trading.
+        live_api_key = os.getenv('ALPACA_DATA_API_KEY')
+        live_secret_key = os.getenv('ALPACA_DATA_SECRET_KEY')
+        if live_api_key and live_secret_key and live_api_key != api_key:
+            self._live_client = TradingClient(api_key=live_api_key, secret_key=live_secret_key, paper=False)
+            logger.info("🔴 Live trading client ready (available for manual use only, via the Settings toggle)")
+        else:
+            self._live_client = None
+
+        # trading_client is an alias to whichever client is currently
+        # active - reassigned by set_trading_mode(). Every order/position/
+        # account method below reads through self.trading_client, so
+        # switching modes requires touching nothing else in this file.
+        self.trading_client = self._paper_client
+
+        self.data_client = StockHistoricalDataClient(api_key=data_api_key, secret_key=data_secret_key) if (data_api_key and data_secret_key) else None
+        data_source = "LIVE account" if os.getenv('ALPACA_DATA_API_KEY') else "same paper account (no ALPACA_DATA_API_KEY set)"
+        logger.info(f"📊 Market data client: {data_source}")
+
+    def get_trading_mode_info(self) -> dict:
+        """Current trading mode + which account(s) are actually configured."""
+        return {
+            "mode": self.trading_mode,
+            "paper_available": self._paper_client is not None,
+            "live_available": self._live_client is not None,
+        }
+
+    def set_trading_mode(self, mode: str):
+        """
+        Switch which real Alpaca account actually executes orders.
+        Market data (self.data_client) is completely unaffected by this -
+        it always uses the configured data keys regardless of trading mode.
+        """
+        if mode not in ("paper", "live"):
+            raise ValueError("mode must be 'paper' or 'live'")
+
+        if mode == "live":
+            if not self._live_client:
+                raise ValueError("Live trading keys not configured (ALPACA_DATA_API_KEY/ALPACA_DATA_SECRET_KEY)")
+            self.trading_client = self._live_client
+            self.trading_mode = "live"
+            self.paper = False
+            logger.warning("#" * 70)
+            logger.warning("# 🔴 SWITCHED TO LIVE TRADING MODE — REAL MONEY AT RISK  ⚠️")
+            logger.warning("#" * 70)
+        else:
+            if not self._paper_client:
+                raise ValueError("Paper trading keys not configured (ALPACA_API_KEY/ALPACA_SECRET_KEY)")
+            self.trading_client = self._paper_client
+            self.trading_mode = "paper"
+            self.paper = True
+            logger.info("📝 Switched to PAPER trading mode - no real money at risk")
     
     def get_account(self):
         if not self.trading_client:

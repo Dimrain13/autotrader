@@ -111,6 +111,11 @@ class SmaSettingsUpdate(BaseModel):
     sma_short: int = Field(20, ge=5, le=100)
     sma_long: int = Field(50, ge=10, le=200)
 
+class TradingModeUpdate(BaseModel):
+    """Paper <-> Live trading account switch. Live requires typed confirmation."""
+    mode: Literal['paper', 'live']
+    confirm: Optional[str] = None
+
 def is_market_open() -> bool:
     """Check if US market is currently open (extended hours for paper trading)
     
@@ -710,8 +715,11 @@ async def get_momentum_stocks():
 
 @api_router.post("/auto-trader/toggle")
 async def toggle_auto_trader(enabled: bool):
-    """Enable or disable auto-trading"""
+    """Enable or disable auto-trading. Never allowed while in LIVE mode -
+    the unattended algo is paper-only until manually trusted with real money."""
     try:
+        if enabled and alpaca_service.trading_mode == "live":
+            raise HTTPException(status_code=400, detail="Auto-trader cannot be enabled in LIVE trading mode (real money). Switch to PAPER mode in Settings to use the auto-trader.")
         auto_trader.active = enabled
         await auto_trader.save_state()
         status = "enabled" if enabled else "disabled"
@@ -720,6 +728,8 @@ async def toggle_auto_trader(enabled: bool):
             "message": f"Auto-trading {status}",
             "active": auto_trader.active
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1195,6 +1205,54 @@ async def get_settings():
         "sma_long": config_doc.get('sma_long', int(os.getenv('SMA_LONG', '50')))
     }
 
+@api_router.get("/trading-mode")
+async def get_trading_mode():
+    """Current paper/live trading mode + which account(s) are configured."""
+    info = alpaca_service.get_trading_mode_info()
+    info["auto_trader_active"] = auto_trader.active
+    return info
+
+@api_router.post("/trading-mode")
+async def update_trading_mode(body: TradingModeUpdate):
+    """
+    Switch which real Alpaca account executes orders (paper vs live).
+    Switching TO live requires confirm="GO LIVE" (typed by the user in the
+    Settings page confirmation modal). Switching back to paper is always
+    allowed instantly - it's the safe direction. The auto-trader (unattended
+    algo) is force-disabled whenever live mode is entered - it is never
+    allowed to place real-money orders on its own.
+    """
+    current_mode = alpaca_service.trading_mode
+    if body.mode == current_mode:
+        info = alpaca_service.get_trading_mode_info()
+        info["auto_trader_active"] = auto_trader.active
+        info["message"] = f"Already in {current_mode.upper()} mode"
+        return info
+
+    if body.mode == "live" and body.confirm != "GO LIVE":
+        raise HTTPException(status_code=400, detail='Type "GO LIVE" to confirm switching to live trading with real money.')
+
+    try:
+        alpaca_service.set_trading_mode(body.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    await db.app_config.update_one(
+        {"_id": "trading_mode"},
+        {"$set": {"mode": body.mode}},
+        upsert=True
+    )
+
+    if body.mode == "live" and auto_trader.active:
+        auto_trader.active = False
+        await auto_trader.save_state()
+        logger.warning("⛔ Auto-trader force-disabled - switched to LIVE trading mode")
+
+    info = alpaca_service.get_trading_mode_info()
+    info["auto_trader_active"] = auto_trader.active
+    info["message"] = f"Switched to {body.mode.upper()} trading mode"
+    return info
+
 @api_router.get("/news/{symbol}")
 async def get_news(symbol: str, limit: int = 5):
     """Get recent news for a symbol from Google News"""
@@ -1229,7 +1287,12 @@ async def auto_trader_loop():
     logger.info("🔁 Auto-Trader background loop started (60s interval)")
     while True:
         try:
-            if auto_trader.active:
+            # Defense-in-depth: the unattended algo must NEVER place a real
+            # order. auto-trader/toggle + the live-mode switch already force
+            # active=False when switching to live, but this extra guard
+            # ensures a stray/stale active=True flag can never fire trades
+            # if trading_mode somehow flipped without going through that path.
+            if auto_trader.active and alpaca_service.trading_mode == "paper":
                 criteria = {
                     "min_price": 2,
                     "max_price": 20,
@@ -1273,6 +1336,16 @@ async def startup_services():
         await seed_user()
         logger.info(f"🔐 Auth seeded for {os.environ.get('ADMIN_EMAIL')}")
 
+    # Restore persisted trading mode (paper/live) - defaults to PAPER if
+    # never explicitly set. Live mode is only ever entered by an explicit,
+    # confirmed action via POST /trading-mode, never a default.
+    try:
+        mode_doc = await db.app_config.find_one({"_id": "trading_mode"})
+        if mode_doc and mode_doc.get("mode") == "live":
+            alpaca_service.set_trading_mode("live")
+    except Exception as e:
+        logger.error(f"Failed to restore trading mode, defaulting to PAPER: {e}")
+
     trading_mode = "PAPER (safe/simulated)" if alpaca_service.paper else "🔴 LIVE — REAL MONEY AT RISK"
     logger.info("=" * 60)
     logger.info(f"  MomentumX starting up — TRADING MODE: {trading_mode}")
@@ -1282,6 +1355,14 @@ async def startup_services():
     # never silently reset daily loss limits / stops to defaults on restart.
     await auto_trader.load_state()
     await position_monitor.load_state()
+
+    # Safety net: the unattended algo must never come back active if the
+    # trading mode restored to LIVE - force it off and persist that.
+    if alpaca_service.trading_mode == "live" and auto_trader.active:
+        auto_trader.active = False
+        await auto_trader.save_state()
+        logger.warning("⛔ Auto-trader force-disabled on startup - trading mode is LIVE")
+
 
     position_monitor.start()
     # Start monitoring loop in background

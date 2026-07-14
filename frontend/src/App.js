@@ -12,7 +12,7 @@ import MissedOpportunities from "./pages/MissedOpportunities";
 import Settings from "./pages/Settings";
 import Demo from "./pages/Demo";
 import { Toaster } from "./components/ui/sonner";
-import { TrendingUp, Search, DollarSign, Settings as SettingsIcon, PlayCircle, BarChart3, EyeOff, LogOut } from "lucide-react";
+import { TrendingUp, Search, DollarSign, Settings as SettingsIcon, PlayCircle, BarChart3, EyeOff, LogOut, AlertTriangle } from "lucide-react";
 import "@/App.css";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -90,13 +90,20 @@ function LoginForm({ onAuthenticated }) {
   );
 }
 
-function NavBar({ account, onLogout }) {
+function NavBar({ account, tradingMode, onLogout }) {
   const location = useLocation();
-  
+  const isLive = tradingMode?.mode === 'live';
+
   const isActive = (path) => location.pathname === path;
-  
+
   return (
     <nav className="border-b border-white/5 bg-[#0A0A0A]">
+      {isLive && (
+        <div data-testid="live-trading-banner" className="bg-[#FF1A40] text-white text-center py-1.5 text-xs font-bold uppercase tracking-widest animate-pulse">
+          <AlertTriangle className="inline mr-2 -mt-0.5" size={14} />
+          LIVE TRADING — REAL MONEY AT RISK
+        </div>
+      )}
       <div className="container mx-auto px-4 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-8">
@@ -213,8 +220,12 @@ function NavBar({ account, onLogout }) {
                 </div>
               </>
             )}
-            <div className="bg-[#2E5CFF]/10 text-[#2E5CFF] border border-[#2E5CFF]/20 text-[10px] px-2 py-0.5 rounded-full uppercase tracking-widest font-bold animate-pulse">
-              PAPER
+            <div className={`text-[10px] px-2 py-0.5 rounded-full uppercase tracking-widest font-bold ${
+              isLive
+                ? 'bg-[#FF1A40]/10 text-[#FF1A40] border border-[#FF1A40]/30 animate-pulse'
+                : 'bg-[#2E5CFF]/10 text-[#2E5CFF] border border-[#2E5CFF]/20 animate-pulse'
+            }`} data-testid="trading-mode-badge">
+              {isLive ? '🔴 LIVE' : 'PAPER'}
             </div>
             <button
               onClick={onLogout}
@@ -235,6 +246,7 @@ function App() {
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
   const [recentOrders, setRecentOrders] = useState([]);
+  const [tradingMode, setTradingMode] = useState({ mode: 'paper' });
   const [loading, setLoading] = useState(false); // Start false for instant UI
   const [authenticated, setAuthenticated] = useState(!!getToken());
   const scanner = useGlobalScanner();
@@ -254,10 +266,12 @@ function App() {
     fetchAccount();
     fetchPositions();
     fetchRecentOrders();
+    fetchTradingMode();
     const interval = setInterval(() => {
       fetchAccount();
       fetchPositions();
       fetchRecentOrders();
+      fetchTradingMode();
     }, 30000);
     return () => clearInterval(interval);
   }, [authenticated]);
@@ -317,6 +331,15 @@ function App() {
     }
   };
 
+  const fetchTradingMode = async () => {
+    try {
+      const response = await axios.get(`${API}/trading-mode`);
+      setTradingMode(response.data);
+    } catch (error) {
+      console.error('Failed to fetch trading mode:', error);
+    }
+  };
+
   const handleLogout = () => {
     clearToken();
     setAuthenticated(false);
@@ -329,7 +352,7 @@ function App() {
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-[#050505]">
-        <NavBar account={account} onLogout={handleLogout} />
+        <NavBar account={account} tradingMode={tradingMode} onLogout={handleLogout} />
         <main className="container mx-auto p-4 md:p-6">
           {loading ? (
             <div className="flex justify-center items-center h-96">
