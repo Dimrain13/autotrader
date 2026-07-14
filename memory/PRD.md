@@ -142,9 +142,20 @@ Phases: 1) Critical Security, 2) Critical Trading Correctness,
 - **P2 backlog closed**: kill-switch notification — `App.js` polls `/auto-trader/status` every 30s app-wide (any page) and fires a `sonner` toast (edge-triggered, once per true→false transition) when the daily-loss/consecutive-loss kill switch halts trading. Toast-only per user's choice (no email integration).
 - Testing: 47/47 backend pytest passing (41 previous + 6 new), full frontend regression clean (Dashboard/Scanner/Trading/History/Missed/Settings/Demo). One pre-existing minor React key-prop warning on History page noted (cosmetic, unrelated to this session).
 
+## Session 15 Update (2026-02) — Custom-Directory Linux Install Fix (Verified)
+- **Bug**: user cloned the repo to `/opt/Internal-trader` (not the documented `/opt/momentumx` default). `install_systemd_services.sh` copies two static `.service` templates that hardcode `/opt/momentumx` in `WorkingDirectory`/`PATH`/`ExecStart` — services would have pointed at a nonexistent directory and failed to start.
+- **Fix** (implemented previous session, verified this session): script now computes `ROOT_DIR` from its own real location (`SCRIPT_DIR`/`BASH_SOURCE`), and after copying the `.service` files to `/etc/systemd/system/`, runs `sed -i "s|/opt/momentumx|$ROOT_DIR|g"` on both — only when `$ROOT_DIR != /opt/momentumx` (true no-op for the documented default path).
+- **Verified via `testing_agent_v4`** (`iteration_13.json`): simulated both the custom-dir case (`/tmp/test_install/Internal-trader` — all 4 path references across both unit files correctly rewritten, 0 remaining `/opt/momentumx` refs) and the default-path regression case (sed skipped, files byte-identical to source templates). `bash -n` syntax check clean. 100% pass, no code action items.
+- Applied the one non-blocking doc suggestion: `deploy/linux/README.md` step 1 updated to state any clone directory under `/opt` works (installer auto-patches paths) instead of implying `/opt/momentumx` is a hard requirement.
+- User can now safely run `sudo ./install_systemd_services.sh` from `/opt/Internal-trader/deploy/linux` — see reinstall instructions given in-chat (git pull → run installer → `systemctl status` to verify → SSH tunnel to access).
+
 ## Next Action Items
-1. Follow `/app/deploy/windows/README.md` to actually deploy on the Windows Server VPS once ready to leave the Emergent preview environment.
-2. After a period of verified paper trading, flip `ALPACA_PAPER=false` deliberately (bold warning banner logs on startup) to go live with tiny size, per the rollout/safety plan in the original problem statement.
+1. Market Holiday awareness (P1) — auto-trader currently only skips weekends, will still attempt to trade on market holidays (e.g. Thanksgiving).
+2. UX clarity on "Ready to Trade (5/5)" label (P2) — user confused why 5/5 scanner hits don't always auto-buy (MACD/SMA triggers must also align); needs copy/UX improvement.
+3. Refactor `server.py` (1200+ lines) into modular `/app/backend/routes/` files (P2, tech debt).
+4. Telegram/SMS alerts for new 5/5 scanner hits + trade executions (P2, optional — pending user confirmation).
+5. Follow `/app/deploy/windows/README.md` to deploy on the Windows Server VPS if that target is revisited.
+6. After a period of verified paper trading, flip `ALPACA_PAPER=false` deliberately (bold warning banner logs on startup) to go live with tiny size, per the rollout/safety plan in the original problem statement.
 
 ## Session 3 Update (2026-07-10) — Real Alpaca Paper Verification
 - User provided real Alpaca paper credentials (key `PKRBZGHKVX2SGHWQZZVRJLXRPN`, account `PA30RVV1A2DM`). Configured in `backend/.env`.

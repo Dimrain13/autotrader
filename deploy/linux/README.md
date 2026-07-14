@@ -11,10 +11,12 @@ never exposed directly to the internet.
 git clone <your-repo-url> /opt/momentumx
 cd /opt/momentumx
 ```
-(If you cloned it somewhere else, e.g. your home directory, move it first:
-`sudo mv ~/your-repo-folder /opt/momentumx` — the systemd service files
-below assume this exact path, and a dedicated low-privilege service user
-won't have access to anything under `/root`.)
+`/opt/momentumx` is just the recommended default — the install script
+auto-detects wherever you actually cloned it (e.g. `/opt/Internal-trader`)
+and patches the systemd service files to match, so any directory name/
+location under `/opt` works. The one thing to avoid is cloning into your
+home directory or `/root` — the dedicated low-privilege service user
+(`momentumx`) won't have read access there.
 
 ## 2. Run the one-shot install script (as root/sudo)
 
