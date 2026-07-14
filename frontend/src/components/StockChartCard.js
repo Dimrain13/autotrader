@@ -14,7 +14,7 @@ export default function StockChartCard({ stock, symbol, currentPrice, pctChange,
   // Use override prices if provided, otherwise fall back to stock props
   const displayPrice = currentPrice !== undefined ? currentPrice : stock.current_price;
   const displayPctChange = pctChange !== undefined ? pctChange : stock.pct_change;
-  const [timeframe, setTimeframe] = useState('5Min');
+  const [timeframe, setTimeframe] = useState('1Min');
   const [newsData, setNewsData] = useState(null);
   const [loadingNews, setLoadingNews] = useState(false);
   

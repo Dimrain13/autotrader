@@ -687,10 +687,17 @@ class AlpacaService:
             start_date = end_date - timedelta(hours=limit)
             tf = TimeFrame(1, TimeFrameUnit.Hour)
         elif timeframe == "5Min":
-            start_date = end_date - timedelta(minutes=limit * 5)
+            # ~78 5-min bars per regular trading day. Look back enough
+            # CALENDAR days (not literal elapsed minutes) to guarantee
+            # `limit` actual bars exist, padding generously for weekends/
+            # holidays that may fall inside the window.
+            trading_days_needed = max(1, -(-limit // 78))  # ceil division
+            start_date = end_date - timedelta(days=trading_days_needed * 2 + 3)
             tf = TimeFrame(5, TimeFrameUnit.Minute)
         elif timeframe == "1Min":
-            start_date = end_date - timedelta(minutes=limit)
+            # ~390 1-min bars per regular trading day - same calendar-day padding.
+            trading_days_needed = max(1, -(-limit // 390))  # ceil division
+            start_date = end_date - timedelta(days=trading_days_needed * 2 + 3)
             tf = TimeFrame(1, TimeFrameUnit.Minute)
         else:
             start_date = end_date - timedelta(days=limit)
@@ -724,6 +731,13 @@ class AlpacaService:
                 "close": float(row['close']),
                 "volume": int(row['volume'])
             })
+
+        # The calendar-day padding above can return more bars than asked for
+        # (e.g. extra trading days inside the weekend/holiday buffer) - trim
+        # to the most RECENT `limit` bars, not the oldest ones in the window.
+        if timeframe in ("1Min", "5Min") and len(result) > limit:
+            result = result[-limit:]
+
         return result
     
     def get_bars_yahoo(self, symbol: str, interval: str = "5m", range_str: str = "1d"):

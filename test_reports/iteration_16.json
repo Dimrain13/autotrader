@@ -1,0 +1,36 @@
+{
+  "summary": "Tested the chart data-pipeline fix (redundant full-history fetch bug, calendar-day-padded bar limits, 1Min default timeframe, close/reopen reload reset). Backend: bars endpoint limit-correctness verified exactly (limit=390/780/1170 all returned exactly the requested count, ascending chronological order, calendar-day-padding scales proportionally as designed). Frontend: verified via a real Playwright network-request listener (not just visual inspection) that opening 3 different charts fires EXACTLY one burst of 3 calls per symbol (1Min limit=780, 5Min limit=156, 1Day limit=30) - the core regression is fixed, no redundant full-history spam on scanner/momentum/position polls. Close+reopen of a chart correctly re-triggers a fresh full 3-call burst. Chart timeframe selector defaults to '1M' (confirmed via DOM). HOWEVER found a NEW bug: the ~15s incremental refresh (limit=10 lightweight update) never fires at all - waited 45s after opening a chart with zero incremental calls observed, because Trading.js's chartUpdateInterval is created inside a useEffect with dependency array [demoMode, criteriaFilter] only, so the setInterval closure captures a STALE selectedStocks/positions value from mount time and never sees later selections. This defeats part of the original user request ('asap for the next candles') - initial load works but live candle updates for newly-selected stocks don't happen. Backend full pytest suite: 81/83 passed (excluding the 2 tests I ran separately) - one pre-existing flaky 502 on /auto-trader/process (documented, self-heals) and one test_trading_mode_toggle failure caused by xdist test-parallelism race with the flaky test (auto-trader got toggled ON by the parallel test mid-run) - I manually verified+reset trading-mode via curl afterward, confirmed mode=paper, auto_trader_active=false, no regression from the paper/live toggle feature.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auto-trader/process", "issue": "Pre-existing flaky 502 under xdist parallel test load (documented in iteration_14.json, not caused by this fix)"},
+      {"endpoint": "/api/trading-mode", "issue": "test_get_trading_mode_initial failed only due to test-parallelism race (a concurrently-run test toggled auto_trader on) - not a real bug; manually verified auto_trader_active=false via curl post-suite"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Chart 15s incremental refresh (updateStockData)", "issue": "chartUpdateInterval's setInterval is created inside useEffect(..., [demoMode, criteriaFilter]) which does NOT include selectedStocks or positions in its dependency array, so the interval closure captures a stale (often empty) selectedStocks/positions snapshot from initial mount and never updates. Result: after the initial full-history load, charts NEVER receive the intended lightweight limit=10 incremental refresh every 15s - confirmed via network listener with 0 incremental calls over a 45s observation window on an open chart. This means 'new candles ASAP' (part of the original user request) is not actually happening post-initial-load.", "affected_selectors": []}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_chart_bars_fix.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Fix chartUpdateInterval stale-closure bug in Trading.js: either move selectedStocks/positions into the effect's dependency array (recreating the interval on every selection change) or use refs (e.g. selectedStocksRef, positionsRef) updated via a separate effect and read inside the interval callback, so the 15s incremental limit=10 refresh actually fires for stocks selected after initial mount.",
+    "Re-verify with network listener after the fix: open a chart, wait 20-30s, confirm limit=10 1Min+5Min calls appear at ~15s intervals (no Daily call)."
+  ],
+  "critical_code_review_comments": [
+    "Confirmed loadedChartsRef Set correctly prevents redundant fetchStockData calls across scannerResults/momentumStocks/positions poll ticks - this is the primary regression from the bug report and IS fixed.",
+    "alpaca_service.get_bars() calendar-day-padding + server-side trim-to-recent-N-bars logic verified correct via direct limit scaling tests (390/780/1170 all returned exact counts, ascending timestamps).",
+    "StockChartCard.js default timeframe='1Min' confirmed rendering '1M' as the active/highlighted tab on chart open.",
+    "NEW bug found (see integration_issues): chartUpdateInterval closure staleness prevents the 15s incremental refresh from ever running for post-mount stock selections - this is a functional regression relative to the stated goal, not just a minor issue, since it means live intraday candles won't refresh without a full page reload/reselect."
+  ],
+  "updated_files": ["/app/backend/tests/test_chart_bars_fix.py"],
+  "success_rate": {"backend": "83/85 (97.6%) - 2 failures are test-isolation/flaky artifacts, not real bugs", "frontend": "core regression fix verified working (~90%); 1 new functional bug found in incremental refresh"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None - used demoMode localStorage flag for scanner cards, no DB seed data created.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "The core reported bug (redundant full-history refetch storm) IS fixed and verified via genuine Playwright network-request counting (not just visual). Limit-scaling/calendar-day-padding backend fix also verified exact. Close+reopen reset behavior verified. Default 1Min timeframe verified. The ONE thing NOT working is the 15s incremental candle refresh (updateStockData via chartUpdateInterval) due to a stale closure bug - confirmed with 45s of zero incremental network calls on an open chart. This needs a fix (dependency array or ref pattern) before the 'asap for next candles' part of the original request is truly satisfied. Trading-mode confirmed still paper/auto-trader-off after test session (I manually reset it via curl since a parallel pytest test transiently toggled it during the full suite run).",
+  "rca_of_issue": "chartUpdateInterval is defined via setInterval() inside a useEffect whose dependency array is [demoMode, criteriaFilter]. JavaScript closures capture variable references at creation time; since selectedStocks/positions are not in the dependency array, the effect (and its setInterval) is only recreated when demoMode or criteriaFilter change - never when the user selects/deselects stocks or positions update. So the `symbolsToUpdate` computed inside the interval callback always reflects whatever selectedStocks/positions were AT THE TIME the effect last ran (typically empty on initial mount), making the incremental update effectively dead code for any stock selected after mount."
+}

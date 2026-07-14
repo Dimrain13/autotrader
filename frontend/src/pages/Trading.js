@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import axios from "axios";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,13 @@ export default function Trading() {
   const [marketStatus, setMarketStatus] = useState(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const [showAutoTraderSettings, setShowAutoTraderSettings] = useState(false);
+
+  // Tracks which symbols have already had their full (2-day) chart history
+  // fetched, so opening N charts issues exactly N initial fetches - not one
+  // per chart on every unrelated scannerResults/momentumStocks/positions
+  // poll tick. Cleared for a symbol when its chart is closed, so reopening
+  // it later fetches fresh data again.
+  const loadedChartsRef = useRef(new Set());
   
   // Auto-Trader Entry Condition Settings
   const [autoTraderSettings, setAutoTraderSettings] = useState({
@@ -220,7 +227,9 @@ export default function Trading() {
     // Auto-refresh positions every 15 seconds (reduced from 5s)
     const positionsInterval = setInterval(fetchPositions, 15000);
     
-    // Auto-update chart data for selected stocks every 30 seconds (reduced from 5s)
+    // Auto-update chart data for selected stocks every 15 seconds (fast
+    // incremental updates so the newest 1-min candle shows up ASAP - this
+    // only fetches the last 10 bars via updateStockData, not a full reload).
     const chartUpdateInterval = setInterval(async () => {
       // Only update if we have selected stocks or positions
       const symbolsToUpdate = new Set([...selectedStocks]);
@@ -246,7 +255,7 @@ export default function Trading() {
           }
         }
       }
-    }, 30000);
+    }, 15000);
     
     return () => {
       clearInterval(scannerInterval);
@@ -257,18 +266,23 @@ export default function Trading() {
   }, [demoMode, criteriaFilter]);
 
   useEffect(() => {
-    // Fetch data for each selected stock
+    // Fetch full (2-day) chart history for each NEWLY opened chart - exactly
+    // once per symbol (guarded by loadedChartsRef), never re-triggered by
+    // scannerResults/momentumStocks/positions refreshing in the background.
+    // That used to cause every open chart to re-issue a full 3-day reload
+    // on every 15-60s poll tick, hammering the market data API and making
+    // charts flicker/reset constantly.
     Array.from(selectedStocks).forEach(symbol => {
-      // Always fetch fresh data for selected stocks (don't skip if data exists)
-      
+      if (loadedChartsRef.current.has(symbol)) return;
+
       // Try to find in scanner results
       let stock = scannerResults.find(s => s.symbol === symbol);
-      
+
       // If not in scanner results, check momentum stocks
       if (!stock) {
         stock = momentumStocks.find(s => s.symbol === symbol);
       }
-      
+
       // If not in momentum, check if it's a position
       if (!stock) {
         const position = positions.find(p => p.symbol === symbol);
@@ -284,10 +298,18 @@ export default function Trading() {
           };
         }
       }
-      
+
       if (stock) {
+        loadedChartsRef.current.add(symbol);
         fetchStockData(stock);
       }
+    });
+
+    // A symbol's chart was closed (no longer selected) - drop its loaded
+    // flag so reopening it later fetches fresh data again instead of
+    // silently reusing whatever was in state before.
+    Array.from(loadedChartsRef.current).forEach(symbol => {
+      if (!selectedStocks.has(symbol)) loadedChartsRef.current.delete(symbol);
     });
   }, [selectedStocks, scannerResults, momentumStocks, positions]);
 
@@ -486,8 +508,8 @@ export default function Trading() {
         updated1Min.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         updated5Min.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         
-        const trimmed1Min = updated1Min.slice(-390);
-        const trimmed5Min = updated5Min.slice(-200);
+        const trimmed1Min = updated1Min.slice(-780); // keep the full 2-day window (see fetchStockData)
+        const trimmed5Min = updated5Min.slice(-156); // keep the full 2-day window (see fetchStockData)
         
         // Recalculate indicators with new data
         let sma20 = existingData.sma20, sma50 = existingData.sma50, rsi = existingData.rsi, vwap = existingData.vwap;
@@ -535,13 +557,13 @@ export default function Trading() {
   
   const fetchStockData = async (stock) => {
     try {
-      // Fetch 3 days of data for better trend analysis
-      // 1-min bars: 3 days * 390 bars/day = 1170 bars
-      // 5-min bars: 3 days * 78 bars/day = 234 bars  
-      // Daily bars: 30 days for longer-term trend
+      // Fetch 2 days of intraday data (ASAP-fresh charts, not stale 3-day loads)
+      // 1-min bars: 2 days * 390 bars/day = 780 bars
+      // 5-min bars: 2 days * 78 bars/day = 156 bars
+      // Daily bars: 30 days for longer-term trend (unrelated to the intraday window)
       const [bars1MinResponse, bars5MinResponse, barsDailyResponse, quoteResponse] = await Promise.all([
-        axios.get(`${API}/market/bars/${stock.symbol}?timeframe=1Min&limit=1170`), // 3 days of 1-min bars
-        axios.get(`${API}/market/bars/${stock.symbol}?timeframe=5Min&limit=234`), // 3 days of 5-min bars
+        axios.get(`${API}/market/bars/${stock.symbol}?timeframe=1Min&limit=780`), // 2 days of 1-min bars
+        axios.get(`${API}/market/bars/${stock.symbol}?timeframe=5Min&limit=156`), // 2 days of 5-min bars
         axios.get(`${API}/market/bars/${stock.symbol}?timeframe=1Day&limit=30&use_fallback=false`), // 30 days of daily bars
         axios.get(`${API}/market/quote/${stock.symbol}`)
       ]);
@@ -2149,22 +2171,22 @@ export default function Trading() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="p-4 bg-[#121212] border border-white/5 rounded-sm">
               <div className="text-xs text-neutral-500 mb-2">Entry Signal</div>
-              <div className="text-white mb-2">Bull flag breakout pattern confirmed</div>
+              <div className="text-white mb-2">First Pullback breakout confirmed</div>
               <div className="text-xs text-neutral-500 mb-1">Look for:</div>
               <ul className="text-sm text-neutral-400 space-y-1">
-                <li>• Stock already up 10%+ (from scanner)</li>
-                <li>• MICRO pullback (1-3% retracement)</li>
-                <li>• First candle breaking to new high</li>
+                <li>• Stock already up 10%+ (from scanner, 5/5 criteria)</li>
+                <li>• 1-3 red candle pullback, holding 50%+ of the surge</li>
+                <li>• Breakout candle breaks the pullback's high</li>
               </ul>
             </div>
             <div className="p-4 bg-[#121212] border border-white/5 rounded-sm">
               <div className="text-xs text-neutral-500 mb-2">Risk Management</div>
               <div className="text-white mb-2">2:1 Risk/Reward Ratio</div>
-              <div className="text-xs text-neutral-500 mb-1">Example:</div>
+              <div className="text-xs text-neutral-500 mb-1">Example (stop = low of pullback):</div>
               <div className="text-sm text-neutral-400 space-y-1">
                 <div>Entry: <span className="font-mono text-white">$10.00</span></div>
-                <div>Stop Loss: <span className="font-mono text-[#FF1A40]">$9.90</span> (-1%)</div>
-                <div>Target: <span className="font-mono text-[#00E599]">$10.20</span> (+2%)</div>
+                <div>Stop Loss: <span className="font-mono text-[#FF1A40]">$9.90</span> (structural)</div>
+                <div>Target: <span className="font-mono text-[#00E599]">$10.20</span> (2:1)</div>
               </div>
             </div>
           </div>
