@@ -393,7 +393,22 @@ class ScannerService:
         try:
             current_price = float(snapshot.latest_trade.price)
             prev_close = float(snapshot.previous_daily_bar.close) if snapshot.previous_daily_bar else current_price
-            
+
+            # Reject stale/dormant tickers outright. Alpaca's snapshot endpoint
+            # keeps returning the LAST trade it ever saw for illiquid/halted
+            # names (often SPAC units) even if that trade is weeks old - a
+            # "25% gap" computed from a 3-week-stale print isn't a real
+            # intraday move, and every downstream number (volume ratio, etc.)
+            # would be equally meaningless. Skip anything whose most recent
+            # trade isn't from today's session (US/Eastern trading day).
+            if snapshot.latest_trade and snapshot.latest_trade.timestamp:
+                import pytz
+                eastern = pytz.timezone('US/Eastern')
+                trade_date_et = snapshot.latest_trade.timestamp.astimezone(eastern).date()
+                today_et = datetime.now(eastern).date()
+                if trade_date_et != today_et:
+                    return  # Stale ticker with no trades today - not a real mover
+
             # Calculate all values first
             pct_change = ((current_price - prev_close) / prev_close) * 100 if prev_close > 0 else 0
             current_volume = int(snapshot.daily_bar.volume) if snapshot.daily_bar else 0
