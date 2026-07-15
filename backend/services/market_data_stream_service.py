@@ -417,6 +417,8 @@ class MarketDataStreamManager:
         if not buf:
             return []
         return list(buf)[-limit:]
+
+    def merge_with_stream(self, symbol: str, rest_bars: List[dict], timeframe: str, limit: int) -> List[dict]:
         """
         Fill the free-tier REST embargo gap (~last 15 min) with real-time
         stream bars. `rest_bars` provides bulk history; stream bars cover
