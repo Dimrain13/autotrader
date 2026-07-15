@@ -1194,6 +1194,20 @@ async def get_stream_status():
     """Debug/UI endpoint - current Alpaca real-time WebSocket stream health."""
     return market_data_stream.get_status()
 
+@api_router.get("/market/large-trades/{symbol}")
+async def get_large_trades(symbol: str, limit: int = 20):
+    """
+    Recent unusually-large trade prints (block trades) for `symbol`, tagged
+    buy/sell via the tick rule - a real-data proxy for order-flow
+    support/resistance, since Alpaca's IEX/free tier has no Level 2
+    depth-of-book. Subscribes the symbol to the live stream as a side effect.
+    """
+    asyncio.create_task(market_data_stream.subscribe([symbol]))
+    return {
+        'symbol': symbol,
+        'large_trades': market_data_stream.get_large_trades(symbol, limit=limit)
+    }
+
 @api_router.get("/market/bars/{symbol}")
 async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_fallback: bool = True):
     """
@@ -1206,6 +1220,20 @@ async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_f
     from the Alpaca WebSocket stream (subscribing this symbol as a side effect).
     """
     try:
+        if timeframe in ("10Sec", "10S", "10s"):
+            # Alpaca's Bars API has no "seconds" timeframe at all - this is
+            # built entirely from real trade ticks off the live WebSocket
+            # stream (self-bucketed, never fabricated). Only available once
+            # the symbol has been streaming for a little while.
+            asyncio.create_task(market_data_stream.subscribe([symbol]))
+            bars = market_data_stream.get_tick_bars(symbol, bucket_seconds=10, limit=limit)
+            return {
+                'bars': bars,
+                'source': 'alpaca_realtime_ticks' if bars else 'none',
+                'no_historical_data': not bars,
+                'warning': None if bars else 'No real-time trade ticks yet for this symbol - 10-second bars build up as trades stream in (no historical 10-second data exists on Alpaca)',
+                'symbol': symbol
+            }
         if use_fallback and timeframe in ["5Min", "1Min"]:
             # Keep this symbol streaming going forward (fire-and-forget -
             # doesn't block this request; benefits the NEXT call/tick).
@@ -1346,25 +1374,33 @@ async def update_trading_mode(body: TradingModeUpdate):
 
 @api_router.get("/news/{symbol}")
 async def get_news(symbol: str, limit: int = 5):
-    """Get recent news for a symbol from Google News"""
+    """
+    Get recent news for a symbol - Alpaca/Benzinga first (fast, no scraping),
+    Google News RSS fallback for illiquid micro-caps Benzinga doesn't cover.
+    Same pipeline as the scanner's news check, for consistent results.
+    """
     try:
         from services.google_news_service import google_news_service
-        
-        # Get company name for better search
-        company_name = None
-        try:
-            asset_info = await asyncio.to_thread(alpaca_service.get_asset, symbol)
-            company_name = asset_info.get('name')
-        except:
-            pass
-        
-        result = await asyncio.to_thread(google_news_service.search_stock_news, symbol, 24, limit, company_name)
-        
+        from services.scanner_service import scanner_service
+
+        result = await asyncio.to_thread(scanner_service.check_alpaca_news, symbol, 24, limit)
+        news_source = 'Benzinga (Alpaca)'
+
+        if not result['has_news']:
+            company_name = None
+            try:
+                asset_info = await asyncio.to_thread(alpaca_service.get_asset, symbol)
+                company_name = asset_info.get('name')
+            except Exception:
+                pass
+            result = await asyncio.to_thread(google_news_service.search_stock_news, symbol, 24, limit, company_name)
+            news_source = 'Google News'
+
         return {
             "symbol": symbol,
-            "company_name": company_name,
             "has_news": result['has_news'],
-            "articles": result['articles']
+            "articles": result['articles'],
+            "news_source": news_source if result['has_news'] else None
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

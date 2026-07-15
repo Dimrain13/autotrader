@@ -1,7 +1,7 @@
 import { useEffect, useRef, memo, useCallback } from 'react';
 import { createChart } from 'lightweight-charts';
 
-function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels }) {
+function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, blockTrades }) {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRefs = useRef({});
@@ -189,6 +189,12 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels }) {
         seriesRefs.current[key] = null;
       }
     });
+    // Block-trade (large order print) support/resistance lines get
+    // recreated every update since the count varies
+    (seriesRefs.current.blockTradeLines || []).forEach(line => {
+      try { chart.removeSeries(line); } catch (e) {}
+    });
+    seriesRefs.current.blockTradeLines = [];
 
     // Add SMA20 - LEFT SIDE
     if (candleData.length >= 20) {
@@ -304,6 +310,27 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels }) {
       }
     }
 
+    // Block-trade (large order print) support/resistance markers - real
+    // trade-tick data, not fabricated: unusually large prints flagged by
+    // the backend's tick-rule side detection (buy = potential support,
+    // sell = potential resistance around pullbacks/breakouts).
+    if (blockTrades && blockTrades.length > 0 && candleData.length > 0) {
+      blockTrades.slice(0, 8).forEach((bt, idx) => {
+        const line = chart.addLineSeries({
+          color: bt.side === 'buy' ? '#00E59988' : bt.side === 'sell' ? '#FF1A4088' : '#A3A3A388',
+          lineWidth: 1,
+          lineStyle: 3, // dotted
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title: `${bt.side === 'buy' ? 'Buy' : bt.side === 'sell' ? 'Sell' : ''} block ${bt.size.toLocaleString()}sh`,
+          priceScaleId: 'left',
+        });
+        line.setData(candleData.map(c => ({ time: c.time, value: bt.price })));
+        seriesRefs.current.blockTradeLines.push(line);
+      });
+    }
+
     // RESTORE zoom after data update, or fit on first load
     if (userHasZoomedRef.current && savedRange) {
       // User has zoomed - restore their exact view
@@ -319,7 +346,7 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels }) {
     }
     // Otherwise leave zoom as-is
 
-  }, [data, vwap, levels]); // Update when data changes, but don't destroy chart
+  }, [data, vwap, levels, blockTrades]); // Update when data changes, but don't destroy chart
 
   return <div ref={chartContainerRef} style={{ position: 'relative', width: '100%' }} />;
 }

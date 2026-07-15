@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 
 ALPACA_STREAM_URL = "wss://stream.data.alpaca.markets/v2/iex"
 MAX_BARS_PER_SYMBOL = 300  # ~5 hours of 1-min bars per symbol, in-memory
+MAX_TICKS_PER_SYMBOL = 3000  # raw trade ticks kept for 10-sec bar construction + large-trade detection
+MAX_LARGE_TRADES_PER_SYMBOL = 50
+TRADE_SIZE_HISTORY_LEN = 100  # rolling window used to compute the dynamic "large trade" threshold
+LARGE_TRADE_MIN_SIZE = 500  # absolute floor regardless of a symbol's rolling average
+LARGE_TRADE_MULTIPLIER = 5  # a print is "large" if size >= 5x this symbol's recent average
 MAX_TRADE_QUOTE_SYMBOLS = 25  # stay under Alpaca's free-tier 30-symbol cap
 
 
@@ -79,6 +84,14 @@ class MarketDataStreamManager:
         self.latest_quotes: Dict[str, dict] = {}
         self.latest_trades: Dict[str, dict] = {}
         self.bar_buffers: Dict[str, deque] = {}
+
+        # Raw trade ticks (for self-constructed sub-minute bars, since
+        # Alpaca's Bars API has no "seconds" timeframe) + large block-trade
+        # detection (a real-data proxy for order-flow support/resistance,
+        # since true Level 2 depth isn't available on the IEX/free tier).
+        self.trade_ticks: Dict[str, deque] = {}
+        self._trade_size_history: Dict[str, deque] = {}
+        self.large_trades: Dict[str, deque] = {}
 
         self.connected = False
         self.authenticated = False
@@ -202,11 +215,39 @@ class MarketDataStreamManager:
         now = time.time()
         if msg_type == "t":
             symbol = msg.get("S")
-            if symbol:
+            price = msg.get("p")
+            size = msg.get("s")
+            if symbol and price is not None and size:
                 self.latest_trades[symbol] = {
-                    "price": msg.get("p"), "size": msg.get("s"),
+                    "price": price, "size": size,
                     "timestamp": msg.get("t"), "received_at": now,
                 }
+
+                tick_buf = self.trade_ticks.setdefault(symbol, deque(maxlen=MAX_TICKS_PER_SYMBOL))
+                tick_buf.append({"price": price, "size": size, "timestamp": msg.get("t")})
+
+                # Tick rule (Lee-Ready): compare the trade price to the
+                # quote in effect at the time to infer buyer/seller
+                # aggression - the closest real-data proxy to true order-flow
+                # without paid Level 2 depth-of-book access.
+                quote = self.latest_quotes.get(symbol)
+                side = "neutral"
+                if quote and quote.get("bid_price") and quote.get("ask_price"):
+                    if price >= quote["ask_price"]:
+                        side = "buy"
+                    elif price <= quote["bid_price"]:
+                        side = "sell"
+
+                size_hist = self._trade_size_history.setdefault(symbol, deque(maxlen=TRADE_SIZE_HISTORY_LEN))
+                avg_size = (sum(size_hist) / len(size_hist)) if size_hist else size
+                size_hist.append(size)
+
+                if size >= max(LARGE_TRADE_MIN_SIZE, avg_size * LARGE_TRADE_MULTIPLIER):
+                    large_buf = self.large_trades.setdefault(symbol, deque(maxlen=MAX_LARGE_TRADES_PER_SYMBOL))
+                    large_buf.append({
+                        "price": price, "size": size, "side": side,
+                        "timestamp": msg.get("t"), "avg_size_at_time": round(avg_size, 1),
+                    })
         elif msg_type == "q":
             symbol = msg.get("S")
             if symbol:
@@ -331,7 +372,51 @@ class MarketDataStreamManager:
                 agg['volume'] += (b.get('volume', 0) or 0)
         return [buckets[k] for k in sorted(buckets.keys())][-limit:]
 
-    def merge_with_stream(self, symbol: str, rest_bars: List[dict], timeframe: str, limit: int) -> List[dict]:
+    def get_tick_bars(self, symbol: str, bucket_seconds: int = 10, limit: int = 100) -> List[dict]:
+        """
+        Construct sub-minute OHLCV bars (e.g. 10-second) directly from raw
+        trade ticks. Alpaca's REST/streaming Bars API has no "seconds"
+        timeframe at all, so this is the only way to get a genuinely
+        real-data 10-second chart - built entirely from real Alpaca trade
+        prints, just bucketed client-side instead of fabricated.
+        """
+        ticks = list(self.trade_ticks.get(symbol.upper(), []))
+        if not ticks:
+            return []
+
+        buckets: Dict[int, dict] = {}
+        for tick in ticks:
+            epoch = _to_epoch(tick['timestamp'])
+            if epoch is None:
+                continue
+            bucket_epoch = int(epoch // bucket_seconds) * bucket_seconds
+            price = tick['price']
+            if bucket_epoch not in buckets:
+                buckets[bucket_epoch] = {
+                    'timestamp': datetime.fromtimestamp(bucket_epoch, tz=timezone.utc).isoformat(),
+                    'open': price, 'high': price, 'low': price, 'close': price,
+                    'volume': tick.get('size', 0) or 0,
+                }
+            else:
+                agg = buckets[bucket_epoch]
+                agg['high'] = max(agg['high'], price)
+                agg['low'] = min(agg['low'], price)
+                agg['close'] = price
+                agg['volume'] += (tick.get('size', 0) or 0)
+        return [buckets[k] for k in sorted(buckets.keys())][-limit:]
+
+    def get_large_trades(self, symbol: str, limit: int = 20) -> List[dict]:
+        """
+        Recent unusually-large trade prints (block trades) for `symbol` -
+        a real-data proxy for order-flow support/resistance, since true
+        Level 2 depth-of-book isn't available on Alpaca's IEX/free tier.
+        Each print is tagged buy/sell via the tick rule (trade price vs.
+        the bid/ask in effect at that moment).
+        """
+        buf = self.large_trades.get(symbol.upper())
+        if not buf:
+            return []
+        return list(buf)[-limit:]
         """
         Fill the free-tier REST embargo gap (~last 15 min) with real-time
         stream bars. `rest_bars` provides bulk history; stream bars cover
