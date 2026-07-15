@@ -10,6 +10,15 @@ const API = process.env.REACT_APP_BACKEND_URL + "/api";
 const REFRESH_MS = 30000;
 const LABELS = { "10Sec": "10 Sec", "1Min": "1 Min", "5Min": "5 Min", "1Day": "1 Day" };
 
+// Bar counts sized to cover a FULL trading day (the app's own extended
+// hours window is 4:00 AM - 8:00 PM ET, 16 hours) instead of an arbitrary
+// fixed count that only fills a few minutes/hours on faster timeframes.
+// 10Sec is naturally capped by how many raw trade ticks are still buffered
+// server-side (no historical seconds-level data exists on Alpaca at all -
+// it's built live from ticks) - requesting more than that simply returns
+// whatever's actually available. 1Day is a multi-day lookback, not "a day".
+const FULL_DAY_BAR_LIMIT = { "10Sec": 600, "1Min": 960, "5Min": 200, "1Day": 100 };
+
 export function MiniChartTile({ symbol, timeframe, liveTrade }) {
   const [bars, setBars] = useState([]);
   const [blockTrades, setBlockTrades] = useState([]);
@@ -18,16 +27,17 @@ export function MiniChartTile({ symbol, timeframe, liveTrade }) {
 
   const fetchBars = useCallback((isIncremental = false) => {
     if (!symbol) return;
-    const params = { timeframe, limit: 100 };
+    const limit = FULL_DAY_BAR_LIMIT[timeframe] || 100;
+    const params = { timeframe, limit };
     // Incremental refresh: we already have bars cached locally, so only ask
     // the backend for what's newer than the last one instead of re-pulling
-    // the whole 100-bar history every 30s - much lighter and faster.
+    // the whole day's history every 30s - much lighter and faster.
     if (isIncremental && barsRef.current.length > 0) {
       params.since = barsRef.current[barsRef.current.length - 1].timestamp;
     }
     axios.get(`${API}/market/bars/${symbol}`, { params }).then((res) => {
       const fetched = res.data.bars || [];
-      const merged = params.since ? barsCache.merge(barsRef.current, fetched) : fetched;
+      const merged = params.since ? barsCache.merge(barsRef.current, fetched, limit) : fetched;
       barsRef.current = merged;
       setBars(merged);
       setMeta({ source: res.data.source, warning: res.data.warning });
