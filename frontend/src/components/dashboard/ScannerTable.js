@@ -27,12 +27,19 @@ export function ScannerTable({ results, selectedSymbol, onSelect }) {
               onClick={() => onSelect(s.symbol)}
               data-testid={`scanner-row-${s.symbol}`}
               className={`cursor-pointer border-b border-neutral-900 hover:bg-neutral-800/60 transition-colors ${
+                s._stale ? "opacity-50" : ""
+              } ${
                 selectedSymbol === s.symbol ? "bg-[#00E599]/10" : s.pct_change >= 20 ? "bg-[#00E599]/5" : ""
               }`}
             >
               <td className="px-2 py-1.5 font-semibold text-neutral-100 flex items-center gap-1">
                 {s.symbol}
                 <NewsFlame freshness={s.news_freshness} hasNews={s.has_positive_news} />
+                {s._stale && (
+                  <span className="text-[8px] text-neutral-500 font-normal uppercase tracking-wider" data-testid={`stale-badge-${s.symbol}`}>
+                    stale
+                  </span>
+                )}
               </td>
               <td className="text-right px-2 py-1.5 font-mono tabular-nums text-neutral-300">${s.current_price?.toFixed(2)}</td>
               <td className="text-right px-2 py-1.5"><ChangeCell pct={s.pct_change} /></td>

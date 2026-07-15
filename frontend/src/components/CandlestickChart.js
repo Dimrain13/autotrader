@@ -1,12 +1,13 @@
 import { useEffect, useRef, memo, useCallback } from 'react';
 import { createChart } from 'lightweight-charts';
 
-function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, blockTrades }) {
+function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, blockTrades, livePrice }) {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRefs = useRef({});
   const userHasZoomedRef = useRef(false);
   const isFirstLoadRef = useRef(true);
+  const lastBarRef = useRef(null);
 
   // Effect 1: Create chart once on mount
   useEffect(() => {
@@ -179,6 +180,7 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
     // Update main series (this preserves zoom automatically)
     candlestickSeries.setData(candleData);
     volumeSeries.setData(volumeData);
+    lastBarRef.current = candleData.length > 0 ? { ...candleData[candleData.length - 1] } : null;
 
     // Remove old indicator series
     ['sma20', 'sma50', 'vwap', 'entryLine', 'stopLine', 'targetLine', 'trailLine'].forEach(key => {
@@ -347,6 +349,27 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
     // Otherwise leave zoom as-is
 
   }, [data, vwap, levels, blockTrades]); // Update when data changes, but don't destroy chart
+
+  // Effect 3: live tick updates - moves the LAST candle in real-time as new
+  // trades stream in over the WebSocket, instead of the chart sitting frozen
+  // between periodic REST bar refreshes. Bar-boundary transitions are still
+  // reconciled by the next REST refresh (Effect 2), this just fills the gap.
+  useEffect(() => {
+    if (!livePrice || !livePrice.price || !seriesRefs.current.candlestick || !lastBarRef.current) return;
+    const bar = lastBarRef.current;
+    const newClose = livePrice.price;
+    const updated = {
+      time: bar.time,
+      open: bar.open,
+      high: Math.max(bar.high, newClose),
+      low: Math.min(bar.low, newClose),
+      close: newClose,
+    };
+    lastBarRef.current = updated;
+    try {
+      seriesRefs.current.candlestick.update(updated);
+    } catch (e) {}
+  }, [livePrice]);
 
   return <div ref={chartContainerRef} style={{ position: 'relative', width: '100%' }} />;
 }

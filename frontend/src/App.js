@@ -360,7 +360,7 @@ function App() {
             </div>
           ) : (
             <Routes>
-              <Route path="/" element={<Dashboard account={account} positions={positions} recentOrders={recentOrders} scanner={scanner} />} />
+              <Route path="/" element={<Dashboard account={account} positions={positions} recentOrders={recentOrders} scanner={scanner} onOrderPlaced={() => { fetchAccount(); fetchPositions(); fetchRecentOrders(); }} />} />
               <Route path="/scanner" element={<Scanner scanner={scanner} />} />
               <Route path="/trading" element={<Trading />} />
               <Route path="/history" element={<History />} />

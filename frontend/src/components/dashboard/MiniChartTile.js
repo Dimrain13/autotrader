@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import axios from "axios";
 import CandlestickChart from "../CandlestickChart";
+import { barsCache } from "../../utils/barsCache";
 
 const API = process.env.REACT_APP_BACKEND_URL + "/api";
 
@@ -9,16 +10,28 @@ const API = process.env.REACT_APP_BACKEND_URL + "/api";
 const REFRESH_MS = 30000;
 const LABELS = { "10Sec": "10 Sec", "1Min": "1 Min", "5Min": "5 Min", "1Day": "1 Day" };
 
-export function MiniChartTile({ symbol, timeframe }) {
+export function MiniChartTile({ symbol, timeframe, liveTrade }) {
   const [bars, setBars] = useState([]);
   const [blockTrades, setBlockTrades] = useState([]);
   const [meta, setMeta] = useState({ source: null, warning: null });
+  const barsRef = useRef([]);
 
-  const fetchBars = useCallback(() => {
+  const fetchBars = useCallback((isIncremental = false) => {
     if (!symbol) return;
-    axios.get(`${API}/market/bars/${symbol}?timeframe=${timeframe}&limit=100`).then((res) => {
-      setBars(res.data.bars || []);
+    const params = { timeframe, limit: 100 };
+    // Incremental refresh: we already have bars cached locally, so only ask
+    // the backend for what's newer than the last one instead of re-pulling
+    // the whole 100-bar history every 30s - much lighter and faster.
+    if (isIncremental && barsRef.current.length > 0) {
+      params.since = barsRef.current[barsRef.current.length - 1].timestamp;
+    }
+    axios.get(`${API}/market/bars/${symbol}`, { params }).then((res) => {
+      const fetched = res.data.bars || [];
+      const merged = params.since ? barsCache.merge(barsRef.current, fetched) : fetched;
+      barsRef.current = merged;
+      setBars(merged);
       setMeta({ source: res.data.source, warning: res.data.warning });
+      if (merged.length > 0) barsCache.set(symbol, timeframe, merged);
     }).catch(() => {});
   }, [symbol, timeframe]);
 
@@ -30,12 +43,25 @@ export function MiniChartTile({ symbol, timeframe }) {
   }, [symbol]);
 
   useEffect(() => {
-    setBars([]);
+    if (!symbol) {
+      barsRef.current = [];
+      setBars([]);
+      setBlockTrades([]);
+      return;
+    }
+
+    // Paint instantly from the local cache (if this symbol/timeframe was
+    // already loaded this session) while a fresh fetch runs in the
+    // background, instead of flashing a blank "Loading real data..." state
+    // every time the user re-selects a symbol they already viewed.
+    const cached = barsCache.get(symbol, timeframe);
+    barsRef.current = cached ? cached.bars : [];
+    setBars(barsRef.current);
     setBlockTrades([]);
-    if (!symbol) return;
-    fetchBars();
+
+    fetchBars(!!cached);
     fetchBlockTrades();
-    const barsInterval = setInterval(fetchBars, REFRESH_MS);
+    const barsInterval = setInterval(() => fetchBars(true), REFRESH_MS);
     const blockInterval = setInterval(fetchBlockTrades, REFRESH_MS);
     return () => { clearInterval(barsInterval); clearInterval(blockInterval); };
   }, [symbol, timeframe, fetchBars, fetchBlockTrades]);
@@ -43,7 +69,7 @@ export function MiniChartTile({ symbol, timeframe }) {
   const vwap = bars.length > 0
     ? bars.reduce((sum, b) => sum + b.close * (b.volume || 0), 0) / Math.max(1, bars.reduce((sum, b) => sum + (b.volume || 0), 0))
     : null;
-  const lastPrice = bars.length > 0 ? bars[bars.length - 1].close : null;
+  const lastPrice = liveTrade?.price ?? (bars.length > 0 ? bars[bars.length - 1].close : null);
 
   return (
     <div className="flex flex-col h-full border border-neutral-800 rounded-lg overflow-hidden bg-[#0A0A0A]" data-testid={`chart-tile-${timeframe}`}>
@@ -59,7 +85,7 @@ export function MiniChartTile({ symbol, timeframe }) {
             {meta.warning || "Loading real data..."}
           </div>
         ) : (
-          <CandlestickChart data={bars} height={220} vwap={vwap} blockTrades={blockTrades} />
+          <CandlestickChart data={bars} height={220} vwap={vwap} blockTrades={blockTrades} livePrice={liveTrade} />
         )}
       </div>
     </div>

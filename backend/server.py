@@ -1209,7 +1209,7 @@ async def get_large_trades(symbol: str, limit: int = 20):
     }
 
 @api_router.get("/market/bars/{symbol}")
-async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_fallback: bool = True):
+async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_fallback: bool = True, since: Optional[str] = None):
     """
     Get historical bar data for a symbol. REAL DATA ONLY.
 
@@ -1218,7 +1218,19 @@ async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_f
     instead of fabricating bars. For intraday timeframes, the free-tier's
     ~15 minute REST embargo gap is filled in with genuinely real-time bars
     from the Alpaca WebSocket stream (subscribing this symbol as a side effect).
+
+    `since`: optional ISO timestamp of the last bar the caller already has
+    cached - when provided, only bars newer than this are requested from
+    Alpaca instead of re-pulling the full `limit`-sized historical window,
+    so periodic UI refreshes are a small incremental fetch, not a full
+    history re-download every time.
     """
+    since_dt = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace('Z', '+00:00'))
+        except ValueError:
+            since_dt = None
     try:
         if timeframe in ("10Sec", "10S", "10s"):
             # Alpaca's Bars API has no "seconds" timeframe at all - this is
@@ -1239,7 +1251,7 @@ async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_f
             # doesn't block this request; benefits the NEXT call/tick).
             asyncio.create_task(market_data_stream.subscribe([symbol]))
             # Use fallback method for intraday data - run in thread pool to avoid blocking
-            result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, timeframe, limit)
+            result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, timeframe, limit, since_dt)
             bars = market_data_stream.merge_with_stream(symbol, result.get('bars', []), timeframe, limit)
             return {
                 'bars': bars,
@@ -1250,7 +1262,7 @@ async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_f
             }
         else:
             # Use standard Alpaca for daily data - run in thread pool
-            bars = await asyncio.to_thread(alpaca_service.get_bars, symbol, timeframe, limit)
+            bars = await asyncio.to_thread(alpaca_service.get_bars, symbol, timeframe, limit, since_dt)
             if not bars:
                 return {
                     'bars': [],

@@ -1,20 +1,52 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AccountStrip } from "../components/dashboard/AccountStrip";
 import { ScannerTable } from "../components/dashboard/ScannerTable";
 import { ReadyToTradePanel } from "../components/dashboard/ReadyToTradePanel";
 import { NewsFeedPanel } from "../components/dashboard/NewsFeedPanel";
 import { ChartGrid } from "../components/dashboard/ChartGrid";
+import { QuickTradePanel } from "../components/dashboard/QuickTradePanel";
 import { useMarketDataSocket } from "../hooks/useMarketDataSocket";
 
 // One-screen manual-review trading dashboard: scanner + 5/5 alerts + a
 // 4-timeframe chart grid + news, inspired by (not copying) multi-panel
 // scanner terminals like StocksToTrade/Trade Ideas. Charts only populate
 // once a symbol is manually selected below - no auto-focus.
-export default function Dashboard({ account, positions, scanner }) {
+export default function Dashboard({ account, positions, scanner, onOrderPlaced }) {
   const [selectedSymbol, setSelectedSymbol] = useState(null);
-  const { connected: streamConnected } = useMarketDataSocket();
+  const { connected: streamConnected, trades, subscribe } = useMarketDataSocket();
 
   const results = scanner?.results || [];
+
+  // Keep a frozen snapshot of the selected stock's last known scanner row so
+  // it never visually vanishes from the table/panel mid-review just because
+  // a later scan cycle no longer matches it (price cooled off, etc). Without
+  // this, the highlighted row disappears out from under the user's cursor
+  // every ~60s scan tick, which reads as "my selection got cleared".
+  const [pinnedRow, setPinnedRow] = useState(null);
+  useEffect(() => {
+    if (!selectedSymbol) { setPinnedRow(null); return; }
+    const live = results.find((r) => r.symbol === selectedSymbol);
+    if (live) setPinnedRow(live);
+    // if not found, keep whatever pinnedRow we already have (stale snapshot)
+  }, [selectedSymbol, results]);
+
+  const displayResults = (() => {
+    if (!selectedSymbol) return results;
+    const stillLive = results.some((r) => r.symbol === selectedSymbol);
+    if (stillLive || !pinnedRow) return results;
+    return [...results, { ...pinnedRow, _stale: true }];
+  })();
+
+  const currentPrice = selectedSymbol
+    ? trades[selectedSymbol]?.price || displayResults.find((r) => r.symbol === selectedSymbol)?.current_price || null
+    : null;
+  const selectedPosition = selectedSymbol
+    ? (positions || []).find((p) => p.symbol === selectedSymbol) || null
+    : null;
+
+  useEffect(() => {
+    if (selectedSymbol) subscribe([selectedSymbol]);
+  }, [selectedSymbol, subscribe]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-64px)]" data-testid="dashboard-page">
@@ -25,19 +57,27 @@ export default function Dashboard({ account, positions, scanner }) {
         <div className="col-span-3 flex flex-col gap-2 min-h-0">
           <ReadyToTradePanel results={results} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
           <div className="flex-1 min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A]">
-            <ScannerTable results={results} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
+            <ScannerTable results={displayResults} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
           </div>
         </div>
 
         {/* Center: 4-chart grid for the selected symbol */}
-        <div className="col-span-7 min-h-0">
+        <div className="col-span-7 min-h-0 flex flex-col">
           {selectedSymbol && (
-            <div className="text-sm font-bold text-neutral-200 mb-1 px-1" data-testid="selected-symbol-header">
-              {selectedSymbol}
+            <div className="flex items-center justify-between mb-1 px-1 shrink-0">
+              <div className="text-sm font-bold text-neutral-200" data-testid="selected-symbol-header">
+                {selectedSymbol}
+              </div>
+              <QuickTradePanel
+                symbol={selectedSymbol}
+                currentPrice={currentPrice}
+                position={selectedPosition}
+                onOrderPlaced={onOrderPlaced}
+              />
             </div>
           )}
-          <div className={selectedSymbol ? "h-[calc(100%-24px)]" : "h-full"}>
-            <ChartGrid symbol={selectedSymbol} />
+          <div className="flex-1 min-h-0">
+            <ChartGrid symbol={selectedSymbol} liveTrade={selectedSymbol ? trades[selectedSymbol] : null} />
           </div>
         </div>
 

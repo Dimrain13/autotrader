@@ -11,6 +11,7 @@ import time
 import threading
 from collections import deque
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -728,7 +729,7 @@ class AlpacaService:
             }
         return None
     
-    def get_bars(self, symbol: str, timeframe: str = "1Day", limit: int = 100):
+    def get_bars(self, symbol: str, timeframe: str = "1Day", limit: int = 100, since: Optional[datetime] = None):
         if not self.data_client:
             raise Exception("Alpaca API not configured")
         alpaca_rate_limiter.acquire()
@@ -757,7 +758,13 @@ class AlpacaService:
         else:
             start_date = end_date - timedelta(days=limit)
             tf = TimeFrame(1, TimeFrameUnit.Day)
-        
+
+        # Incremental refresh: caller already has bars up to `since`, so only
+        # ask Alpaca for what's newer instead of re-pulling the whole window -
+        # much smaller/faster request on every periodic UI poll.
+        if since is not None:
+            start_date = since
+
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=tf,
@@ -790,12 +797,14 @@ class AlpacaService:
         # The calendar-day padding above can return more bars than asked for
         # (e.g. extra trading days inside the weekend/holiday buffer) - trim
         # to the most RECENT `limit` bars, not the oldest ones in the window.
-        if timeframe in ("1Min", "5Min") and len(result) > limit:
+        # Skip this trim for incremental `since` requests - the caller wants
+        # everything newer than `since`, not just the tail `limit` of it.
+        if since is None and timeframe in ("1Min", "5Min") and len(result) > limit:
             result = result[-limit:]
 
         return result
     
-    def get_bars_with_fallback(self, symbol: str, timeframe: str = "5Min", limit: int = 100):
+    def get_bars_with_fallback(self, symbol: str, timeframe: str = "5Min", limit: int = 100, since: Optional[datetime] = None):
         """
         Get bar data - ALPACA ONLY (the real production market-data feed).
 
@@ -810,7 +819,7 @@ class AlpacaService:
         data from a different provider.
         """
         try:
-            alpaca_bars = self.get_bars(symbol, timeframe, limit)
+            alpaca_bars = self.get_bars(symbol, timeframe, limit, since)
         except Exception as e:
             logger.warning(f"{symbol}: Alpaca bars failed: {e}")
             alpaca_bars = None
