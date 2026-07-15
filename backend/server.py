@@ -646,6 +646,8 @@ async def place_order(request: Request, order: TradeOrder):
         }
         await db.orders.insert_one(order_doc)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
