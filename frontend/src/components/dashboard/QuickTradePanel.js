@@ -27,7 +27,7 @@ export function QuickTradePanel({ symbol, currentPrice, position, account, onOrd
   if (!symbol) return null;
 
   const sizeMode = localStorage.getItem("positionSizeMode") === "percent" ? "percent" : "dollar";
-  let dollarAmount = getSetting("dollarAmountPerStock", 100);
+  let dollarAmount = getSetting("dollarAmountPerStock", 2000);
   if (sizeMode === "percent" && account?.portfolio_value > 0) {
     dollarAmount = account.portfolio_value * (getSetting("positionSizePct", 10) / 100);
   }
