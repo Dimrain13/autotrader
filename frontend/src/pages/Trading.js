@@ -17,7 +17,7 @@ const API = `${BACKEND_URL}/api`;
 // Cache for entry conditions to avoid repeated API calls
 const entryConditionsCache = {};
 
-export default function Trading() {
+export default function Trading({ account }) {
   const [demoMode, setDemoMode] = useState(() => {
     const saved = localStorage.getItem('demoMode');
     return saved === 'true';
@@ -85,6 +85,18 @@ export default function Trading() {
     const saved = localStorage.getItem('dollarAmountPerStock');
     return saved ? parseInt(saved) : 2000;
   });
+  // Manual buy sizing can be a flat $ amount per stock OR a % of the
+  // account's current portfolio value - user's choice, persisted, shared
+  // with the Dashboard's Quick Trade panel via the same localStorage keys.
+  // (Separate from the auto-trader's own backend-driven position_size_pct
+  // below in Entry Conditions - that one only sizes AUTO-trader entries.)
+  const [positionSizeMode, setPositionSizeMode] = useState(() => {
+    return localStorage.getItem('positionSizeMode') === 'percent' ? 'percent' : 'dollar';
+  });
+  const [positionSizePct, setPositionSizePct] = useState(() => {
+    const saved = localStorage.getItem('positionSizePct');
+    return saved ? parseFloat(saved) : 10;
+  });
   const [stopLossPct, setStopLossPct] = useState(() => {
     const saved = localStorage.getItem('stopLossPct');
     // Migrate old defaults (5%) to new defaults (1%)
@@ -149,6 +161,19 @@ export default function Trading() {
   const [stockData, setStockData] = useState({}); // {symbol: {bars, quote, sma20}}
   const [stockNews, setStockNews] = useState({}); // {symbol: {has_news, articles, last_updated}}
   const [loading, setLoading] = useState(false); // Start with false for instant display
+
+  // Resolves the current manual-buy sizing setting (dollar-flat or percent-
+  // of-account) into an actual $ amount to spend on one stock. Falls back to
+  // the flat dollar amount if percent mode is selected but account data
+  // hasn't loaded yet (portfolio_value unknown), so buys never silently
+  // compute a $0 size.
+  const getPerStockDollarAmount = () => {
+    if (positionSizeMode === 'percent') {
+      const portfolioValue = account?.portfolio_value;
+      if (portfolioValue > 0) return portfolioValue * (positionSizePct / 100);
+    }
+    return dollarAmountPerStock;
+  };
 
   // Real-time Alpaca WebSocket market data (replaces REST polling for price
   // ticks - REST's free-tier data is ~15min delayed, this is genuinely live).
@@ -803,8 +828,8 @@ export default function Trading() {
         currentPrice = latestBar1Min?.close || latestBar5Min?.close || currentPrice;
       }
       
-      // Calculate quantity based on dollarAmountPerStock setting
-      const calculatedQty = Math.floor(dollarAmountPerStock / currentPrice);
+      // Calculate quantity based on the current position-sizing mode ($ flat or % of account)
+      const calculatedQty = Math.floor(getPerStockDollarAmount() / currentPrice);
       const orderQty = Math.max(1, calculatedQty); // At least 1 share
       
       // Calculate stop loss and take profit prices
@@ -943,8 +968,9 @@ export default function Trading() {
         
         try {
           const currentPrice = stock.current_price;
-          const orderQty = Math.floor(dollarAmountPerStock / currentPrice);
-          console.log(`${symbol}: price=${currentPrice}, dollarAmount=${dollarAmountPerStock}, qty=${orderQty}`);
+          const perStockAmount = getPerStockDollarAmount();
+          const orderQty = Math.floor(perStockAmount / currentPrice);
+          console.log(`${symbol}: price=${currentPrice}, dollarAmount=${perStockAmount}, qty=${orderQty}`);
           
           if (orderQty < 1) {
             console.log(`${symbol}: qty < 1, skipping`);
@@ -1376,22 +1402,69 @@ export default function Trading() {
             <div className="flex flex-wrap items-center gap-3 py-2 border-t border-white/5">
               <div className="text-xs text-neutral-400 font-bold uppercase">Trade Settings:</div>
               
-              {/* Dollar Amount */}
-              <div className="flex items-center gap-2">
-                <Label className="text-xs text-neutral-500 whitespace-nowrap">$ per stock:</Label>
-                <Input
-                  type="number"
-                  value={dollarAmountPerStock}
-                  onChange={(e) => {
-                    const value = parseInt(e.target.value) || 2000;
-                    setDollarAmountPerStock(value);
-                    localStorage.setItem('dollarAmountPerStock', value.toString());
-                  }}
-                  className="w-20 h-7 bg-[#121212] border-white/10 text-white text-xs"
-                  step="100"
-                  min="100"
-                />
+              {/* Position Sizing: flat $ amount OR % of account, user's choice */}
+              <div className="flex items-center gap-2" data-testid="position-size-mode-toggle">
+                <button
+                  onClick={() => { setPositionSizeMode('dollar'); localStorage.setItem('positionSizeMode', 'dollar'); }}
+                  data-testid="position-size-mode-dollar-button"
+                  className={`text-xs px-2 h-7 rounded-sm border transition-colors ${
+                    positionSizeMode === 'dollar' ? 'bg-[#00E599]/15 border-[#00E599] text-[#00E599]' : 'border-white/10 text-neutral-500 hover:text-white'
+                  }`}
+                >
+                  $ per stock
+                </button>
+                <button
+                  onClick={() => { setPositionSizeMode('percent'); localStorage.setItem('positionSizeMode', 'percent'); }}
+                  data-testid="position-size-mode-percent-button"
+                  className={`text-xs px-2 h-7 rounded-sm border transition-colors ${
+                    positionSizeMode === 'percent' ? 'bg-[#00E599]/15 border-[#00E599] text-[#00E599]' : 'border-white/10 text-neutral-500 hover:text-white'
+                  }`}
+                >
+                  % of account
+                </button>
               </div>
+
+              {positionSizeMode === 'dollar' ? (
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-neutral-500 whitespace-nowrap">Amount:</Label>
+                  <Input
+                    type="number"
+                    data-testid="dollar-amount-per-stock-input"
+                    value={dollarAmountPerStock}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value) || 2000;
+                      setDollarAmountPerStock(value);
+                      localStorage.setItem('dollarAmountPerStock', value.toString());
+                    }}
+                    className="w-20 h-7 bg-[#121212] border-white/10 text-white text-xs"
+                    step="100"
+                    min="100"
+                  />
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-neutral-500 whitespace-nowrap">Percent:</Label>
+                  <Input
+                    type="number"
+                    data-testid="position-size-pct-input"
+                    value={positionSizePct}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value) || 10;
+                      setPositionSizePct(value);
+                      localStorage.setItem('positionSizePct', value.toString());
+                    }}
+                    className="w-16 h-7 bg-[#121212] border-white/10 text-white text-xs"
+                    step="1"
+                    min="1"
+                    max="100"
+                  />
+                  <span className="text-xs text-neutral-500">%</span>
+                  <span className="text-[10px] text-neutral-600 font-mono" data-testid="position-size-pct-preview">
+                    ≈${getPerStockDollarAmount().toFixed(0)}
+                  </span>
+                </div>
+              )}
+
               
               <div className="h-5 w-px bg-white/10" />
               

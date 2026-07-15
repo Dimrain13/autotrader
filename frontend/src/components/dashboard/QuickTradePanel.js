@@ -13,10 +13,10 @@ const getSetting = (key, fallback) => {
 // Fast one-click buy/sell for whatever symbol is currently loaded in the
 // chart grid, right on the manual-review dashboard - no need to jump to the
 // Trading page for a quick entry/exit. Reuses the exact same risk settings
-// (stop loss / take profit / trailing stop / partial sell) configured on the
-// Trading page (shared localStorage keys), so orders behave identically no
-// matter which screen they're placed from.
-export function QuickTradePanel({ symbol, currentPrice, position, onOrderPlaced }) {
+// (stop loss / take profit / trailing stop / partial sell / position sizing
+// mode) configured on the Trading page (shared localStorage keys), so
+// orders behave identically no matter which screen they're placed from.
+export function QuickTradePanel({ symbol, currentPrice, position, account, onOrderPlaced }) {
   const [qtyOverride, setQtyOverride] = useState(null);
   const [placing, setPlacing] = useState(false);
 
@@ -26,7 +26,11 @@ export function QuickTradePanel({ symbol, currentPrice, position, onOrderPlaced 
 
   if (!symbol) return null;
 
-  const dollarAmount = getSetting("dollarAmountPerStock", 100);
+  const sizeMode = localStorage.getItem("positionSizeMode") === "percent" ? "percent" : "dollar";
+  let dollarAmount = getSetting("dollarAmountPerStock", 100);
+  if (sizeMode === "percent" && account?.portfolio_value > 0) {
+    dollarAmount = account.portfolio_value * (getSetting("positionSizePct", 10) / 100);
+  }
   const defaultQty = currentPrice > 0 ? Math.max(1, Math.floor(dollarAmount / currentPrice)) : 1;
   const buyQty = qtyOverride ?? defaultQty;
 

@@ -5,6 +5,7 @@ import { ReadyToTradePanel } from "../components/dashboard/ReadyToTradePanel";
 import { NewsFeedPanel } from "../components/dashboard/NewsFeedPanel";
 import { ChartGrid } from "../components/dashboard/ChartGrid";
 import { QuickTradePanel } from "../components/dashboard/QuickTradePanel";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "../components/ui/resizable";
 import { useMarketDataSocket } from "../hooks/useMarketDataSocket";
 
 // One-screen manual-review trading dashboard: scanner + 5/5 alerts + a
@@ -52,39 +53,46 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
     <div className="flex flex-col h-[calc(100vh-64px)]" data-testid="dashboard-page">
       <AccountStrip account={account} positions={positions} streamConnected={streamConnected} scanner={scanner} />
 
-      <div className="flex-1 grid grid-cols-12 gap-2 p-2 min-h-0">
-        {/* Left column: scanner + 5/5 alerts */}
-        <div className="col-span-3 flex flex-col gap-2 min-h-0">
-          <ReadyToTradePanel results={results} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
-          <div className="flex-1 min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A]">
-            <ScannerTable results={displayResults} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
-          </div>
-        </div>
-
-        {/* Center: 4-chart grid for the selected symbol */}
-        <div className="col-span-7 min-h-0 flex flex-col">
-          {selectedSymbol && (
-            <div className="flex items-center justify-between mb-1 px-1 shrink-0">
-              <div className="text-sm font-bold text-neutral-200" data-testid="selected-symbol-header">
-                {selectedSymbol}
-              </div>
-              <QuickTradePanel
-                symbol={selectedSymbol}
-                currentPrice={currentPrice}
-                position={selectedPosition}
-                onOrderPlaced={onOrderPlaced}
-              />
+      <div className="flex-1 p-2 min-h-0">
+        <ResizablePanelGroup direction="horizontal" autoSaveId="dashboard-main-columns">
+          {/* Left column: scanner + 5/5 alerts */}
+          <ResizablePanel defaultSize={22} minSize={15} className="flex flex-col gap-2 min-h-0 pr-2">
+            <ReadyToTradePanel results={results} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
+            <div className="flex-1 min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A]">
+              <ScannerTable results={displayResults} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
             </div>
-          )}
-          <div className="flex-1 min-h-0">
-            <ChartGrid symbol={selectedSymbol} liveTrade={selectedSymbol ? trades[selectedSymbol] : null} />
-          </div>
-        </div>
+          </ResizablePanel>
 
-        {/* Right column: news feed for the selected symbol */}
-        <div className="col-span-2 min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A] p-2">
-          <NewsFeedPanel symbol={selectedSymbol} />
-        </div>
+          <ResizableHandle withHandle />
+
+          {/* Center: 4-chart grid for the selected symbol */}
+          <ResizablePanel defaultSize={58} minSize={30} className="min-h-0 flex flex-col px-2">
+            {selectedSymbol && (
+              <div className="flex items-center justify-between mb-1 px-1 shrink-0">
+                <div className="text-sm font-bold text-neutral-200" data-testid="selected-symbol-header">
+                  {selectedSymbol}
+                </div>
+                <QuickTradePanel
+                  symbol={selectedSymbol}
+                  currentPrice={currentPrice}
+                  position={selectedPosition}
+                  account={account}
+                  onOrderPlaced={onOrderPlaced}
+                />
+              </div>
+            )}
+            <div className="flex-1 min-h-0">
+              <ChartGrid symbol={selectedSymbol} liveTrade={selectedSymbol ? trades[selectedSymbol] : null} />
+            </div>
+          </ResizablePanel>
+
+          <ResizableHandle withHandle />
+
+          {/* Right column: news feed for the selected symbol */}
+          <ResizablePanel defaultSize={20} minSize={12} className="min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A] p-2 pl-3">
+            <NewsFeedPanel symbol={selectedSymbol} />
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </div>
     </div>
   );

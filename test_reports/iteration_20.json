@@ -1,0 +1,35 @@
+{
+  "summary": "Frontend-focused testing of the 3 new features per this round's review request: (1) draggable/persisted resizable panels (Dashboard main columns + nested 2x2 ChartGrid), (2) Quick Trade buy-button visibility re-confirmation, (3) $ vs % position-sizing mode shared between Trading.js and Dashboard's QuickTradePanel. All 3 core features PASSED via live browser automation against the deployed preview URL with real login. Resizable panels: found 5 [data-panel-resize-handle-id] handles (1 main-columns horizontal x2 handles, 1 chart-grid-rows horizontal splitter, 2 chart-grid-row1/row2-cols vertical splitters) - dragging the main-column handle by 150px correctly updated localStorage 'react-resizable-panels:dashboard-main-columns' layout array live (22->32.19/58->47.8), dragging the chart-grid row splitter updated 'dashboard-chart-grid-rows' (50/50 -> 60.5/39.4). Critically, performed an actual page.reload() (not a fresh browser context) after dragging and confirmed BOTH localStorage values AND the actual rendered pixel positions of the handles persisted correctly - real F5 persistence works as designed. Position sizing on Trading page: toggle buttons (dollar/percent) work, percent input defaults to 10 with live preview '≈$44' matching real portfolio_value=$438.54 math, changing to 20 correctly updated preview to '≈$88', switching back to dollar mode correctly revealed the flat $ input instead. Dashboard QuickTradePanel: confirmed it reads the SAME localStorage keys ('positionSizeMode'/'positionSizePct') - selecting SOFI with percent mode + pct=10 auto-calculated qty=5 (10% of $438.54=$43.85 / $7.60 price = 5.77 floored to 5), correct. Switching to dollar mode + reselecting MARA calculated qty=5 using the $100 fallback default (est cost $91.10 = 5*$18.22), also mathematically correct for the fallback value in effect. Quick Trade buy-button visibility re-confirmed: panel/button correctly absent when no symbol selected, appears immediately with a functional BUY button once a scanner row is clicked. Regression: BUY order flow fired cleanly from the Dashboard Quick Trade panel with the correctly-computed qty, surfaced a clean toast 'Buy MARA failed: Market is closed...' (expected, outside 4am-8pm ET) without any crash/hang. All 7 pages (Dashboard/Scan/Trade/History/Missed/Settings/Demo) navigated via nav links load with ZERO console errors. Login flow works correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Position sizing $ mode - default fallback value mismatch between Trading.js and QuickTradePanel.js",
+        "issue": "Trading.js initializes `dollarAmountPerStock` state with a fallback of 2000 when localStorage has no saved value (`saved ? parseInt(saved) : 2000` at Trading.js line 84-87), while QuickTradePanel.js's `getSetting('dollarAmountPerStock', 100)` helper falls back to 100 for the exact same localStorage key. Since these are meant to be the SAME shared setting (per the problem statement's explicit requirement), a brand-new user/session will see the Trading page display/use $2000 per stock while the Dashboard Quick Trade panel simultaneously computes qty using $100 per stock for the identical unset setting - until the user explicitly changes the value on the Trading page (which persists it to localStorage and both then agree). Verified live: fresh localStorage context, dollar mode qty for MARA @ $18.22 came out to 5 shares (floor(100/18.22)), matching the 100 fallback, not the 2000 seen on the Trading page UI in an earlier session.",
+        "affected_selectors": ["dollar-amount-per-stock-input", "quick-trade-qty-input"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Align the default fallback value for 'dollarAmountPerStock' between Trading.js (currently 2000) and QuickTradePanel.js's getSetting() call (currently 100) so a fresh/unset session behaves identically on both screens, per the user's explicit requirement that this setting be shared."
+  ],
+  "critical_code_review_comments": [
+    "Dashboard.js/ChartGrid.js resizable panel implementation is clean - correct use of nested ResizablePanelGroup (outer vertical for rows, inner horizontal per row) with distinct autoSaveId per group, matching the spec exactly (main-columns, chart-grid-rows, chart-grid-row1-cols, chart-grid-row2-cols).",
+    "Trading.js getPerStockDollarAmount() correctly falls back to dollarAmountPerStock if percent mode is selected but account.portfolio_value is unavailable/0 - defensive and correct.",
+    "Only nit found: the dollarAmountPerStock default-value inconsistency described above (100 vs 2000) - low severity since it self-heals the moment either screen's value is explicitly saved, but technically violates 'shared setting' intent for brand-new sessions."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A - backend not tested this round per problem statement (frontend-only, no backend edits made)", "frontend": "100% of the 3 scoped features verified working; 1 minor low-severity default-value inconsistency found"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md, matches problem statement)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 3 new features for this round (resizable/persisted panels, $ vs % position sizing shared between Trading.js and Dashboard QuickTradePanel, Quick Trade buy-button visibility re-check) verified working via live browser testing against the deployed preview URL. Note: each mcp_browser_automation call appears to start a fresh browser context (fresh localStorage) - to test true F5 persistence, drag + page.reload() must happen within the SAME script call, not across separate tool calls (learned this the hard way on the first persistence attempt which falsely appeared to fail). Only remaining finding is the low-priority dollarAmountPerStock default value mismatch (100 in QuickTradePanel.js vs 2000 in Trading.js) - easy one-line fix, does not block anything since it self-corrects once either screen's value is saved once.",
+  "rca_of_the_issue": "The dollarAmountPerStock default mismatch stems from Trading.js and QuickTradePanel.js being written independently with different fallback constants for the same shared localStorage key ('dollarAmountPerStock') - Trading.js line ~86 uses ': 2000' while QuickTradePanel.js's getSetting() call uses '100' as the second argument. Fix: pick one canonical default (likely 2000 to match Trading.js's more prominent/deliberate default) and use it in both places."
+}
