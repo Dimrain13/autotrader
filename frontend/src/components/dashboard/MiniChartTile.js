@@ -4,9 +4,9 @@ import CandlestickChart from "../CandlestickChart";
 
 const API = process.env.REACT_APP_BACKEND_URL + "/api";
 
-// Real Alpaca data refresh cadence per timeframe - 10Sec ticks build up fast
-// so it polls quickest; 1Day barely moves intraday so it polls slowest.
-const REFRESH_MS = { "10Sec": 6000, "1Min": 15000, "5Min": 15000, "1Day": 45000 };
+// All 4 tiles refresh on the same 30s cadence (per user preference) - real
+// Alpaca data either way, just less redraw churn than a faster interval.
+const REFRESH_MS = 30000;
 const LABELS = { "10Sec": "10 Sec", "1Min": "1 Min", "5Min": "5 Min", "1Day": "1 Day" };
 
 export function MiniChartTile({ symbol, timeframe }) {
@@ -35,8 +35,8 @@ export function MiniChartTile({ symbol, timeframe }) {
     if (!symbol) return;
     fetchBars();
     fetchBlockTrades();
-    const barsInterval = setInterval(fetchBars, REFRESH_MS[timeframe] || 15000);
-    const blockInterval = setInterval(fetchBlockTrades, 20000);
+    const barsInterval = setInterval(fetchBars, REFRESH_MS);
+    const blockInterval = setInterval(fetchBlockTrades, REFRESH_MS);
     return () => { clearInterval(barsInterval); clearInterval(blockInterval); };
   }, [symbol, timeframe, fetchBars, fetchBlockTrades]);
 
