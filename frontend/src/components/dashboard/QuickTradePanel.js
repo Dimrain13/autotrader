@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import { toast } from "sonner";
+import { playTradeSound } from "../../utils/sound";
 
 const API = process.env.REACT_APP_BACKEND_URL + "/api";
 
@@ -34,8 +35,11 @@ export function QuickTradePanel({ symbol, currentPrice, position, account, onOrd
   const defaultQty = currentPrice > 0 ? Math.max(1, Math.floor(dollarAmount / currentPrice)) : 1;
   const buyQty = qtyOverride ?? defaultQty;
 
-  const placeOrder = async (side) => {
-    const sideQty = side === "sell" ? position?.qty || buyQty : buyQty;
+  // `sellFraction` lets a held position be closed in full (1) or trimmed by
+  // half (0.5) with one click, instead of always closing the whole position.
+  const placeOrder = async (side, sellFraction = 1) => {
+    const heldQty = position?.qty || 0;
+    const sideQty = side === "sell" ? Math.max(1, Math.min(heldQty, Math.round(heldQty * sellFraction))) : buyQty;
     if (!sideQty || sideQty <= 0) return;
     setPlacing(true);
     try {
@@ -61,6 +65,7 @@ export function QuickTradePanel({ symbol, currentPrice, position, account, onOrd
         `${side === "buy" ? "Bought" : "Sold"} ${sideQty} ${symbol} @ $${filled ? filled.toFixed(2) : "?"}`,
         { id: `quick-${side}-${symbol}` }
       );
+      playTradeSound();
       onOrderPlaced?.();
     } catch (error) {
       toast.error(`${side === "buy" ? "Buy" : "Sell"} ${symbol} failed: ${error.response?.data?.detail || error.message}`, {
@@ -90,14 +95,25 @@ export function QuickTradePanel({ symbol, currentPrice, position, account, onOrd
         {placing ? "..." : "BUY"}
       </button>
       {position && (
-        <button
-          onClick={() => placeOrder("sell")}
-          disabled={placing}
-          data-testid="quick-trade-sell-button"
-          className="px-3 py-1 rounded-md text-xs font-bold bg-[#FF1A40] text-white hover:bg-[#FF1A40]/90 disabled:opacity-40 transition-colors"
-        >
-          {placing ? "..." : `SELL ${position.qty}`}
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => placeOrder("sell", 0.5)}
+            disabled={placing || position.qty < 2}
+            data-testid="quick-trade-sell-half-button"
+            title={position.qty < 2 ? "Position too small to split" : `Sell ~half (${Math.max(1, Math.round(position.qty * 0.5))} sh)`}
+            className="px-2.5 py-1 rounded-md text-xs font-bold bg-[#FF1A40]/20 text-[#FF1A40] border border-[#FF1A40]/40 hover:bg-[#FF1A40]/30 disabled:opacity-30 transition-colors"
+          >
+            {placing ? "..." : "SELL 1/2"}
+          </button>
+          <button
+            onClick={() => placeOrder("sell", 1)}
+            disabled={placing}
+            data-testid="quick-trade-sell-all-button"
+            className="px-2.5 py-1 rounded-md text-xs font-bold bg-[#FF1A40] text-white hover:bg-[#FF1A40]/90 disabled:opacity-40 transition-colors"
+          >
+            {placing ? "..." : `SELL ALL ${position.qty}`}
+          </button>
+        </div>
       )}
       {currentPrice > 0 && (
         <span className="text-[10px] text-neutral-500 font-mono" data-testid="quick-trade-est-cost">

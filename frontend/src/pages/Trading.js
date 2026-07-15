@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { DollarSign, TrendingUp, TrendingDown, Activity, Search, Loader2 } from "lucide-react";
 import StockChartCard from "@/components/StockChartCard";
 import { scannerCache } from "../utils/scannerCache";
+import { playTradeSound } from "../utils/sound";
 import { useMarketDataSocket } from "../hooks/useMarketDataSocket";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -853,6 +854,7 @@ export default function Trading({ account }) {
       const result = response.data;
       const actualPrice = result.actual_price || result.filled_avg_price || currentPrice;
       const totalCost = (orderQty * actualPrice).toFixed(2);
+      playTradeSound();
       
       // Check if price changed (fallback was used)
       if (result.price_changed || result.warning) {
@@ -1029,6 +1031,7 @@ export default function Trading({ account }) {
       
       // Completion status
       if (successCount > 0) {
+        playTradeSound();
         setLastAction({ type: 'bulk-buy', success: true, count: successCount, failed: failCount, priceErrors: priceErrorSymbols.length });
         setTimeout(() => setLastAction(null), 5000);
         fetchPositions(); // Refresh positions
@@ -1083,6 +1086,7 @@ export default function Trading({ account }) {
       
       if (successCount > 0) {
         toast.success(`Sold ${successCount} position${successCount > 1 ? 's' : ''}`);
+        playTradeSound();
         setLastAction({ type: 'sell-selected', success: true, count: successCount });
         setTimeout(() => setLastAction(null), 5000);
         // Clear sold stocks from selection
@@ -1132,6 +1136,7 @@ export default function Trading({ account }) {
       
       // Positions liquidated
       if (successCount > 0) {
+        playTradeSound();
         setLastAction({ type: 'sell-all', success: true, count: successCount });
         setTimeout(() => setLastAction(null), 5000);
       }

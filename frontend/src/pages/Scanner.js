@@ -380,7 +380,7 @@ export default function Scanner({ scanner }) {
             </div>
             <div className="flex items-end">
               <Button
-                onClick={() => runScan(false)}
+                onClick={() => runScan()}
                 disabled={scanning || autoScan}
                 data-testid="scan-button"
                 className="w-full bg-[#00E599] text-black font-bold hover:bg-[#00CC88] rounded-sm uppercase tracking-wider text-xs shadow-[0_0_15px_rgba(0,229,153,0.3)] disabled:opacity-50 disabled:cursor-not-allowed"

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import { toast } from "sonner";
 import { scannerCache } from "../utils/scannerCache";
+import { playTradeSound } from "../utils/sound";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -34,13 +35,17 @@ export function useGlobalScanner() {
   const countdownRef = useRef(null);
   const resultsRef = useRef(results);
   resultsRef.current = results;
+  const traderStatusRef = useRef(traderStatus);
+  traderStatusRef.current = traderStatus;
 
   const fetchTraderStatus = async () => {
     try {
       const response = await axios.get(`${API}/auto-trader/status`);
       setTraderStatus(response.data);
+      return response.data;
     } catch (error) {
       console.error('Failed to fetch trader status:', error);
+      return null;
     }
   };
 
@@ -55,7 +60,7 @@ export function useGlobalScanner() {
     }
   }, []);
 
-  const runScan = async (isAutoScan = false) => {
+  const runScan = async () => {
     setScanning(true);
     const existingResults = resultsRef.current;
 
@@ -73,8 +78,18 @@ export function useGlobalScanner() {
 
       if (autoTrade && !demoMode) {
         try {
+          const positionsBefore = new Set((traderStatusRef.current?.positions || []).map(p => p.symbol));
           await axios.post(`${API}/auto-trader/process`);
-          await fetchTraderStatus();
+          const status = await fetchTraderStatus();
+          // Sound alert ONLY for an actual auto-trader entry/exit (a position
+          // symbol appeared or disappeared) - not for scanner candidates
+          // merely appearing/disappearing from the results list.
+          const positionsAfter = new Set((status?.positions || []).map(p => p.symbol));
+          const tradeHappened =
+            positionsBefore.size !== positionsAfter.size ||
+            [...positionsBefore].some((s) => !positionsAfter.has(s)) ||
+            [...positionsAfter].some((s) => !positionsBefore.has(s));
+          if (tradeHappened) playTradeSound();
         } catch (error) {
           console.error('Auto-trader processing error:', error);
         }
@@ -104,25 +119,6 @@ export function useGlobalScanner() {
           return (b.volume_ratio || 0) - (a.volume_ratio || 0);
         });
 
-      // Play a notification beep for newly-detected stocks, even if the
-      // Scanner page isn't currently open - this is the main reason this
-      // logic lives in a global hook instead of the Scanner page itself.
-      if (isAutoScan && existingResults.length > 0) {
-        const newSymbols = scanResults.filter(stock => !existingSymbols.has(stock.symbol));
-        if (newSymbols.length > 0 && window.AudioContext) {
-          const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          const oscillator = audioContext.createOscillator();
-          const gainNode = audioContext.createGain();
-          oscillator.connect(gainNode);
-          gainNode.connect(audioContext.destination);
-          oscillator.frequency.value = 800;
-          oscillator.type = 'sine';
-          gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-          oscillator.start();
-          oscillator.stop(audioContext.currentTime + 0.2);
-        }
-      }
-
       setResults(finalResults);
       setLastScanTime(new Date());
       setScanCount(prev => prev + 1);
@@ -137,7 +133,7 @@ export function useGlobalScanner() {
   // matter which page is currently rendered.
   useEffect(() => {
     if (autoScan) {
-      runScan(true);
+      runScan();
       setNextScanCountdown(60);
 
       countdownRef.current = setInterval(() => {
@@ -145,7 +141,7 @@ export function useGlobalScanner() {
       }, 1000);
 
       intervalRef.current = setInterval(() => {
-        runScan(true);
+        runScan();
         setNextScanCountdown(60);
       }, 60000);
     } else {
@@ -162,7 +158,7 @@ export function useGlobalScanner() {
   // Re-run scan when criteria changes, but only if auto-scan is active
   useEffect(() => {
     if (autoScan && !scanning) {
-      runScan(true);
+      runScan();
     }
   }, [criteria]);
 
