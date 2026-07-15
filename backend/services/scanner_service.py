@@ -8,6 +8,7 @@ import numpy as np
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockSnapshotRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest
 import os
@@ -252,7 +253,11 @@ class ScannerService:
             for attempt in range(max_retries + 1):
                 try:
                     alpaca_rate_limiter.acquire()
-                    snapshot_request = StockSnapshotRequest(symbol_or_symbols=batch)
+                    # Explicit IEX feed (not relying on the account default)
+                    # so this always matches the feed used for the 20-day
+                    # average volume lookup below - keeping current_volume
+                    # and avg_volume on the same basis for a meaningful ratio.
+                    snapshot_request = StockSnapshotRequest(symbol_or_symbols=batch, feed=DataFeed.IEX)
                     snapshots = self.data_client.get_stock_snapshot(snapshot_request)
                     break
                 except Exception as e:
@@ -552,7 +557,16 @@ class ScannerService:
             bars_request = StockBarsRequest(
                 symbol_or_symbols=symbols,
                 timeframe=TimeFrame(1, TimeFrameUnit.Day),
-                start=start_date
+                start=start_date,
+                # Must match the feed the live snapshot's daily_bar uses
+                # (IEX - the free-tier real-time feed) or "today's" volume
+                # here would be pulled from full SIP-consolidated tape while
+                # current_volume (from the snapshot) is IEX-only, silently
+                # deflating every volume_ratio by ~20-50x (IEX is only a
+                # few percent of total consolidated market volume) and
+                # making the 5x relative-volume criterion nearly unreachable
+                # even on genuinely high-volume days.
+                feed=DataFeed.IEX
                 # No explicit `end`: see get_bars() in alpaca_service.py for
                 # why passing end=now() causes SIP data plan rejections.
             )
