@@ -96,7 +96,10 @@ export default function Trading({ account }) {
   });
   const [positionSizePct, setPositionSizePct] = useState(() => {
     const saved = localStorage.getItem('positionSizePct');
-    return saved ? parseFloat(saved) : 10;
+    const parsed = saved ? parseFloat(saved) : 10;
+    // Self-heal a previously-corrupted stored value (e.g. someone typed
+    // "1000" instead of "10") back into the valid 1-100% range on load.
+    return Number.isFinite(parsed) ? Math.min(100, Math.max(1, parsed)) : 10;
   });
   const [stopLossPct, setStopLossPct] = useState(() => {
     const saved = localStorage.getItem('stopLossPct');
@@ -171,7 +174,11 @@ export default function Trading({ account }) {
   const getPerStockDollarAmount = () => {
     if (positionSizeMode === 'percent') {
       const portfolioValue = account?.portfolio_value;
-      if (portfolioValue > 0) return portfolioValue * (positionSizePct / 100);
+      // Clamp defensively (1-100%) even though the input itself is now
+      // clamped too - a stray/corrupted stored value should never be able
+      // to size an order at multiples of the whole account.
+      const safePct = Math.min(100, Math.max(1, positionSizePct || 10));
+      if (portfolioValue > 0) return portfolioValue * (safePct / 100);
     }
     return dollarAmountPerStock;
   };
@@ -1454,7 +1461,7 @@ export default function Trading({ account }) {
                     data-testid="position-size-pct-input"
                     value={positionSizePct}
                     onChange={(e) => {
-                      const value = parseFloat(e.target.value) || 10;
+                      const value = Math.min(100, Math.max(1, parseFloat(e.target.value) || 10));
                       setPositionSizePct(value);
                       localStorage.setItem('positionSizePct', value.toString());
                     }}
