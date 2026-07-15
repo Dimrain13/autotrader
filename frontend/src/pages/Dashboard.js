@@ -31,12 +31,32 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
     // if not found, keep whatever pinnedRow we already have (stale snapshot)
   }, [selectedSymbol, results]);
 
-  const displayResults = (() => {
+  // Subscribe the live WS feed to every symbol currently on the scanner
+  // table (not just whichever one is selected/charted) so prices/% change
+  // tick in real time between the ~60s full re-scans instead of sitting
+  // stale until the next scan cycle.
+  useEffect(() => {
+    const syms = results.map((r) => r.symbol);
+    if (syms.length > 0) subscribe(syms);
+  }, [results, subscribe]);
+
+  // Overlay live WS trade prices onto each scanner row, recomputing % change
+  // from the row's prev_close (same reference the backend scan itself uses)
+  // so the whole table keeps moving tick-by-tick, not just the selected chart.
+  const withLivePrices = (rows) =>
+    rows.map((r) => {
+      const tick = trades[r.symbol];
+      if (!tick) return r;
+      const pctChange = r.prev_close > 0 ? ((tick.price - r.prev_close) / r.prev_close) * 100 : r.pct_change;
+      return { ...r, current_price: tick.price, pct_change: pctChange };
+    });
+
+  const displayResults = withLivePrices((() => {
     if (!selectedSymbol) return results;
     const stillLive = results.some((r) => r.symbol === selectedSymbol);
     if (stillLive || !pinnedRow) return results;
     return [...results, { ...pinnedRow, _stale: true }];
-  })();
+  })());
 
   const currentPrice = selectedSymbol
     ? trades[selectedSymbol]?.price || displayResults.find((r) => r.symbol === selectedSymbol)?.current_price || null
@@ -57,7 +77,7 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
         <ResizablePanelGroup direction="horizontal" autoSaveId="dashboard-main-columns">
           {/* Left column: scanner + 5/5 alerts */}
           <ResizablePanel defaultSize={22} minSize={15} className="flex flex-col gap-2 min-h-0 pr-2">
-            <ReadyToTradePanel results={results} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
+            <ReadyToTradePanel results={displayResults} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
             <div className="flex-1 min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A]">
               <ScannerTable results={displayResults} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
             </div>

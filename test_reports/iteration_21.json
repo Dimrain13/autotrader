@@ -1,0 +1,27 @@
+{
+  "summary": "Frontend-only testing of this round's 2 new features: (1) sortable scanner table column headers, (2) all-symbol WS subscription for live price ticking. Both PASSED via live browser automation against the deployed preview URL with real login (daniel.r.millner@gmail.com) + Demo Mode. Verified via actual displayed cell values (not just DOM diffing) that clicking each of the 6 headers (Sym/Price/Chg%/RVol/Float/5-5) correctly re-sorts rows: Price desc (MARA 17.41 > RIOT 12.45 > NIO 9.99 > PLUG 5.08 > LCID 3.52), Price re-click asc (reversed), Chg% desc (NIO 13.5% > MARA 11.6% > RIOT 10.1% > LCID 10.0% > PLUG 5.8%), RVol desc (NIO 8.0x > RIOT 7.7x > LCID 5.8x > MARA 5.3x > PLUG 3.3x), Float asc (PLUG 11.1M < RIOT 11.2M < NIO 13.7M < LCID 13.8M < MARA 16.9M), Sym asc (LCID/MARA/NIO/PLUG/RIOT alphabetical) - all correct. Chevron icon confirmed present (1 svg) on the active header and a neutral icon (1 svg, ChevronsUpDown) on inactive headers. Clicking a row to select it still works correctly after multiple sort operations (clicked LCID row post-sort, selected-symbol-header correctly showed 'LCID', chart/QuickTradePanel/news all populated). Live WS wiring: captured the actual outgoing WS frame on wss://.../api/ws/market-data and confirmed it contains {\"action\":\"subscribe\",\"symbols\":[\"RIOT\",\"RIVN\",\"PLUG\",\"MARA\"]} - ALL 4 visible scanner symbols, not just the selected one - immediately after a scan completed. No console errors from the new subscribe-all-symbols effect. Regression: sort order (Price desc) correctly persisted/re-applied across a live scan-refresh cycle (new symbols PLTR/MARA/NIO/LCID re-appeared still in descending price order automatically). '5/5 Ready to Trade' chip panel correctly reflected live prices matching the table rows in every screenshot taken. Full 7-tab nav regression (Dashboard/Scan/Trade/History/Missed/Settings/Demo) completed with ZERO console errors. Re-login flow works correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ScannerTable.js sort implementation is clean: static ALIGN_CLASS map correctly avoids dynamic Tailwind class interpolation, COLUMNS config with defaultDir per metric is a good pattern, stable Array.prototype.sort preserves secondary ordering for ties correctly.",
+    "Dashboard.js withLivePrices() correctly recomputes pct_change from prev_close rather than trusting a stale field, and the new all-symbols subscribe effect is properly scoped to `results` changes with subscribe() being idempotent/additive as documented - no risk of subscribe spam or duplicate listeners observed.",
+    "Minor note (not a bug): could not directly test a chip click in ReadyToTradePanel this round because Demo Mode randomly produced 0 ready_to_trade candidates on that particular scan tick - not reproducible on demand, but panel content/prices were visually confirmed correct and in sync with the table across multiple other scan snapshots during this session."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A - not tested this round per problem statement (frontend-only)", "frontend": "100% of the 2 scoped features (sortable headers + all-symbol WS subscription) verified working, plus all regression checks passed"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md, matches problem statement)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Sortable scanner headers (all 6 columns, both directions, chevron indicators) and the new all-symbols WS subscribe effect are both confirmed working via live browser automation - captured the actual outgoing WS frame containing all visible symbols. Row selection remains unbroken after sorting. Sort order persists correctly across a live scan-refresh cycle. Note for future testing: Demo Mode's random scan data occasionally yields 0 ready_to_trade rows on a given tick - retry a fresh scan-toggle click if you need to test the Ready-to-Trade chip panel specifically. Also note: each mcp_browser_automation call starts a fresh browser context (fresh localStorage/session) - login + set demoMode + trigger scan must all happen within the same script call.",
+  "rca_of_the_issue": "N/A - no bugs found this round."
+}

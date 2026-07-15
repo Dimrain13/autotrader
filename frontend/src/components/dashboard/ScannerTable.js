@@ -1,22 +1,71 @@
+import { useState } from "react";
+import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { NewsFlame, ChangeCell, CriteriaDots } from "./ScannerCells";
+
+// Column definitions: `key` is the field to sort by, `defaultDir` is which
+// direction that column sorts on first click (biggest/most-extreme first
+// for numeric metrics, alphabetical for the symbol column).
+const COLUMNS = [
+  { key: "symbol", label: "Sym", align: "left", defaultDir: "asc" },
+  { key: "current_price", label: "Price", align: "right", defaultDir: "desc" },
+  { key: "pct_change", label: "Chg%", align: "right", defaultDir: "desc" },
+  { key: "volume_ratio", label: "RVol", align: "right", defaultDir: "desc" },
+  { key: "shares_outstanding", label: "Float", align: "right", defaultDir: "asc" },
+  { key: "criteria_count", label: "5/5", align: "center", defaultDir: "desc" },
+];
+
+const ALIGN_CLASS = { left: "text-left", right: "text-right", center: "text-center" };
 
 // Dense, color-graded scanner results table for manual review - click a row
 // to load it into the chart grid. Rows are tinted by % change intensity so
 // the strongest movers visually pop without needing a separate "hot" column.
+// Click any column header to sort by that metric (click again to flip
+// direction); with no column selected, falls back to the default
+// criteria-count-then-volume ranking the backend scan already provides.
 export function ScannerTable({ results, selectedSymbol, onSelect }) {
-  const sorted = [...(results || [])].sort((a, b) => (b.criteria_count || 0) - (a.criteria_count || 0) || b.pct_change - a.pct_change);
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("desc");
+
+  const handleHeaderClick = (col) => {
+    if (sortKey === col.key) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(col.key);
+      setSortDir(col.defaultDir);
+    }
+  };
+
+  const sorted = [...(results || [])].sort((a, b) => {
+    if (!sortKey) {
+      return (b.criteria_count || 0) - (a.criteria_count || 0) || b.pct_change - a.pct_change;
+    }
+    const dir = sortDir === "asc" ? 1 : -1;
+    if (sortKey === "symbol") return a.symbol.localeCompare(b.symbol) * dir;
+    return ((a[sortKey] || 0) - (b[sortKey] || 0)) * dir;
+  });
 
   return (
     <div className="overflow-y-auto h-full" data-testid="scanner-table">
       <table className="w-full text-xs">
         <thead className="sticky top-0 bg-[#111111] text-neutral-500 z-10">
           <tr>
-            <th className="text-left px-2 py-1.5 font-normal">Sym</th>
-            <th className="text-right px-2 py-1.5 font-normal">Price</th>
-            <th className="text-right px-2 py-1.5 font-normal">Chg%</th>
-            <th className="text-right px-2 py-1.5 font-normal">RVol</th>
-            <th className="text-right px-2 py-1.5 font-normal">Float</th>
-            <th className="text-center px-2 py-1.5 font-normal">5/5</th>
+            {COLUMNS.map((col) => (
+              <th
+                key={col.key}
+                onClick={() => handleHeaderClick(col)}
+                data-testid={`scanner-header-${col.key}`}
+                className={`px-2 py-1.5 font-normal cursor-pointer select-none hover:text-neutral-200 transition-colors ${ALIGN_CLASS[col.align]}`}
+              >
+                <span className={`inline-flex items-center gap-0.5 ${col.align === "right" ? "flex-row-reverse" : ""}`}>
+                  {col.label}
+                  {sortKey === col.key ? (
+                    sortDir === "asc" ? <ChevronUp size={11} /> : <ChevronDown size={11} />
+                  ) : (
+                    <ChevronsUpDown size={11} className="opacity-30" />
+                  )}
+                </span>
+              </th>
+            ))}
             <th className="text-center px-2 py-1.5 font-normal"></th>
           </tr>
         </thead>
