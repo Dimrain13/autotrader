@@ -242,6 +242,33 @@ function NavBar({ account, tradingMode, onLogout }) {
   );
 }
 
+// Rendered as a child of <BrowserRouter> (unlike App itself) so it can
+// reactively read the current route via useLocation() - needed so the
+// Dashboard's full-width layout applies/reverts immediately on client-side
+// nav clicks, not just on a full page reload.
+function MainContent({ loading, account, positions, recentOrders, scanner, onOrderPlaced }) {
+  const { pathname } = useLocation();
+  return (
+    <main className={pathname === '/' ? "w-full" : "container mx-auto p-4 md:p-6"}>
+      {loading ? (
+        <div className="flex justify-center items-center h-96">
+          <div className="text-lg text-neutral-500">Loading...</div>
+        </div>
+      ) : (
+        <Routes>
+          <Route path="/" element={<Dashboard account={account} positions={positions} recentOrders={recentOrders} scanner={scanner} onOrderPlaced={onOrderPlaced} />} />
+          <Route path="/scanner" element={<Scanner scanner={scanner} />} />
+          <Route path="/trading" element={<Trading account={account} />} />
+          <Route path="/history" element={<History />} />
+          <Route path="/missed" element={<MissedOpportunities />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/demo" element={<Demo />} />
+        </Routes>
+      )}
+    </main>
+  );
+}
+
 function App() {
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -353,23 +380,14 @@ function App() {
     <BrowserRouter>
       <div className="min-h-screen bg-[#050505]">
         <NavBar account={account} tradingMode={tradingMode} onLogout={handleLogout} />
-        <main className={window.location.pathname === '/' ? "w-full" : "container mx-auto p-4 md:p-6"}>
-          {loading ? (
-            <div className="flex justify-center items-center h-96">
-              <div className="text-lg text-neutral-500">Loading...</div>
-            </div>
-          ) : (
-            <Routes>
-              <Route path="/" element={<Dashboard account={account} positions={positions} recentOrders={recentOrders} scanner={scanner} onOrderPlaced={() => { fetchAccount(); fetchPositions(); fetchRecentOrders(); }} />} />
-              <Route path="/scanner" element={<Scanner scanner={scanner} />} />
-              <Route path="/trading" element={<Trading account={account} />} />
-              <Route path="/history" element={<History />} />
-              <Route path="/missed" element={<MissedOpportunities />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/demo" element={<Demo />} />
-            </Routes>
-          )}
-        </main>
+        <MainContent
+          loading={loading}
+          account={account}
+          positions={positions}
+          recentOrders={recentOrders}
+          scanner={scanner}
+          onOrderPlaced={() => { fetchAccount(); fetchPositions(); fetchRecentOrders(); }}
+        />
         <Toaster position="top-right" />
       </div>
     </BrowserRouter>
