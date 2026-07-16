@@ -13,24 +13,33 @@ Usage:
 - The OLD static `API_ACCESS_TOKEN` (`sr7sWvLt5MicXQTC0jw-...`) NO LONGER WORKS - fully removed from `.env` and code.
 
 ## Alpaca Broker Credentials
-TWO separate key pairs are now configured, intentionally split by purpose:
+THREE key pairs now configured, intentionally split by purpose:
 
-**Trading (orders/positions/account) - PAPER, unchanged:**
+**Trading (orders/positions/account) - PAPER, ROTATED 2026-07 (this session):**
 ```
-ALPACA_API_KEY="PKRBZGHKVX2SGHWQZZVRJLXRPN"
-ALPACA_SECRET_KEY="A5H61qnJEsWrFMomsiG8K69TpZCZJn9HubwdNpnbjDRR"
+ALPACA_API_KEY="PKBNCHRXSP6JSLZ4Q35ODCHTWE"
+ALPACA_SECRET_KEY="FVNN9B3PSsSUaQouqDWjAPsot43bqC3Pkb1UiFLrVzey"
 ALPACA_BASE_URL="https://paper-api.alpaca.markets"
 ```
-Paper account number: `PA30RVV1A2DM`. All actual order execution (auto-trader + manual buy/sell) always uses these paper keys - confirmed via code review and live test that `trading_client` never touches the live keys below.
+Paper account number: `PA36RNHPHRUZ` (replaces the old `PA30RVV1A2DM` - user rotated this key mid-session). This account has REAL margin active (~4x buying power vs equity). All actual order execution (auto-trader + manual buy/sell) always uses these paper keys.
 
-**Market Data + News (bars/quotes/news) - LIVE account, added 2026-02:**
+**Market Data + News (bars/quotes/news, PRIMARY) - LIVE account, added 2026-02:**
 ```
 ALPACA_DATA_API_KEY="AK376KQAJ35L675GO4C37WMOXS"
 ALPACA_DATA_SECRET_KEY="5Fv3aFi2sKa6mK2Rb5bPToZZhtRwvgzhGihuxLe5SY7G"
 ```
-⚠️ These are LIVE/production Alpaca credentials but are ONLY ever used for read-only market data/news lookups (`StockHistoricalDataClient`/`NewsClient` in `alpaca_service.py` and `scanner_service.py`), never for `TradingClient`/order placement. Since these were shared in plaintext chat, consider rotating them in the Alpaca dashboard once things are stable.
+⚠️ These are LIVE/production Alpaca credentials but are ONLY ever used for read-only market data/news lookups, never for order placement.
 
-Account is currently FLAT (no open positions) as of 2026-07-10. Auto-trader confirmed OFF by default.
+**Market Data + News (bars/quotes/news, SECONDARY/speed-boost) - added 2026-07 (this session):**
+```
+ALPACA_SECONDARY_DATA_API_KEY="PKRBZGHKVX2SGHWQZZVRJLXRPN"
+ALPACA_SECONDARY_DATA_SECRET_KEY="A5H61qnJEsWrFMomsiG8K69TpZCZJn9HubwdNpnbjDRR"
+```
+This is the OLD (now-retired) paper trading key pair, repurposed data/news-only - round-robined alongside the primary data key via `data_pool`/`news_pool` (`alpaca_service.py`) purely to roughly double combined scan/news/chart throughput (Alpaca rate-limits are per-account). Never used for `TradingClient`/order placement - confirmed via code review.
+
+Since real credentials were shared in plaintext chat, consider rotating all of these in the Alpaca dashboard once things are stable.
+
+Account is currently FLAT (no open positions, no open orders) as of 2026-07-16. Auto-trader confirmed OFF by default.
 
 ## MongoDB
 Uses existing `MONGO_URL` / `DB_NAME` from `/app/backend/.env` (no auth, local instance). No credentials needed.
