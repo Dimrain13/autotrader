@@ -55,7 +55,7 @@ export function QuickTradePanel({ symbol, currentPrice, position, account, onOrd
           stop_loss_pct: getSetting("stopLossPct", 1),
           take_profit_pct: getSetting("takeProfitPct", 2),
           entry_price: currentPrice || undefined,
-          stop_type: localStorage.getItem("stopType") || "fixed",
+          stop_type: localStorage.getItem("stopType") || "trailing",
           trailing_stop_pct: getSetting("trailingStopPct", 1),
           partial_sell_pct: getSetting("partialSellPct", 50),
           partial_sell_trigger_pct: getSetting("partialSellTrigger", 2),

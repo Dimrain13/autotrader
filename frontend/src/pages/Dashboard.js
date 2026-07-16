@@ -5,6 +5,7 @@ import { ReadyToTradePanel } from "../components/dashboard/ReadyToTradePanel";
 import { NewsFeedPanel } from "../components/dashboard/NewsFeedPanel";
 import { ChartGrid } from "../components/dashboard/ChartGrid";
 import { QuickTradePanel } from "../components/dashboard/QuickTradePanel";
+import { OpenPositionsPanel } from "../components/dashboard/OpenPositionsPanel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "../components/ui/resizable";
 import { useMarketDataSocket } from "../hooks/useMarketDataSocket";
 
@@ -72,6 +73,7 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
   return (
     <div className="flex flex-col h-[calc(100vh-64px)]" data-testid="dashboard-page">
       <AccountStrip account={account} positions={positions} streamConnected={streamConnected} scanner={scanner} />
+      <OpenPositionsPanel positions={positions} onOrderPlaced={onOrderPlaced} />
 
       <div className="flex-1 p-2 min-h-0">
         <ResizablePanelGroup direction="horizontal" autoSaveId="dashboard-main-columns">

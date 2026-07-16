@@ -810,6 +810,7 @@ async def get_auto_trader_status():
             "position_size_pct": auto_trader.position_size_pct * 100,  # 10%
             "profit_target_pct": auto_trader.profit_target_pct * 100,  # 2%
             "stop_loss_pct": auto_trader.stop_loss_pct * 100,  # 1%
+            "reward_risk_ratio": auto_trader.reward_risk_ratio,  # 2.0 = 2:1
             "daily_max_loss_pct": auto_trader.daily_max_loss_pct * 100,  # 1%
             "max_consecutive_losses": auto_trader.max_consecutive_losses,  # 3
             "trading_hours": f"{auto_trader.trading_start_hour}:00 AM - {auto_trader.trading_end_hour - 12 if auto_trader.trading_end_hour > 12 else auto_trader.trading_end_hour}:{auto_trader.trading_end_minute:02d} PM EST",
@@ -872,6 +873,7 @@ async def update_auto_trader_settings(settings: dict):
                 # Trade management
                 "profit_target_pct": auto_trader.profit_target_pct * 100,
                 "stop_loss_pct": auto_trader.stop_loss_pct * 100,
+                "reward_risk_ratio": auto_trader.reward_risk_ratio,
                 "max_positions": auto_trader.max_positions,
                 "position_size_pct": auto_trader.position_size_pct * 100,
                 "daily_max_loss_pct": auto_trader.daily_max_loss_pct * 100

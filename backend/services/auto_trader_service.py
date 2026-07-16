@@ -55,6 +55,9 @@ class AutoTraderService:
         self.position_size_pct = 0.10  # 10% of account per trade (up to 5 concurrent = 50% max exposure)
         self.profit_target_pct = 0.02  # 2% profit target - sell 50% here (2:1 with the 1% stop)
         self.stop_loss_pct = 0.01  # 1% initial stop loss
+        self.reward_risk_ratio = 2.0  # multiplier applied to the structural stop distance
+        # to get the profit target price (see check_entry_signals) - kept in
+        # sync with the same "R:R" ratio configurable from the Trading page.
         self.trailing_stop_pct = 0.01  # 1% trailing stop (default)
         self.partial_sell_pct = 0.50  # Sell 50% at profit target
         self.move_to_breakeven = True  # Move stop to break-even after partial sell
@@ -189,6 +192,8 @@ class AutoTraderService:
             self.profit_target_pct = float(settings['profit_target_pct']) / 100
         if 'stop_loss_pct' in settings:
             self.stop_loss_pct = float(settings['stop_loss_pct']) / 100
+        if 'reward_risk_ratio' in settings:
+            self.reward_risk_ratio = float(settings['reward_risk_ratio'])
         if 'trailing_stop_pct' in settings:
             self.trailing_stop_pct = float(settings['trailing_stop_pct']) / 100
         if 'partial_sell_pct' in settings:
@@ -649,7 +654,7 @@ class AutoTraderService:
                     logger.debug(f"{symbol}: No bull flag pattern - no entry")
                     return None
 
-            target_price = entry_price + (2 * risk_per_share)  # True 2:1 reward:risk off the structural stop
+            target_price = entry_price + (self.reward_risk_ratio * risk_per_share)  # Reward:Risk off the structural stop
             entry_signal = {
                 'symbol': symbol,
                 'entry_price': entry_price,

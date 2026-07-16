@@ -119,6 +119,13 @@ export default function Trading({ account }) {
     }
     return saved ? parseFloat(saved) : 2.0;  // 2% take profit (Warrior Trading quick scalp)
   });
+  // Reward:Risk ratio (e.g. 2 = 2:1) - drives takeProfitPct automatically
+  // off of stopLossPct below, so the profit target always stays in the
+  // configured ratio to risk instead of being set independently.
+  const [riskRewardRatio, setRiskRewardRatio] = useState(() => {
+    const saved = localStorage.getItem('riskRewardRatio');
+    return saved ? parseFloat(saved) : 2.0;  // 2:1 reward:risk (Warrior Trading default)
+  });
   const [criteriaFilter, setCriteriaFilter] = useState(() => {
     const saved = localStorage.getItem('criteriaFilter');
     return saved || 'all'; // 'all', '3+', '4+', '5'
@@ -129,7 +136,7 @@ export default function Trading({ account }) {
   });
   const [stopType, setStopType] = useState(() => {
     const saved = localStorage.getItem('stopType');
-    return saved || 'fixed'; // 'fixed' or 'trailing'
+    return saved || 'trailing'; // 'fixed' or 'trailing' - trailing is the default once in a trade
   });
   const [trailingStopPct, setTrailingStopPct] = useState(() => {
     const saved = localStorage.getItem('trailingStopPct');
@@ -162,6 +169,15 @@ export default function Trading({ account }) {
     }
     return saved === 'true';
   });
+  // Keep the profit target locked to the configured Reward:Risk ratio -
+  // whenever the stop loss % or the ratio itself changes, recompute the
+  // take profit % instead of leaving it as a stale independent value.
+  useEffect(() => {
+    const computed = Math.round(stopLossPct * riskRewardRatio * 100) / 100;
+    setTakeProfitPct(computed);
+    localStorage.setItem('takeProfitPct', computed.toString());
+  }, [stopLossPct, riskRewardRatio]);
+
   const [stockData, setStockData] = useState({}); // {symbol: {bars, quote, sma20}}
   const [stockNews, setStockNews] = useState({}); // {symbol: {has_news, articles, last_updated}}
   const [loading, setLoading] = useState(false); // Start with false for instant display
@@ -267,11 +283,19 @@ export default function Trading({ account }) {
           ...(response.data.entry_conditions || {}),
           profit_target_pct: response.data.strategy?.profit_target_pct || 2.0,
           stop_loss_pct: response.data.strategy?.stop_loss_pct || 1.0,
+          reward_risk_ratio: response.data.strategy?.reward_risk_ratio || 2.0,
           max_positions: response.data.max_positions || 5,
           position_size_pct: response.data.strategy?.position_size_pct || 10.0,
           daily_max_loss_pct: response.data.strategy?.daily_max_loss_pct || 5.0
         };
         setAutoTraderSettings(settings);
+        // Keep the backend auto-trader's own reward:risk target calc in sync
+        // with whatever ratio is already saved locally, so a fresh session
+        // picks up the user's configured ratio instead of the backend default.
+        const savedRatio = localStorage.getItem('riskRewardRatio');
+        if (savedRatio && parseFloat(savedRatio) !== settings.reward_risk_ratio) {
+          axios.post(`${API}/auto-trader/settings`, { reward_risk_ratio: parseFloat(savedRatio) }).catch(() => {});
+        }
       } catch (error) {
         console.error('Failed to fetch auto-trader settings:', error);
       }
@@ -1499,22 +1523,37 @@ export default function Trading({ account }) {
                 <span className="text-xs text-red-400">%</span>
               </div>
               
-              {/* Take Profit */}
+              {/* Reward:Risk ratio - drives Target automatically */}
               <div className="flex items-center gap-2">
-                <Label className="text-xs text-green-400 whitespace-nowrap">Target:</Label>
+                <Label className="text-xs text-neutral-500 whitespace-nowrap">R:R</Label>
                 <Input
                   type="number"
-                  value={takeProfitPct}
+                  value={riskRewardRatio}
                   onChange={(e) => {
-                    const value = parseFloat(e.target.value) || 10.0;
-                    setTakeProfitPct(value);
-                    localStorage.setItem('takeProfitPct', value.toString());
+                    const value = parseFloat(e.target.value) || 2.0;
+                    setRiskRewardRatio(value);
+                    localStorage.setItem('riskRewardRatio', value.toString());
+                    axios.post(`${API}/auto-trader/settings`, { reward_risk_ratio: value }).catch(() => {});
                   }}
-                  className="w-14 h-7 bg-[#121212] border-green-500/30 text-green-400 text-xs"
+                  data-testid="risk-reward-ratio-input"
+                  className="w-14 h-7 bg-[#121212] border-white/10 text-white text-xs"
                   step="0.5"
-                  min="1"
-                  max="50"
+                  min="0.5"
+                  max="10"
                 />
+                <span className="text-xs text-neutral-500">:1</span>
+              </div>
+
+              {/* Take Profit - auto-computed from Stop x R:R, not independently editable */}
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-green-400 whitespace-nowrap">Target:</Label>
+                <span
+                  className="w-14 h-7 flex items-center justify-center bg-[#121212] border border-green-500/30 text-green-400 text-xs rounded-md font-mono"
+                  data-testid="take-profit-pct-computed"
+                  title="Auto-calculated as Stop % x R:R ratio"
+                >
+                  {takeProfitPct.toFixed(1)}
+                </span>
                 <span className="text-xs text-green-400">%</span>
               </div>
               
