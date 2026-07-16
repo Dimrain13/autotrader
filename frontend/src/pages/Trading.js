@@ -185,16 +185,19 @@ export default function Trading({ account }) {
   // Resolves the current manual-buy sizing setting (dollar-flat or percent-
   // of-account) into an actual $ amount to spend on one stock. Falls back to
   // the flat dollar amount if percent mode is selected but account data
-  // hasn't loaded yet (portfolio_value unknown), so buys never silently
+  // hasn't loaded yet (buying power unknown), so buys never silently
   // compute a $0 size.
   const getPerStockDollarAmount = () => {
     if (positionSizeMode === 'percent') {
-      const portfolioValue = account?.portfolio_value;
+      // Margin trading, always at the max - size off buying power (which
+      // includes margin), never unlevered portfolio_value/equity. Falls
+      // back to portfolio_value only if buying_power itself is missing.
+      const buyingPower = account?.margin_buying_power || account?.buying_power || account?.portfolio_value;
       // Clamp defensively (1-100%) even though the input itself is now
       // clamped too - a stray/corrupted stored value should never be able
       // to size an order at multiples of the whole account.
       const safePct = Math.min(100, Math.max(1, positionSizePct || 10));
-      if (portfolioValue > 0) return portfolioValue * (safePct / 100);
+      if (buyingPower > 0) return buyingPower * (safePct / 100);
     }
     return dollarAmountPerStock;
   };

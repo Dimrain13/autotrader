@@ -2,6 +2,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import StockBarsRequest, StockQuotesRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from requests.adapters import HTTPAdapter
@@ -49,6 +50,49 @@ class AlpacaRateLimiter:
 
 
 alpaca_rate_limiter = AlpacaRateLimiter(max_per_minute=190)
+
+
+class AlpacaClientPool:
+    """
+    Round-robins Market Data / News API calls across every CONFIGURED
+    Alpaca account's client, each carrying its OWN independent rate
+    limiter. Alpaca enforces data rate limits per-account (not globally),
+    so splitting the exact same scanner/chart/news workload across 2
+    accounts roughly doubles real combined throughput instead of every
+    caller - regardless of which service made the request - bottlenecking
+    on a single account's ~190/min budget. Falls back to a single-entry
+    "pool" (identical behavior to before) if no second account is
+    configured, so this is a pure speed add-on, never a hard dependency.
+    """
+    def __init__(self):
+        self._entries = []  # [(client, rate_limiter, label), ...]
+        self._idx = 0
+        self._lock = threading.Lock()
+
+    def add(self, client, rate_limiter, label: str):
+        if client is not None and rate_limiter is not None:
+            self._entries.append((client, rate_limiter, label))
+
+    @property
+    def configured_count(self) -> int:
+        return len(self._entries)
+
+    def acquire(self):
+        """Round-robins to the next configured account, blocks on THAT
+        account's own rate limiter, then returns its client to call."""
+        with self._lock:
+            if not self._entries:
+                return None
+            client, limiter, _label = self._entries[self._idx % len(self._entries)]
+            self._idx += 1
+        limiter.acquire()
+        return client
+
+
+# Shared across alpaca_service.py + scanner_service.py so every caller of
+# either module draws from the exact same pooled accounts/limiters.
+data_pool = AlpacaClientPool()
+news_pool = AlpacaClientPool()
 
 
 def mount_larger_connection_pool(session, pool_size: int = 60):
@@ -146,6 +190,33 @@ class AlpacaService:
             mount_larger_connection_pool(self.data_client._session)
         data_source = "LIVE account" if os.getenv('ALPACA_DATA_API_KEY') else "same paper account (no ALPACA_DATA_API_KEY set)"
         logger.info(f"📊 Market data client: {data_source}")
+
+        # Optional SECOND Alpaca account, used purely to roughly double
+        # combined Market Data/News throughput - each Alpaca account has
+        # its own independent ~190-200/min data rate limit, so requests
+        # get round-robined across every configured account below (never
+        # used for trading/orders - data/news only).
+        secondary_data_api_key = os.getenv('ALPACA_SECONDARY_DATA_API_KEY')
+        secondary_data_secret_key = os.getenv('ALPACA_SECONDARY_DATA_SECRET_KEY')
+        self.secondary_data_client = None
+        secondary_rate_limiter = None
+        if secondary_data_api_key and secondary_data_secret_key:
+            self.secondary_data_client = StockHistoricalDataClient(api_key=secondary_data_api_key, secret_key=secondary_data_secret_key)
+            mount_larger_connection_pool(self.secondary_data_client._session)
+            secondary_rate_limiter = AlpacaRateLimiter(max_per_minute=190)
+            logger.info("📊⚡ Secondary market-data account configured - data/news requests load-balanced across 2 accounts for ~2x throughput")
+
+        data_pool.add(self.data_client, alpaca_rate_limiter, "primary")
+        data_pool.add(self.secondary_data_client, secondary_rate_limiter, "secondary")
+
+        self.news_client = NewsClient(api_key=data_api_key, secret_key=data_secret_key) if (data_api_key and data_secret_key) else None
+        self.secondary_news_client = NewsClient(api_key=secondary_data_api_key, secret_key=secondary_data_secret_key) if (secondary_data_api_key and secondary_data_secret_key) else None
+        if self.news_client:
+            mount_larger_connection_pool(self.news_client._session)
+        if self.secondary_news_client:
+            mount_larger_connection_pool(self.secondary_news_client._session)
+        news_pool.add(self.news_client, alpaca_rate_limiter, "primary")
+        news_pool.add(self.secondary_news_client, secondary_rate_limiter, "secondary")
 
     def get_trading_mode_info(self) -> dict:
         """Current trading mode + which account(s) are actually configured."""
@@ -681,9 +752,9 @@ class AlpacaService:
     def get_quotes(self, symbols):
         if not self.data_client:
             raise Exception("Alpaca API not configured")
-        alpaca_rate_limiter.acquire()
+        client = data_pool.acquire()
         request = StockLatestQuoteRequest(symbol_or_symbols=symbols)
-        quotes = self.data_client.get_stock_latest_quote(request)
+        quotes = client.get_stock_latest_quote(request)
         result = {}
         for symbol in symbols:
             if symbol in quotes:
@@ -715,9 +786,9 @@ class AlpacaService:
         """Get latest quote for a single symbol with spread calculation"""
         if not self.data_client:
             raise Exception("Alpaca API not configured")
-        alpaca_rate_limiter.acquire()
+        client = data_pool.acquire()
         request = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
-        quotes = self.data_client.get_stock_latest_quote(request)
+        quotes = client.get_stock_latest_quote(request)
         if symbol in quotes:
             quote = quotes[symbol]
             bid = float(quote.bid_price)
@@ -746,7 +817,7 @@ class AlpacaService:
     def get_bars(self, symbol: str, timeframe: str = "1Day", limit: int = 100, since: Optional[datetime] = None):
         if not self.data_client:
             raise Exception("Alpaca API not configured")
-        alpaca_rate_limiter.acquire()
+        client = data_pool.acquire()
         end_date = datetime.now()
         
         # Map timeframe string to TimeFrame object
@@ -791,7 +862,7 @@ class AlpacaService:
             # (respecting its own real-time embargo internally) instead of
             # erroring out and forcing a fallback to Yahoo every time.
         )
-        bars = self.data_client.get_stock_bars(request)
+        bars = client.get_stock_bars(request)
         df = bars.df
         if df.empty:
             return []

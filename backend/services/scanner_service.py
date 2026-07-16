@@ -5,15 +5,13 @@ import time
 from typing import List, Dict
 import pandas as pd
 import numpy as np
-from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockSnapshotRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.data.enums import DataFeed
-from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest
 import os
 
-from services.alpaca_service import alpaca_rate_limiter, mount_larger_connection_pool
+from services.alpaca_service import data_pool, news_pool
 
 logger = logging.getLogger(__name__)
 
@@ -47,26 +45,20 @@ class ScannerService:
         # Alpaca's "too many requests" rate limit.
         self._scan_lock = threading.Lock()
         
-        # Initialize Alpaca clients
+        # Initialize Alpaca clients. Market data/news no longer construct
+        # their own client here - they draw from the shared data_pool/
+        # news_pool (alpaca_service.py) so requests get load-balanced
+        # across every configured Alpaca account (primary + optional
+        # secondary speed-boost account) instead of a scanner-local client
+        # tied to just one account.
         api_key = os.getenv('ALPACA_API_KEY')
         secret_key = os.getenv('ALPACA_SECRET_KEY')
-        # Market data + news are sourced from a separate live-account key
-        # pair (better data plan than the free paper account); actual order
-        # execution below always stays on the paper trading_client.
-        data_api_key = os.getenv('ALPACA_DATA_API_KEY') or api_key
-        data_secret_key = os.getenv('ALPACA_DATA_SECRET_KEY') or secret_key
         if api_key and secret_key:
             from alpaca.trading.client import TradingClient
             self.trading_client = TradingClient(api_key=api_key, secret_key=secret_key, paper=True)
-            self.data_client = StockHistoricalDataClient(api_key=data_api_key, secret_key=data_secret_key)
-            self.news_client = NewsClient(api_key=data_api_key, secret_key=data_secret_key)
-            mount_larger_connection_pool(self.data_client._session)
-            mount_larger_connection_pool(self.news_client._session)
             self._load_stock_universe()
         else:
             self.trading_client = None
-            self.data_client = None
-            self.news_client = None
             self.stock_universe = []
     
     def _load_stock_universe(self):
@@ -127,7 +119,7 @@ class ScannerService:
         so both sources are judged identically. Returns the same shape as
         google_news_service.search_stock_news(): {'has_news', 'articles'}.
         """
-        if not self.news_client:
+        if news_pool.configured_count == 0:
             return {'has_news': False, 'articles': []}
 
         try:
@@ -141,8 +133,8 @@ class ScannerService:
                 start=datetime.now(timezone.utc) - timedelta(hours=hours_back),
                 limit=limit
             )
-            alpaca_rate_limiter.acquire()
-            news_set = self.news_client.get_news(news_request)
+            alpaca_news_client = news_pool.acquire()
+            news_set = alpaca_news_client.get_news(news_request)
 
             # IMPORTANT: alpaca-py's NewsSet model does NOT expose a `.news`
             # attribute directly (that always raises/misses, silently making
@@ -213,7 +205,7 @@ class ScannerService:
     def scan_stocks(self, criteria: Dict) -> List[Dict]:
         results = []
         
-        if not self.data_client:
+        if data_pool.configured_count == 0:
             logger.error("Alpaca data client not initialized")
             return results
         
@@ -252,13 +244,13 @@ class ScannerService:
             max_retries = 2
             for attempt in range(max_retries + 1):
                 try:
-                    alpaca_rate_limiter.acquire()
+                    alpaca_data_client = data_pool.acquire()
                     # Explicit IEX feed (not relying on the account default)
                     # so this always matches the feed used for the 20-day
                     # average volume lookup below - keeping current_volume
                     # and avg_volume on the same basis for a meaningful ratio.
                     snapshot_request = StockSnapshotRequest(symbol_or_symbols=batch, feed=DataFeed.IEX)
-                    snapshots = self.data_client.get_stock_snapshot(snapshot_request)
+                    snapshots = alpaca_data_client.get_stock_snapshot(snapshot_request)
                     break
                 except Exception as e:
                     if "too many requests" in str(e).lower() and attempt < max_retries:
@@ -310,8 +302,9 @@ class ScannerService:
                 return []
         
         # Process batches in parallel (6 concurrent workers - tuned to stay
-        # under Alpaca's 200 req/min data-API cap alongside the shared
-        # alpaca_rate_limiter, instead of just bursting and retrying)
+        # under each configured Alpaca account's 200 req/min data-API cap
+        # alongside its own pooled rate limiter, instead of just bursting
+        # and retrying)
         logger.info(f"⚡ PARALLEL SCAN: Processing {total_batches} batches with 6 concurrent workers")
         
         with ThreadPoolExecutor(max_workers=6) as executor:
@@ -571,8 +564,8 @@ class ScannerService:
                 # why passing end=now() causes SIP data plan rejections.
             )
             
-            alpaca_rate_limiter.acquire()
-            bars = self.data_client.get_stock_bars(bars_request)
+            alpaca_data_client = data_pool.acquire()
+            bars = alpaca_data_client.get_stock_bars(bars_request)
             
             # Calculate average volume for each symbol
             for result in results:

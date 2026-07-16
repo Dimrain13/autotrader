@@ -29,11 +29,14 @@ export function QuickTradePanel({ symbol, currentPrice, position, account, onOrd
 
   const sizeMode = localStorage.getItem("positionSizeMode") === "percent" ? "percent" : "dollar";
   let dollarAmount = getSetting("dollarAmountPerStock", 2000);
-  if (sizeMode === "percent" && account?.portfolio_value > 0) {
+  // Margin trading, always at the max - size off buying power (includes
+  // margin), never unlevered portfolio_value/equity.
+  const buyingPower = account?.margin_buying_power || account?.buying_power || account?.portfolio_value;
+  if (sizeMode === "percent" && buyingPower > 0) {
     // Clamp defensively (1-100%) - a stray/corrupted stored value should
     // never be able to size an order at multiples of the whole account.
     const safePct = Math.min(100, Math.max(1, getSetting("positionSizePct", 10)));
-    dollarAmount = account.portfolio_value * (safePct / 100);
+    dollarAmount = buyingPower * (safePct / 100);
   }
   const defaultQty = currentPrice > 0 ? Math.max(1, Math.floor(dollarAmount / currentPrice)) : 1;
   const buyQty = qtyOverride ?? defaultQty;
