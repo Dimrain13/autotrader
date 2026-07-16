@@ -7,6 +7,7 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
   const seriesRefs = useRef({});
   const isFollowingRef = useRef(true); // true = auto-snap to the newest bar (default "live" mode)
   const suppressRangeEventRef = useRef(false); // true while WE are programmatically moving the view (avoids treating our own scrollToRealTime() call as a user pan)
+  const rangeChangeDebounceRef = useRef(null); // debounce timer - only decide follow/re-snap once a drag/zoom gesture has SETTLED, not on every intermediate event mid-gesture (racing scrollToRealTime() against an in-progress drag visibly distorted the view)
   const isFirstLoadRef = useRef(true);
   const lastBarRef = useRef(null);
 
@@ -94,27 +95,34 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
     window.addEventListener('resize', handleResize);
 
     // Track whether the user is still "at the live edge" (following) or has
-    // intentionally panned back into history. Zooming while at the edge
-    // (or scrolling back TO the edge) immediately re-snaps to the newest
-    // bar at whatever zoom level they landed on - only a deliberate pan
-    // backward in time turns auto-follow off, and only until they return.
+    // intentionally panned back into history. Debounced: only evaluated
+    // once a drag/zoom gesture SETTLES (200ms after the last event), never
+    // mid-gesture - reacting to every intermediate event while the user is
+    // still actively dragging fought the gesture itself and distorted the
+    // final view (calling scrollToRealTime() before the drag had crossed
+    // the "into history" threshold).
     chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
       if (suppressRangeEventRef.current) return;
-      let pos = 0;
-      try { pos = chart.timeScale().scrollPosition(); } catch (e) {}
-      if (pos < -1.5) {
-        isFollowingRef.current = false;
-      } else {
-        isFollowingRef.current = true;
-        suppressRangeEventRef.current = true;
-        try { chart.timeScale().scrollToRealTime(); } catch (e) {}
-        requestAnimationFrame(() => { suppressRangeEventRef.current = false; });
-      }
+      if (rangeChangeDebounceRef.current) clearTimeout(rangeChangeDebounceRef.current);
+      rangeChangeDebounceRef.current = setTimeout(() => {
+        if (suppressRangeEventRef.current) return;
+        let pos = 0;
+        try { pos = chart.timeScale().scrollPosition(); } catch (e) {}
+        if (pos < -1.5) {
+          isFollowingRef.current = false;
+        } else {
+          isFollowingRef.current = true;
+          suppressRangeEventRef.current = true;
+          try { chart.timeScale().scrollToRealTime(); } catch (e) {}
+          requestAnimationFrame(() => { suppressRangeEventRef.current = false; });
+        }
+      }, 200);
     });
 
     // Cleanup ONLY on unmount
     return () => {
       window.removeEventListener('resize', handleResize);
+      if (rangeChangeDebounceRef.current) clearTimeout(rangeChangeDebounceRef.current);
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;

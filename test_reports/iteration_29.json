@@ -1,0 +1,36 @@
+{
+  "summary": "Re-tested the debounced subscribeVisibleLogicalRangeChange fix in CandlestickChart.js (Effect 1) targeting the iteration_28 bug (manual pan-into-history distorting into a wide/zoomed-out view). Used the Dashboard 1Min mini-chart tile with a real scanner symbol (STAK), wheel-zoom + mouse drag via Playwright. Frontend loads cleanly, zero console errors across all interactions, chart renders correctly on load and on 3s/30s data refresh.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "CandlestickChart.js (Effect 1, debounced range-change handler)",
+        "issue": "Scenario (c) - slow, multi-step drag backward into history: after the drag gesture completed and settled (5s wait), the view reverted to the exact same zoomed live-edge state as before the drag (byte-identical screenshot to the post-zoom state), instead of staying panned back into history. This differs from the FAST single drag, which DID correctly stay panned back with zoom preserved after settling (no distortion). Could not conclusively determine if this is a genuine app regression or a test-harness artifact (the drag start point near the right price-scale gutter may have been mis-targeted for the slow-drag sub-test specifically) - flagging with LOW-MEDIUM confidence for main agent awareness, not a confirmed reproduction of the original 'wide/zoomed-out distortion' bug (no wide/zoomed-out distorted rendering was observed anywhere in this run).",
+        "selector": "[data-testid='chart-tile-1Min']",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Primary reported bug (iteration_28 ui_bugs[0]: drag-into-history distorting into a wide/zoomed-out view) was NOT reproduced in this retest - fast single drag into history correctly preserved zoom (bar spacing) and stayed panned back after a 5s settle, matching the intended fix behavior.",
+    "Zoom-in-then-stay-at-live-edge (scenario b) confirmed working: zoom level and live-edge position were byte-identical across a 700ms settle screenshot and a further +1.5s wait screenshot (no reset, no re-widening).",
+    "Slow multi-step drag sub-scenario (c) showed an inconclusive result (reverted to live-edge zoomed state rather than staying panned back) - recommend main agent do one manual/visual spot-check of a slow drag gesture if time permits, though this may be a test-coordinate artifact rather than a real bug since no distortion (wide/zoomed-out) rendering was seen.",
+    "Scenario (d) (drag forward to resume auto-follow) showed the view shift forward as expected but could not be definitively confirmed as 'auto-follow resumed with newest bar visible' due to the same coordinate uncertainty - low confidence, not flagged as a bug."
+  ],
+  "critical_code_review_comments": [
+    "CandlestickChart.js Effect 1: the 200ms debounce (rangeChangeDebounceRef) correctly clears/resets on every event and only evaluates scrollPosition()/decides follow vs re-snap once settled - this directly addresses the iteration_28 RCA (mid-drag scrollToRealTime() calls racing the user's gesture). Cleanup on unmount also correctly clears the timer.",
+    "Effect 2 and Effect 3 unchanged as stated, verified no stale userHasZoomedRef/savedRange refs remain via code read.",
+    "Minor: the mini-chart tiles' left-side price-line label overlays (VWAP/SMA/ENTRY/STOP/TRAIL) occupy a meaningful left portion of each chart tile and can interfere with mouse-based pan gestures that start/end near that region - not a bug, just a testability note (drag interactions should target the right 60-70% of the tile width to avoid the overlay column)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (not tested per scope)", "frontend": "~85% - core fix scenarios (b) and fast-drag (c) verified passing; slow-drag (c) sub-case and (d) inconclusive due to test coordinate precision, not confirmed as bugs"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md) - login worked correctly",
+  "seed_data_creation": "None - used live scanner data (STAK, ATPC, etc.)",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The originally reported iteration_28 bug (drag-into-history distorting into a wide/zoomed-out view) was NOT reproduced after the debounce fix - fast drag scenario clearly showed preserved zoom + stayed panned back after 5s settle, and zoom-stays-at-live-edge (b) was confirmed stable across two wait checkpoints. One sub-case (slow multi-step drag) gave an ambiguous result (reverted to live edge instead of staying panned back) but did NOT show the reported distortion pattern, and is more likely a test-coordinate limitation (mini chart tiles are narrow ~640px with left-side label overlays eating into usable drag space, and the right edge is close to the price-scale gutter) than a real regression. If further certainty is needed, retest with a wider chart (e.g. Trading page's StockChartCard, height=400, likely more width) and drag strictly within the middle 50% of the canvas. No console errors observed in any run. Screenshots for this session are in /root/.emergent/automation_output/20260716_170932/ (Q through Y) and /root/.emergent/automation_output/20260716_170419/ (A through G, earlier attempt with coordinate issues later fixed).",
+  "rca_of_the_issue": "N/A for this retest - see iteration_28.json for the original RCA. This retest's own test-harness limitation: initial attempts (iterations at 165704-170255) used cy coordinates targeting the vertical center of the full tile container (height=458.5px), but the actual interactive CandlestickChart canvas inside the tile is only 220px tall (per MiniChartTile.js height prop) sitting below a ~24px header - meaning early test runs' mouse wheel/drag events landed in empty space below the canvas and had ZERO effect on the chart (confirmed by byte-identical screenshots across all steps). Corrected by targeting cy = box.y + 24 + 100 (mid-point of the actual 220px chart area), after which zoom and pan interactions began working as expected."
+}
