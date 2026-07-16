@@ -1,0 +1,34 @@
+{
+  "summary": "Frontend-only visual/interaction test of the Dashboard 2-column resizable layout change in Dashboard.js. Verified via Playwright at 1920x1080: (1) layout structure matches spec - LEFT column ~32% width with Stocks (ReadyToTradePanel+ScannerTable) on top / News on bottom in a 50/50 nested vertical ResizablePanelGroup, RIGHT column ~68% width with QuickTradePanel header + 4-tile ChartGrid, no longer center; (2) both drag handles work correctly - main horizontal handle resized left/right columns from 473px/997px to 720px/750px, inner vertical handle resized Stocks/News from 440px/450px to 537px/353px; (3) functional regression via demoMode+Start Scanning to get scanner candidates (real scanner returned 0 candidates during this market window, so used the existing frontend demoMode toggle which calls the same /api/scanner/demo endpoint with real-looking symbols) - selecting LCID from the scanner table correctly populated: selected-symbol-header + QuickTradePanel (qty input, BUY button) on the right above the chart grid, all 4 chart tiles (10 SEC empty due to no historical 10-sec Alpaca data - pre-existing, unrelated) with real bars/SMA20/SMA50/VWAP, and the News panel switched from placeholder to 'No recent news found' for LCID (left, bottom) - all wiring intact after the layout move; (4) full-screen usage at 16:9 - layout fills available height below nav/account/positions strips with no visible wasted whitespace.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/orders?limit=5", "issue": "One-off 500 Internal Server Error observed once in backend logs during testing; immediately succeeded (200) on the very next poll cycle. Transient, not reproduced on retry, likely unrelated to the Dashboard layout change (this endpoint is called from App.js root polling, not Dashboard.js)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CandlestickChart (chart tiles)", "issue": "STOP and TRAIL price-line labels are visually hard to distinguish from ENTRY/TARGET when stop-loss/trailing-stop % is very close to entry (e.g. default 1%) - labels stack tightly on the left price scale. Confirmed via code review that stopLine/trailLine ARE added to the chart (CandlestickChart.js lines 270-312), this is a pre-existing label-density issue unrelated to this layout change, not a regression.", "selector": "N/A - canvas-rendered chart", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "No action required for the layout change itself - it matches the requested spec exactly and all resize/selection/data-flow behavior works correctly.",
+    "OPTIONAL: consider the STOP/TRAIL label-overlap issue in a future session if closer legibility is desired (cosmetic only, pre-existing, not caused by this layout change)."
+  ],
+  "critical_code_review_comments": [
+    "Dashboard.js layout change is clean and matches the request precisely: outer ResizablePanelGroup (horizontal, autoSaveId='dashboard-main-columns') with left panel (defaultSize=32, minSize=20) containing a nested vertical ResizablePanelGroup (autoSaveId='dashboard-left-sidebar-rows', each defaultSize=50) for Stocks/News, and right panel (defaultSize=68, minSize=40) holding the QuickTradePanel header + ChartGrid.",
+    "autoSaveId usage means resize positions persist to localStorage across sessions - good UX, no issue found.",
+    "No new API calls or business logic introduced - purely CSS/JSX rearrangement as stated, confirmed via code diff review."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not primary scope - no new endpoints, 1 unrelated transient 500 observed", "frontend": "100% (layout structure, both resize handles, and full selection->chart->news->quicktrade data flow all verified working)"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md, matches request)",
+  "seed_data_creation": "None. Used existing frontend 'demoMode' localStorage toggle (pre-existing feature, calls /api/scanner/demo) only to get scanner candidates for the selection-flow test since the real scanner returned 0 candidates during this market window - toggled back off is recommended for main agent to verify but was left in browser localStorage (does not affect backend/DB state).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Layout change fully verified and working as specified - no retest needed for this specific change. Noted for awareness: (1) real (non-demo) scanner returned 0 candidates during this test window (market conditions, not a bug); (2) a KXIN position (-$5.35, 63 shares) appeared in the paper account partway through testing, evidently from the backend's own independent auto-trader loop (not triggered by any UI action in this test) - unrelated to the layout change but worth a glance if picked up next; (3) one transient 500 on GET /api/orders?limit=5 self-resolved on next poll.",
+  "rca_of_the_issue": "N/A - no bugs found in the layout change under test. The STOP/TRAIL chart label overlap is a pre-existing cosmetic issue (close price % values crowd chart price-scale labels) unrelated to the layout rearrangement."
+}

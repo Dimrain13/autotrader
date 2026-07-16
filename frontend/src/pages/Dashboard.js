@@ -99,18 +99,32 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
 
       <div className="flex-1 p-2 min-h-0">
         <ResizablePanelGroup direction="horizontal" autoSaveId="dashboard-main-columns">
-          {/* Left column: scanner + 5/5 alerts */}
-          <ResizablePanel defaultSize={22} minSize={15} className="flex flex-col gap-2 min-h-0 pr-2">
-            <ReadyToTradePanel results={displayResults} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
-            <div className="flex-1 min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A]">
-              <ScannerTable results={displayResults} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
-            </div>
+          {/* Left sidebar: Stocks (scanner + 5/5 alerts) on top, News on
+              bottom - 50/50, independently resizable via the handle between
+              them. */}
+          <ResizablePanel defaultSize={32} minSize={20} className="min-h-0 pr-2">
+            <ResizablePanelGroup direction="vertical" autoSaveId="dashboard-left-sidebar-rows">
+              <ResizablePanel defaultSize={50} minSize={20} className="flex flex-col gap-2 min-h-0 pb-2">
+                <ReadyToTradePanel results={displayResults} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
+                <div className="flex-1 min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A]">
+                  <ScannerTable results={displayResults} selectedSymbol={selectedSymbol} onSelect={setSelectedSymbol} />
+                </div>
+              </ResizablePanel>
+
+              <ResizableHandle withHandle />
+
+              <ResizablePanel defaultSize={50} minSize={15} className="min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A] p-2 pl-3 pt-2">
+                <NewsFeedPanel symbol={selectedSymbol} />
+              </ResizablePanel>
+            </ResizablePanelGroup>
           </ResizablePanel>
 
           <ResizableHandle withHandle />
 
-          {/* Center: 4-chart grid for the selected symbol */}
-          <ResizablePanel defaultSize={58} minSize={30} className="min-h-0 flex flex-col px-2">
+          {/* Right side: charts snapped here, sized by the handle above -
+              4-chart grid for the selected symbol takes up the rest of the
+              16:9 canvas. */}
+          <ResizablePanel defaultSize={68} minSize={40} className="min-h-0 flex flex-col pl-2">
             {selectedSymbol && (
               <div className="flex items-center justify-between mb-1 px-1 shrink-0">
                 <div className="text-sm font-bold text-neutral-200" data-testid="selected-symbol-header">
@@ -128,13 +142,6 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
             <div className="flex-1 min-h-0">
               <ChartGrid symbol={selectedSymbol} liveTrade={selectedSymbol ? trades[selectedSymbol] : null} levels={levels} />
             </div>
-          </ResizablePanel>
-
-          <ResizableHandle withHandle />
-
-          {/* Right column: news feed for the selected symbol */}
-          <ResizablePanel defaultSize={20} minSize={12} className="min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A] p-2 pl-3">
-            <NewsFeedPanel symbol={selectedSymbol} />
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
