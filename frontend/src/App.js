@@ -212,7 +212,7 @@ function NavBar({ account, tradingMode, onLogout }) {
                 <div className="h-8 w-px bg-white/10" />
                 <div className="text-right">
                   <div className="text-xs text-neutral-500">
-                    Buying Power {account.pattern_day_trader ? '(4x)' : '(2x)'}
+                    Buying Power ({account.portfolio_value > 0 ? (account.buying_power / account.portfolio_value).toFixed(1) : '1.0'}x)
                   </div>
                   <div className="text-lg font-mono text-[#00E599]">
                     ${account.buying_power?.toFixed(2) || '0.00'}
