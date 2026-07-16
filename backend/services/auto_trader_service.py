@@ -33,6 +33,7 @@ server restart instead of silently resetting to defaults.
 """
 from datetime import datetime, timedelta, timezone, date as date_cls
 import logging
+import math
 from typing import Dict, List, Optional
 import asyncio
 import pytz
@@ -61,6 +62,14 @@ class AutoTraderService:
         self.trailing_stop_pct = 0.01  # 1% trailing stop (default)
         self.partial_sell_pct = 0.50  # Sell 50% at profit target
         self.move_to_breakeven = True  # Move stop to break-even after partial sell
+        self.enable_partial_profit = True  # If False, ANY target hit (HOD, psych level,
+        # or a topping tail) closes the FULL position immediately instead of
+        # taking a partial and letting a runner ride.
+        self.breakeven_buffer_pct = 0.002  # 0.2% ABOVE entry (not exactly breakeven) -
+        # locks in a small guaranteed gain on the runner after a partial sell.
+        self.topping_tail_wick_ratio = 0.5  # Ross Cameron "topping tail": fraction of a
+        # 1-min candle's high-low range that must be rejected upper wick
+        # (high - close) while in profit to count as a selling-pressure signal.
         self.daily_max_loss_pct = 0.01  # 1% max daily loss (Ross Cameron's conservative starting rule) - hard kill switch
         self.max_consecutive_losses = 3  # "Three strikes" rule - done for the day
 
@@ -200,6 +209,12 @@ class AutoTraderService:
             self.partial_sell_pct = float(settings['partial_sell_pct']) / 100
         if 'move_to_breakeven' in settings:
             self.move_to_breakeven = bool(settings['move_to_breakeven'])
+        if 'enable_partial_profit' in settings:
+            self.enable_partial_profit = bool(settings['enable_partial_profit'])
+        if 'breakeven_buffer_pct' in settings:
+            self.breakeven_buffer_pct = float(settings['breakeven_buffer_pct']) / 100
+        if 'topping_tail_wick_ratio' in settings:
+            self.topping_tail_wick_ratio = float(settings['topping_tail_wick_ratio'])
         if 'max_positions' in settings:
             self.max_positions = int(settings['max_positions'])
         if 'position_size_pct' in settings:
@@ -350,6 +365,18 @@ class AutoTraderService:
             'prev_macd': prev_macd,
             'prev_signal': prev_signal
         }
+
+    def _nearest_psych_level(self, price: float, buffer: float = 0.02) -> float:
+        """
+        Ross Cameron's psychological (whole/half-dollar) resistance rule:
+        "we look for the break of $2.00... then a move up to $2.50" - the
+        take-profit sits just UNDER the round number (e.g. $2.48-$2.49, not
+        $2.50 itself), since a wall of sellers tends to sit exactly on it.
+        """
+        level = math.ceil(price / 0.50) * 0.50
+        if level - price < 0.05:  # already basically at this level - use the next one up
+            level += 0.50
+        return round(level - buffer, 2)
 
     def check_first_pullback(self, bars: List[Dict]) -> Dict:
         """
@@ -654,12 +681,38 @@ class AutoTraderService:
                     logger.debug(f"{symbol}: No bull flag pattern - no entry")
                     return None
 
-            target_price = entry_price + (self.reward_risk_ratio * risk_per_share)  # Reward:Risk off the structural stop
+            # --- Take-Profit logic (Ross Cameron HOD-retest method) ---
+            # Target A = retest of the High of Day - the peak of the surge
+            # that preceded THIS pullback (only meaningful when the actual
+            # "first pullback" pattern fired). The reward:risk ratio is now
+            # a QUALITY FILTER on the trade itself: if that HOD retest isn't
+            # at least reward_risk_ratio x the risk away, the setup "isn't
+            # high enough quality" and gets skipped entirely - matching his
+            # whiteboard rule, not just used to size a smaller target.
+            hod_target = pullback_check.get('surge_peak') if self.require_micro_pullback else None
+            min_required_target = entry_price + (self.reward_risk_ratio * risk_per_share)
+            if hod_target is not None:
+                if hod_target < min_required_target:
+                    logger.debug(f"{symbol}: HOD retest (${hod_target:.2f}) closer than {self.reward_risk_ratio}:1 minimum (${min_required_target:.2f}) - setup not high quality enough, skipping")
+                    return None
+                target_price = hod_target
+            else:
+                target_price = min_required_target
+
+            # Target B - nearest psychological (whole/half-dollar) level,
+            # used as an interim partial-profit trigger below Target A
+            # ("we look for the break of $2.00... then a move up to $2.50").
+            psych_target = self._nearest_psych_level(entry_price)
+            if psych_target <= entry_price or psych_target >= target_price:
+                psych_target = None  # no meaningful interim level between entry and Target A
+
             entry_signal = {
                 'symbol': symbol,
                 'entry_price': entry_price,
                 'stop_loss_price': stop_loss_price,
                 'target_price': target_price,
+                'psych_target_price': psych_target,
+                'hod_based_target': hod_target is not None,
                 'risk_per_share': risk_per_share,
                 'criteria_count': criteria_count,
                 'first_pullback': pullback_check,
@@ -673,7 +726,9 @@ class AutoTraderService:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
-            logger.info(f"🎯 ENTRY SIGNAL: {symbol} @ ${entry_price:.2f} (5/5 criteria) | Stop: ${stop_loss_price:.2f} | Target (2:1): ${target_price:.2f}")
+            target_label = "HOD" if hod_target is not None else f"{self.reward_risk_ratio}:1"
+            psych_note = f" | Target B (psych): ${psych_target:.2f}" if psych_target else ""
+            logger.info(f"🎯 ENTRY SIGNAL: {symbol} @ ${entry_price:.2f} (5/5 criteria) | Stop: ${stop_loss_price:.2f} | Target A ({target_label}): ${target_price:.2f}{psych_note}")
             logger.info(f"   Pullback: {pullback_check.get('pattern', 'n/a')} | Volume: {volume_check['green_after_red']} green after red | MACD: {'crossover' if macd_check['crossover'] else 'bullish'} | SMA{self.sma_period}/50: {'crossover' if sma_check['crossover'] else 'confirmed'}")
 
             return entry_signal
@@ -696,6 +751,7 @@ class AutoTraderService:
 
             initial_stop = signal['stop_loss_price']
             profit_target = signal['target_price']
+            psych_target = signal.get('psych_target_price')
 
             order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "buy")
 
@@ -710,6 +766,7 @@ class AutoTraderService:
                     'trailing_stop': initial_stop,
                     'highest_price': entry_price,
                     'profit_target': profit_target,
+                    'psych_target': psych_target,
                     'risk_per_share': signal.get('risk_per_share'),
                     'partial_sell_done': False,
                     'breakeven_stop_active': False,
@@ -721,8 +778,11 @@ class AutoTraderService:
                 await self.save_state()
 
                 logger.info(f"✅ AUTO-BUY: {symbol} - {shares} shares @ ${entry_price:.2f}")
-                logger.info(f"   Structural Stop (pullback low): ${initial_stop:.2f} | 2:1 Target: ${profit_target:.2f} | Bailout: {self.breakout_bailout_seconds}s if no follow-through")
-                logger.info(f"   At target: Sell {self.partial_sell_pct*100:.0f}% and move stop to break-even")
+                logger.info(f"   Structural Stop (pullback low): ${initial_stop:.2f} | Target A: ${profit_target:.2f}{f' | Target B (psych): ${psych_target:.2f}' if psych_target else ''} | Bailout: {self.breakout_bailout_seconds}s if no follow-through")
+                if self.enable_partial_profit:
+                    logger.info(f"   At first target: Sell {self.partial_sell_pct*100:.0f}% and move stop to ${entry_price * (1 + self.breakeven_buffer_pct):.2f} (above break-even)")
+                else:
+                    logger.info(f"   Partial profit disabled: FULL close on first target/topping-tail hit")
 
                 return True
 
@@ -767,9 +827,16 @@ class AutoTraderService:
         """
         Monitor positions for exit signals (SOFTWARE-MANAGED):
 
-        1. Structural/trailing stop hit
-        2. "Breakout or Bailout" time-stop - not in profit within breakout_bailout_seconds
-        3. Profit target hit (2:1) - sell partial_sell_pct, move stop to break-even
+        1. Profit-target ladder (Ross Cameron HOD-retest method):
+           Target B (nearest psych/round-dollar level) is the first stage,
+           Target A (HOD retest, or the reward:risk fallback) is the final
+           stage. A topping tail (long upper wick, in profit) is an
+           independent early trigger alongside either target. If
+           enable_partial_profit is on, the first stage triggers a partial
+           sell + stop moved ABOVE break-even; otherwise any trigger closes
+           the full position immediately.
+        2. Structural/trailing stop hit
+        3. "Breakout or Bailout" time-stop - not in profit within breakout_bailout_seconds
         4. End of trading window
         """
         try:
@@ -809,34 +876,73 @@ class AutoTraderService:
 
                 trailing_stop = position_data.get('trailing_stop', position_data['stop_loss'])
 
-                if not position_data.get('partial_sell_done', False) and current_price >= position_data['profit_target']:
-                    partial_shares = int(shares * self.partial_sell_pct)
-                    if partial_shares >= 1:
-                        logger.info(f"📈 PARTIAL PROFIT: {symbol} hit 2:1 target (${position_data['profit_target']:.2f})!")
+                # --- Topping-tail check (Ross Cameron: a long upper wick on
+                # the latest 1-min candle while in profit signals sellers
+                # stepping in - an early-exit trigger independent of
+                # whether a price target has technically been reached) ---
+                topping_tail = False
+                if current_price > entry_price:
+                    try:
+                        latest_bars = await self._get_real_bars(symbol, timeframe="1Min", limit=2)
+                        if latest_bars:
+                            latest_bar = latest_bars[-1]
+                            bar_range = max(latest_bar['high'] - latest_bar['low'], 0.01)
+                            wick_ratio = (latest_bar['high'] - latest_bar['close']) / bar_range
+                            topping_tail = latest_bar['high'] > entry_price and wick_ratio >= self.topping_tail_wick_ratio
+                    except Exception as e:
+                        logger.debug(f"{symbol}: topping-tail check skipped: {e}")
 
-                        success = await self.sell_with_retry(symbol, partial_shares, f"PARTIAL PROFIT ({self.partial_sell_pct*100:.0f}%)")
+                should_exit = False
+                exit_reason = ""
+                shares_to_sell = int(float(current_position['qty']))
 
-                        if success:
-                            position_data['partial_sell_done'] = True
-                            position_data['shares'] = shares - partial_shares
+                # --- Profit-target ladder: Target B (psych level) is the
+                # first stage, Target A (HOD retest / R:R fallback) is the
+                # final stage. Reaching either target, OR a topping tail,
+                # triggers a sell - PARTIAL (+ stop moved ABOVE break-even)
+                # if partial-profit-taking is enabled and this is the
+                # first stage, otherwise a FULL close. ---
+                psych_target = position_data.get('psych_target')
+                first_stage_target = psych_target if (psych_target and not position_data.get('partial_sell_done', False)) else None
+                first_stage_hit = first_stage_target is not None and current_price >= first_stage_target
+                final_target_hit = current_price >= position_data['profit_target']
 
-                            if self.move_to_breakeven:
-                                position_data['trailing_stop'] = entry_price
+                if not position_data.get('partial_sell_done', False) and (first_stage_hit or final_target_hit or topping_tail):
+                    if self.enable_partial_profit and first_stage_target is not None and not final_target_hit:
+                        partial_shares = int(shares * self.partial_sell_pct)
+                        if partial_shares >= 1:
+                            reason = "TOPPING TAIL (early)" if (topping_tail and not first_stage_hit) else f"PSYCH TARGET ${first_stage_target:.2f}"
+                            logger.info(f"📈 PARTIAL PROFIT: {symbol} - {reason}")
+                            success = await self.sell_with_retry(symbol, partial_shares, f"PARTIAL PROFIT ({self.partial_sell_pct*100:.0f}%) - {reason}")
+                            if success:
+                                position_data['shares'] = shares - partial_shares
+                                position_data['partial_sell_done'] = True
+                                breakeven_price = round(entry_price * (1 + self.breakeven_buffer_pct), 2)
+                                position_data['trailing_stop'] = max(position_data.get('trailing_stop', 0), breakeven_price)
                                 position_data['breakeven_stop_active'] = True
-                                logger.info(f"   ✓ Sold {partial_shares} shares, stop moved to break-even ${entry_price:.2f}")
-                            else:
-                                logger.info(f"   ✓ Sold {partial_shares} shares, trailing stop at ${trailing_stop:.2f}")
+                                logger.info(f"   ✓ Sold {partial_shares} shares, stop moved to ${breakeven_price:.2f} (above break-even)")
+                                self.partial_sold[symbol] = True
+                                state_changed = True
+                                continue
+                    else:
+                        should_exit = True
+                        exit_reason = ("TOPPING TAIL DETECTED" if (topping_tail and not final_target_hit)
+                                       else f"PROFIT TARGET HIT (${position_data['profit_target']:.2f})")
 
-                            self.partial_sold[symbol] = True
-                            state_changed = True
-                            continue
+                # Runner (already took partial profit) - exits on the final
+                # Target A (HOD) hit OR a topping tail on the remainder, in
+                # addition to its (now above-break-even) trailing stop below.
+                if not should_exit and position_data.get('partial_sell_done', False) and (final_target_hit or topping_tail):
+                    should_exit = True
+                    exit_reason = ("TOPPING TAIL DETECTED (runner)" if topping_tail and not final_target_hit
+                                   else f"FINAL TARGET HIT (${position_data['profit_target']:.2f})")
 
                 # "Breakout or Bailout" - Ross Cameron's rule: true momentum
                 # resolves almost instantly. If a fresh entry hasn't moved
                 # into profit within breakout_bailout_seconds, get out now
                 # rather than waiting for the full structural stop to hit.
                 bailout_triggered = False
-                if not position_data.get('partial_sell_done', False) and current_price <= entry_price:
+                if not should_exit and not position_data.get('partial_sell_done', False) and current_price <= entry_price:
                     entry_time_str = position_data.get('entry_time')
                     if entry_time_str:
                         try:
@@ -846,22 +952,18 @@ class AutoTraderService:
                         except Exception:
                             bailout_triggered = False
 
-                should_exit = False
-                exit_reason = ""
-                shares_to_sell = int(float(current_position['qty']))
-
-                if current_price <= trailing_stop:
+                if not should_exit and current_price <= trailing_stop:
                     should_exit = True
                     if position_data.get('breakeven_stop_active'):
                         exit_reason = f"BREAKEVEN STOP HIT ${current_price:.2f} <= ${trailing_stop:.2f}"
                     else:
                         exit_reason = f"STRUCTURAL STOP HIT ${current_price:.2f} <= ${trailing_stop:.2f} ({pnl_pct:.2f}%)"
 
-                elif bailout_triggered:
+                elif not should_exit and bailout_triggered:
                     should_exit = True
                     exit_reason = f"BREAKOUT OR BAILOUT - no follow-through within {self.breakout_bailout_seconds}s ({pnl_pct:.2f}%)"
 
-                elif past_trading_hours:
+                elif not should_exit and past_trading_hours:
                     should_exit = True
                     exit_reason = "END OF TRADING WINDOW"
 

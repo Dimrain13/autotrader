@@ -817,6 +817,9 @@ async def get_auto_trader_status():
             "partial_sell_pct": auto_trader.partial_sell_pct * 100,  # 50%
             "partial_sell_trigger_pct": auto_trader.profit_target_pct * 100,  # 2%
             "move_to_breakeven": auto_trader.move_to_breakeven,  # True
+            "enable_partial_profit": auto_trader.enable_partial_profit,  # True
+            "breakeven_buffer_pct": auto_trader.breakeven_buffer_pct * 100,  # 0.2%
+            "topping_tail_wick_ratio": auto_trader.topping_tail_wick_ratio,  # 0.5
             "eod_close_time": "3:30 PM EST"
         },
         "entry_conditions": {
@@ -874,6 +877,9 @@ async def update_auto_trader_settings(settings: dict):
                 "profit_target_pct": auto_trader.profit_target_pct * 100,
                 "stop_loss_pct": auto_trader.stop_loss_pct * 100,
                 "reward_risk_ratio": auto_trader.reward_risk_ratio,
+                "enable_partial_profit": auto_trader.enable_partial_profit,
+                "breakeven_buffer_pct": auto_trader.breakeven_buffer_pct * 100,
+                "topping_tail_wick_ratio": auto_trader.topping_tail_wick_ratio,
                 "max_positions": auto_trader.max_positions,
                 "position_size_pct": auto_trader.position_size_pct * 100,
                 "daily_max_loss_pct": auto_trader.daily_max_loss_pct * 100
