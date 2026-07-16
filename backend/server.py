@@ -546,7 +546,21 @@ async def place_order(request: Request, order: TradeOrder):
                     })
         else:
             # Place simple market order (for sells or buys without stop/profit)
-            result = await asyncio.to_thread(alpaca_service.place_market_order, order.symbol, order.qty, order.side)
+            if order.side.lower() == "sell":
+                # Same de-dup/stale-order handling as the automatic exit
+                # paths (position_monitor_service._sell_with_dedup) - a
+                # manual Sell/Sell All click used to hit a raw Alpaca
+                # "insufficient qty available" 500 whenever an earlier
+                # sell order for the same symbol was still resting/unfilled
+                # (found by testing_agent_v4, iteration_32).
+                result = await position_monitor._sell_with_dedup(order.symbol, order.qty)
+                if result is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"A sell order for {order.symbol} is already pending - please wait a few seconds for it to fill, then retry."
+                    )
+            else:
+                result = await asyncio.to_thread(alpaca_service.place_market_order, order.symbol, order.qty, order.side)
             
             # IMPORTANT: For ALL buy orders, add to position monitor with default settings
             # This ensures stop-loss and take-profit are always active
@@ -653,6 +667,7 @@ async def place_order(request: Request, order: TradeOrder):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"place_order failed for {order.symbol} ({order.side} {order.qty}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.delete("/orders")

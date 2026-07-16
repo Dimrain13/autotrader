@@ -21,7 +21,7 @@ import sys
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL').rstrip('/')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'daniel.r.millner@gmail.com')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Black0rkid5!')
-EXPECTED_PAPER_ACCOUNT_NUMBER = "PA30RVV1A2DM"
+EXPECTED_PAPER_ACCOUNT_NUMBER = "PA36RNHPHRUZ"  # rotated 2026-07 per /app/memory/test_credentials.md (was PA30RVV1A2DM)
 
 
 @pytest.fixture(scope="module")
