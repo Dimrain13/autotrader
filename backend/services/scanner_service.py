@@ -105,7 +105,7 @@ class ScannerService:
             return None
         return sum(prices[-period:]) / period
     
-    def check_alpaca_news(self, symbol: str, hours_back: int = 24, limit: int = 5) -> Dict:
+    def check_alpaca_news(self, symbol: str, hours_back: int = 24, limit: int = 5, min_score: int = 10) -> Dict:
         """
         Check Alpaca's real-time news API (Benzinga-powered, already included
         in the Alpaca data subscription) for stock news.
@@ -118,6 +118,13 @@ class ScannerService:
         Uses the same catalyst-scoring bar as Google News (score_headline)
         so both sources are judged identically. Returns the same shape as
         google_news_service.search_stock_news(): {'has_news', 'articles'}.
+
+        `min_score` defaults to 10 (strict "real catalyst only" bar, for
+        AUTO-TRADER entry decisions). Callers building an informational
+        news feed for a human to read should pass a lower value (e.g. 0) -
+        otherwise routine headlines that don't contain one of the ~50 exact
+        STRONG_CATALYSTS phrases get silently hidden entirely, which made
+        the news panel look empty even on days with plenty of real news.
         """
         if news_pool.configured_count == 0:
             return {'has_news': False, 'articles': []}
@@ -151,7 +158,7 @@ class ScannerService:
                 if not headline:
                     continue
 
-                scored = score_headline(headline)
+                scored = score_headline(headline, min_score=min_score)
                 if scored is None:
                     continue
 

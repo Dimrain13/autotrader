@@ -73,14 +73,21 @@ NEGATIVE_KEYWORDS = [
 ]
 
 
-def score_headline(title: str) -> Optional[Dict]:
+def score_headline(title: str, min_score: int = 10) -> Optional[Dict]:
     """
     Score a headline for Warrior-Trading-style news catalyst strength.
 
     Returns None if the headline should be rejected (contains negative
-    keywords, or doesn't clear the minimum "real catalyst" bar of score>=10 -
-    momentum/weak words alone like "surge"/"gains" are just price action,
-    not a catalyst). Otherwise returns {'score', 'sentiment', 'catalysts'}.
+    keywords, or doesn't clear `min_score`). Default `min_score=10` is the
+    strict "real catalyst only" bar used for AUTO-TRADER entry decisions
+    (momentum/weak words alone like "surge"/"gains" don't count). Callers
+    building an informational news FEED for a human to read (not an entry
+    signal) should pass a lower `min_score` (e.g. 0) - otherwise routine
+    Benzinga/Google headlines that don't contain one of the ~50 exact
+    STRONG_CATALYSTS phrases get silently hidden entirely, which is what
+    made the news panel look empty even on days with plenty of real,
+    just-not-catalyst-worded news (found 2026-07, user report: "I don't
+    see any news from Alpaca at all today").
     """
     title_lower = title.lower()
 
@@ -108,7 +115,7 @@ def score_headline(title: str) -> Optional[Dict]:
 
     has_negative = any(keyword in title_lower for keyword in NEGATIVE_KEYWORDS)
 
-    if has_negative or score < 10:
+    if has_negative or score < min_score:
         return None
 
     sentiment_label = 'strong_catalyst' if score >= 10 else ('momentum' if score >= 5 else 'weak')
@@ -163,7 +170,7 @@ class GoogleNewsService:
         self._cache: Dict[tuple, tuple] = {}  # (symbol, company_name, limit) -> (timestamp, result)
         self._cache_lock = threading.Lock()
     
-    def search_stock_news(self, symbol: str, hours_back: int = 24, limit: int = 5, company_name: str = None) -> Dict:
+    def search_stock_news(self, symbol: str, hours_back: int = 24, limit: int = 5, company_name: str = None, min_score: int = 10) -> Dict:
         """
         Search Google News for stock news and return articles with links
         
@@ -172,6 +179,10 @@ class GoogleNewsService:
             hours_back: How far back to look (default 24 hours)
             limit: Maximum number of articles to return (default 5)
             company_name: Company name (e.g., "Apple Inc") - improves search results
+            min_score: Minimum score_headline() score to keep an article -
+                default 10 (strict "real catalyst" bar, for AUTO-TRADER
+                entry decisions). Callers building an informational feed
+                for a human to read should pass a lower value (e.g. 0).
         
         Returns:
             {
@@ -184,7 +195,7 @@ class GoogleNewsService:
         """
         try:
             # Fast path: serve from short-TTL cache if we searched this symbol recently
-            cache_key = (symbol, company_name, limit)
+            cache_key = (symbol, company_name, limit, min_score)
             with self._cache_lock:
                 cached = self._cache.get(cache_key)
             if cached:
@@ -268,7 +279,7 @@ class GoogleNewsService:
                     # ENHANCED SENTIMENT SCORING - shared helper (same catalyst
                     # bar used for the Alpaca/Benzinga news check, so both
                     # sources are judged identically)
-                    scored = score_headline(title)
+                    scored = score_headline(title, min_score=min_score)
                     if scored is None:
                         logger.debug(f"{symbol}: Rejected news: {title[:50]}")
                         continue

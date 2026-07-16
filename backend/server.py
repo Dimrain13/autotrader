@@ -1427,13 +1427,19 @@ async def get_news(symbol: str, limit: int = 5):
     """
     Get recent news for a symbol - Alpaca/Benzinga first (fast, no scraping),
     Google News RSS fallback for illiquid micro-caps Benzinga doesn't cover.
-    Same pipeline as the scanner's news check, for consistent results.
+    Same pipeline as the scanner's news check, but with a relaxed min_score
+    (0 instead of the scanner/auto-trader's strict 10) - this is a display
+    feed for a human to read, not an entry signal, so routine headlines
+    that don't hit one of the ~50 exact STRONG_CATALYSTS phrases should
+    still show up here (clearly-negative headlines are still filtered out
+    either way). Otherwise the panel could look completely empty even on
+    days with plenty of real, just-not-catalyst-worded news.
     """
     try:
         from services.google_news_service import google_news_service
         from services.scanner_service import scanner_service
 
-        result = await asyncio.to_thread(scanner_service.check_alpaca_news, symbol, 24, limit)
+        result = await asyncio.to_thread(scanner_service.check_alpaca_news, symbol, 24, limit, 0)
         news_source = 'Benzinga (Alpaca)'
 
         if not result['has_news']:
@@ -1443,7 +1449,7 @@ async def get_news(symbol: str, limit: int = 5):
                 company_name = asset_info.get('name')
             except Exception:
                 pass
-            result = await asyncio.to_thread(google_news_service.search_stock_news, symbol, 24, limit, company_name)
+            result = await asyncio.to_thread(google_news_service.search_stock_news, symbol, 24, limit, company_name, 0)
             news_source = 'Google News'
 
         return {

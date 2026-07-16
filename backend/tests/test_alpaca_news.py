@@ -17,8 +17,9 @@ from services.scanner_service import scanner_service
 
 class TestAlpacaNewsAccess:
     def test_news_client_configured(self):
-        assert scanner_service.news_client is not None, (
-            "Alpaca news_client not configured - ALPACA_DATA_API_KEY/SECRET missing"
+        from services.alpaca_service import news_pool
+        assert news_pool.configured_count > 0, (
+            "Alpaca news_pool not configured - ALPACA_DATA_API_KEY/SECRET missing"
         )
 
     def test_check_alpaca_news_returns_correct_shape(self):
