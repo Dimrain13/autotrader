@@ -1,6 +1,6 @@
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, GetOrdersRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus, OrderClass
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus, OrderClass, QueryOrderStatus
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import StockBarsRequest, StockQuotesRequest, StockLatestQuoteRequest
@@ -598,12 +598,23 @@ class AlpacaService:
             logger.warning(f"Could not get order {order_id}: {e}")
             return None
 
-    def get_orders(self, status="all", limit=50):
+    def get_orders(self, status="all", limit=50, symbols: Optional[list] = None):
         if not self.trading_client:
             raise Exception("Alpaca API not configured")
+        try:
+            # Order LIST filters use QueryOrderStatus (open/closed/all) -
+            # NOT OrderStatus (an individual order's own terminal state like
+            # filled/canceled/new), which is a completely different enum.
+            # Passing OrderStatus("open") here used to raise a ValueError
+            # ("open" isn't a member of OrderStatus) any time a caller
+            # asked for anything other than "all".
+            query_status = QueryOrderStatus(status)
+        except ValueError:
+            query_status = QueryOrderStatus.ALL
         request = GetOrdersRequest(
-            status=OrderStatus(status) if status != "all" else None,
-            limit=limit
+            status=query_status,
+            limit=limit,
+            symbols=symbols
         )
         orders = self.trading_client.get_orders(request)
         return [
@@ -619,6 +630,18 @@ class AlpacaService:
             }
             for order in orders
         ]
+
+    def get_open_orders(self, symbol: Optional[str] = None):
+        """
+        Open (unfilled/partially-filled/pending) orders, optionally
+        filtered to one symbol - used by position_monitor_service to check
+        for an already-resting exit order before submitting a new one for
+        the same symbol (submitting a second sell for shares already held
+        by a still-open first order gets rejected by Alpaca with
+        "insufficient qty available", and retrying blindly every 2s just
+        spams that same rejection forever instead of resolving it).
+        """
+        return self.get_orders(status="open", limit=50, symbols=[symbol] if symbol else None)
     
     def cancel_order(self, order_id: str):
         """Cancel an order by ID"""

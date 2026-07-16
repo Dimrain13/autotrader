@@ -1,0 +1,161 @@
+"""
+Tests for the stop-loss "insufficient qty" retry-loop fix (iteration_30 -> follow-up).
+
+Covers:
+1. GET /api/orders?status=open / status=new (or any string) regression - must
+   return HTTP 200 w/ valid array, not 422/500 (alpaca_service.get_orders now
+   uses QueryOrderStatus with a safe fallback instead of the wrong OrderStatus enum).
+2. position_monitor_service._sell_with_dedup() unit tests (deterministic,
+   mocked alpaca_service - avoids relying on live market timing):
+   a) existing open sell order < stale_after_seconds old -> returns None,
+      does NOT call place_market_order (prevents duplicate submission).
+   b) existing open sell order >= stale_after_seconds old -> cancels it then
+      calls place_market_order (recovers from a stuck/never-filled order).
+   c) no existing open order -> calls place_market_order directly (normal path).
+"""
+import os
+import pytest
+import requests
+import sys
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL').rstrip('/')
+
+sys.path.insert(0, '/app/backend')
+from services.position_monitor_service import PositionMonitorService
+
+
+# ---------------------------------------------------------------------------
+# 1. GET /api/orders?status=<x> regression (previously 422/500 for non-'all')
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def auth_token():
+    resp = requests.post(f"{BASE_URL}/api/auth/login", json={
+        "email": "daniel.r.millner@gmail.com",
+        "password": "Black0rkid5!"
+    })
+    if resp.status_code != 200:
+        pytest.skip(f"Login failed - skipping authenticated tests: {resp.status_code} {resp.text}")
+    return resp.json().get("access_token")
+
+
+@pytest.fixture
+def auth_headers(auth_token):
+    return {"Authorization": f"Bearer {auth_token}"}
+
+
+class TestOrdersStatusRegression:
+    @pytest.mark.parametrize("status", ["open", "new", "closed", "all", "bogus_status_xyz"])
+    def test_get_orders_status_returns_200(self, auth_headers, status):
+        resp = requests.get(f"{BASE_URL}/api/orders", params={"status": status}, headers=auth_headers)
+        assert resp.status_code == 200, f"status={status} returned {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert isinstance(data, list), f"Expected list response for status={status}, got {type(data)}"
+
+    def test_get_orders_default_no_status_param(self, auth_headers):
+        resp = requests.get(f"{BASE_URL}/api/orders", headers=auth_headers)
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+
+# ---------------------------------------------------------------------------
+# 2. _sell_with_dedup deterministic unit tests
+# ---------------------------------------------------------------------------
+
+class TestSellWithDedup:
+    def setup_method(self):
+        self.monitor = PositionMonitorService()
+
+    @pytest.mark.asyncio
+    async def test_fresh_pending_order_skips_resubmit(self):
+        """Existing sell order < stale_after_seconds old -> return None, no new order placed"""
+        recent_order = {
+            "order_id": "recent-1",
+            "symbol": "ATPC",
+            "side": "sell",
+            "status": "new",
+            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        }
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
+            mock_alpaca.get_open_orders.return_value = [recent_order]
+            mock_alpaca.place_market_order = MagicMock()
+            mock_alpaca.cancel_order = MagicMock()
+
+            result = await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            assert result is None
+            mock_alpaca.place_market_order.assert_not_called()
+            mock_alpaca.cancel_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stale_pending_order_cancelled_and_replaced(self):
+        """Existing sell order >= stale_after_seconds old -> cancel then place a fresh sell"""
+        stale_time = datetime.now(timezone.utc) - timedelta(seconds=15)
+        stale_order = {
+            "order_id": "stale-1",
+            "symbol": "ATPC",
+            "side": "sell",
+            "status": "new",
+            "created_at": stale_time.isoformat().replace('+00:00', 'Z')
+        }
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
+            mock_alpaca.get_open_orders.return_value = [stale_order]
+            mock_alpaca.cancel_order = MagicMock(return_value=True)
+            mock_alpaca.place_market_order = MagicMock(return_value={"order_id": "fresh-1", "filled_avg_price": 1.23})
+
+            result = await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            mock_alpaca.cancel_order.assert_called_once_with("stale-1")
+            mock_alpaca.place_market_order.assert_called_once_with("ATPC", 3020, "sell")
+            assert result == {"order_id": "fresh-1", "filled_avg_price": 1.23}
+
+    @pytest.mark.asyncio
+    async def test_no_open_orders_places_sell_directly(self):
+        """No existing open order -> place_market_order called directly (normal path)"""
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
+            mock_alpaca.get_open_orders.return_value = []
+            mock_alpaca.place_market_order = MagicMock(return_value={"order_id": "direct-1"})
+            mock_alpaca.cancel_order = MagicMock()
+
+            result = await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            mock_alpaca.cancel_order.assert_not_called()
+            mock_alpaca.place_market_order.assert_called_once_with("ATPC", 3020, "sell")
+            assert result == {"order_id": "direct-1"}
+
+    @pytest.mark.asyncio
+    async def test_ignores_open_buy_orders_only_checks_sell(self):
+        """An open BUY order on the same symbol should not block a sell (dedup is sell-side only)"""
+        buy_order = {
+            "order_id": "buy-1",
+            "symbol": "ATPC",
+            "side": "buy",
+            "status": "new",
+            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        }
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
+            mock_alpaca.get_open_orders.return_value = [buy_order]
+            mock_alpaca.place_market_order = MagicMock(return_value={"order_id": "sell-after-buy-check"})
+
+            result = await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            mock_alpaca.place_market_order.assert_called_once_with("ATPC", 3020, "sell")
+            assert result == {"order_id": "sell-after-buy-check"}
+
+    @pytest.mark.asyncio
+    async def test_get_open_orders_exception_falls_back_to_place_order(self):
+        """If get_open_orders itself raises, dedup should degrade gracefully and still attempt the sell"""
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
+            mock_alpaca.get_open_orders.side_effect = Exception("network blip")
+            mock_alpaca.place_market_order = MagicMock(return_value={"order_id": "fallback-1"})
+
+            result = await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            mock_alpaca.place_market_order.assert_called_once_with("ATPC", 3020, "sell")
+            assert result == {"order_id": "fallback-1"}
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

@@ -168,6 +168,49 @@ class PositionMonitorService:
                 logger.error(f"Error in position monitor: {str(e)}")
                 await asyncio.sleep(5)
 
+    async def _sell_with_dedup(self, symbol: str, qty: int, stale_after_seconds: int = 10):
+        """
+        Submits a market SELL for `qty` shares of `symbol`, but first checks
+        for an already-resting open order on the same symbol first - a
+        second sell while shares are still held by an earlier unfilled
+        order gets rejected by Alpaca with "insufficient qty available",
+        and since every exit-check here re-runs every ~2s, retrying blindly
+        just spammed that same rejection forever instead of ever actually
+        exiting (found by testing_agent_v4, iteration_30).
+
+        - No existing open order: places the sell immediately, as before.
+        - An open order exists and is < stale_after_seconds old: skip this
+          cycle (return None) - give it a real chance to fill first.
+        - An open order exists and is stale (>= stale_after_seconds): cancel
+          it (it isn't going to fill) and place a fresh market sell instead.
+        """
+        try:
+            open_orders = await asyncio.to_thread(alpaca_service.get_open_orders, symbol)
+        except Exception as e:
+            logger.error(f"{symbol}: Could not check for existing open orders before selling: {e}")
+            open_orders = []
+
+        existing_sell = next((o for o in open_orders if o.get('side') == 'sell'), None)
+        if existing_sell:
+            age_seconds = stale_after_seconds  # assume stale if we can't parse the timestamp
+            try:
+                created_at = datetime.fromisoformat(existing_sell['created_at'].replace('Z', '+00:00'))
+                age_seconds = (datetime.now(created_at.tzinfo) - created_at).total_seconds()
+            except Exception:
+                pass
+            if age_seconds < stale_after_seconds:
+                logger.info(f"⏳ {symbol}: Sell order {existing_sell['order_id']} already pending ({age_seconds:.0f}s old) - waiting for it to fill before retrying exit")
+                return None
+            logger.warning(f"🔁 {symbol}: Cancelling stale pending sell order {existing_sell['order_id']} ({age_seconds:.0f}s old, never filled) and replacing with a fresh market sell")
+            try:
+                await asyncio.to_thread(alpaca_service.cancel_order, existing_sell['order_id'])
+            except Exception as e:
+                logger.error(f"{symbol}: Failed to cancel stale order {existing_sell['order_id']}: {e}")
+                return None
+
+        return await asyncio.to_thread(alpaca_service.place_market_order, symbol, qty, "sell")
+
+
     async def _handle_trailing_stop(self, symbol: str, config: Dict, current_price: float, profit_pct: float):
         """Update trailing stop as price increases"""
         try:
@@ -205,7 +248,9 @@ class PositionMonitorService:
                     shares_to_sell = 1
 
                 logger.info(f"🎯 {symbol}: TAKE PROFIT HIT | Selling {shares_to_sell}/{shares} shares ({sell_pct:.0f}%) @ ${current_price:.2f} (+{profit_pct:.1f}%)")
-                order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares_to_sell, "sell")
+                order = await self._sell_with_dedup(symbol, shares_to_sell)
+                if order is None:
+                    return  # a sell is already pending - retry next tick instead of double-submitting
 
                 # Use the real fill price for P&L when available, not just the last quote
                 exit_price = current_price
@@ -272,7 +317,9 @@ class PositionMonitorService:
             if sma20_prev >= sma50_prev and sma20_current < sma50_current:
                 logger.info(f"📉 {symbol}: BEARISH CROSSOVER | SMA20 ({sma20_current:.2f}) crossed below SMA50 ({sma50_current:.2f}) while in loss ({profit_pct:.1f}%)")
 
-                order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "sell")
+                order = await self._sell_with_dedup(symbol, shares)
+                if order is None:
+                    return False  # a sell is already pending - retry next tick instead of double-submitting
                 exit_price = current_price
                 if order and order.get('filled_avg_price'):
                     exit_price = float(order['filled_avg_price'])
@@ -311,7 +358,9 @@ class PositionMonitorService:
             logger.info(f"🛑 {symbol}: STOP LOSS TRIGGERED | ${current_price:.2f}")
 
             remaining_shares = config['shares']
-            order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, remaining_shares, "sell")
+            order = await self._sell_with_dedup(symbol, remaining_shares)
+            if order is None:
+                return  # a sell is already pending - retry next tick instead of double-submitting
 
             # Use the real fill price for P&L when available, not just the last quote
             exit_price = current_price
