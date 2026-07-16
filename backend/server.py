@@ -1109,7 +1109,10 @@ async def process_auto_trading(request: Request):
             "max_float": 20_000_000
         }
         
-        scanner_results = await asyncio.to_thread(scanner_service.scan_stocks, criteria)
+        # scan_market() (not scan_stocks() directly) so this manual trigger
+        # reuses the same 120s-cached scan the dashboard/background loop use
+        # instead of running a duplicate full 128-batch snapshot scan.
+        scanner_results = await asyncio.to_thread(scanner_service.scan_market, criteria)
         account = await asyncio.to_thread(alpaca_service.get_account)
         portfolio_value = account.get('portfolio_value', 0)
         
@@ -1441,7 +1444,13 @@ async def auto_trader_loop():
                     "min_volume_ratio": 5,
                     "max_float": 20_000_000
                 }
-                scanner_results = await asyncio.to_thread(scanner_service.scan_stocks, criteria)
+                # scan_market() (not scan_stocks() directly) so this 60s loop
+                # reuses the same 120s-cached scan the dashboard's own poll
+                # already produced instead of always running a duplicate
+                # full 128-batch snapshot scan. Entry timing/pricing is
+                # unaffected - check_entry_signals() below always fetches
+                # fresh live bars per-candidate regardless of scan cache age.
+                scanner_results = await asyncio.to_thread(scanner_service.scan_market, criteria)
                 # Keep the WebSocket stream fed with every scanner candidate
                 # so entry-signal bar checks below have real-time data to
                 # merge with the REST fallback chain (fills the free-tier's
