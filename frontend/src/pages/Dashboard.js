@@ -9,6 +9,12 @@ import { OpenPositionsPanel } from "../components/dashboard/OpenPositionsPanel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "../components/ui/resizable";
 import { useMarketDataSocket } from "../hooks/useMarketDataSocket";
 
+const getDashboardSetting = (key, fallback) => {
+  const saved = localStorage.getItem(key);
+  const parsed = parseFloat(saved);
+  return saved !== null && !Number.isNaN(parsed) ? parsed : fallback;
+};
+
 // One-screen manual-review trading dashboard: scanner + 5/5 alerts + a
 // 4-timeframe chart grid + news, inspired by (not copying) multi-panel
 // scanner terminals like StocksToTrade/Trade Ideas. Charts only populate
@@ -66,6 +72,22 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
     ? (positions || []).find((p) => p.symbol === selectedSymbol) || null
     : null;
 
+  // Stop-loss / take-profit / trailing-stop lines drawn on every chart tile
+  // for the selected symbol - reuses the exact same risk settings (shared
+  // localStorage keys) configured on the Trading page/QuickTradePanel, so
+  // the same trade's levels look identical everywhere in the app. Once a
+  // position is open, the lines anchor to the REAL fill price instead of
+  // the current price so they reflect the actual trade, not a moving target.
+  const entryPrice = selectedPosition?.avg_entry_price || currentPrice;
+  const levels = entryPrice ? {
+    entry: entryPrice,
+    stopLoss: Math.round(entryPrice * (1 - getDashboardSetting("stopLossPct", 1.0) / 100) * 100) / 100,
+    profitTarget: Math.round(entryPrice * (1 + getDashboardSetting("takeProfitPct", 2.0) / 100) * 100) / 100,
+    trailingStop: (localStorage.getItem("stopType") || "trailing") === "trailing" && currentPrice
+      ? Math.round(currentPrice * (1 - getDashboardSetting("trailingStopPct", 1.0) / 100) * 100) / 100
+      : null,
+  } : null;
+
   useEffect(() => {
     if (selectedSymbol) subscribe([selectedSymbol]);
   }, [selectedSymbol, subscribe]);
@@ -104,7 +126,7 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
               </div>
             )}
             <div className="flex-1 min-h-0">
-              <ChartGrid symbol={selectedSymbol} liveTrade={selectedSymbol ? trades[selectedSymbol] : null} />
+              <ChartGrid symbol={selectedSymbol} liveTrade={selectedSymbol ? trades[selectedSymbol] : null} levels={levels} />
             </div>
           </ResizablePanel>
 

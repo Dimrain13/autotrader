@@ -19,7 +19,7 @@ const LABELS = { "10Sec": "10 Sec", "1Min": "1 Min", "5Min": "5 Min", "1Day": "1
 // whatever's actually available. 1Day is a multi-day lookback, not "a day".
 const FULL_DAY_BAR_LIMIT = { "10Sec": 600, "1Min": 960, "5Min": 200, "1Day": 100 };
 
-export function MiniChartTile({ symbol, timeframe, liveTrade }) {
+export function MiniChartTile({ symbol, timeframe, liveTrade, levels }) {
   const [bars, setBars] = useState([]);
   const [blockTrades, setBlockTrades] = useState([]);
   const [meta, setMeta] = useState({ source: null, warning: null });
@@ -95,7 +95,7 @@ export function MiniChartTile({ symbol, timeframe, liveTrade }) {
             {meta.warning || "Loading real data..."}
           </div>
         ) : (
-          <CandlestickChart data={bars} height={220} vwap={vwap} blockTrades={blockTrades} livePrice={liveTrade} />
+          <CandlestickChart data={bars} height={220} vwap={vwap} blockTrades={blockTrades} livePrice={liveTrade} levels={levels} />
         )}
       </div>
     </div>

@@ -1,0 +1,38 @@
+{
+  "summary": "Frontend-only testing of the new Dashboard chart-lines bug fix (ENTRY/STOP/TARGET/TRAIL levels on the 4 MiniChartTile tiles) plus a regression spot-check of the pre-existing Trading page multi-chart comparison view. Dashboard feature PASSES fully: verified via live login + real paper trades. Trading page regression check FAILS: the multi-chart comparison view is stuck indefinitely on 'Loading {symbol}...' and never renders StockChartCard/CandlestickChart at all (so the levels lines can't be spot-checked there), even though the underlying market data API calls succeed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Trading.js multi-chart comparison view (line ~2248, 'Multi-Chart View - Vertical Stack')",
+        "issue": "Selecting any stock (via the scanner-opportunities button grid, e.g. ATPC, or the position-derived MAAS) adds it to selectedStocks and correctly fires the 4 axios calls in fetchStockData (bars 1Min/5Min/1Day + quote), which return 200 and (confirmed once via console log) call setStockData successfully with 'ATPC chart data source: alpaca_iex, bars: 1m=761...'. Despite this, the render block at line 2277-2278 (`const data = stockData[symbol]; if (!data) return <div>Loading {symbol}...</div>`) stays stuck showing 'Loading {symbol}...' indefinitely (verified with waits up to 20s+ and zero <canvas> elements ever appearing on the page). Reproduced consistently across 3 separate fresh-browser-context runs for both ATPC (no position) and MAAS (has position). This means StockChartCard/CandlestickChart - and therefore the entry/stop/target/trailing lines feature being spot-checked - never renders on the Trading page at all right now.",
+        "selector": "button:has-text('ATPC') in scanner grid, then div.text-neutral-500:has-text('Loading')",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "PRIMARY (in-scope) FEATURE VERIFIED WORKING: Dashboard chart lines (ENTRY white / STOP red-dashed / TARGET green-dashed / TRAIL orange-dashed) render on all 4 MiniChartTile tiles once a symbol is selected from the scanner table, both pre-buy (hypothetical entry = current price, e.g. ATPC: entry=3.60, stop=3.56, target=3.67, trail=3.56) and post-buy (real anchor, e.g. MAAS position avg_entry_price=19.37 -> entry=19.37, stop=19.18, target=19.76, trail=18.75 matching GET /api/positions exactly). Placed a real 5-share ATPC paper buy via QuickTradePanel, confirmed the position filled at $3.53 (GET /api/positions) and the ENTRY line updated to exactly 3.53 (STOP 3.49, TARGET 3.60) on re-render - anchoring logic is correct. No action needed here.",
+    "REGRESSION TO INVESTIGATE: Trading page's multi-chart comparison view (StockChartCard) is stuck permanently on 'Loading {symbol}...' and never mounts the chart, blocking verification of the pre-existing levels feature there. Since Dashboard.js/ChartGrid.js/MiniChartTile.js don't touch Trading.js, this may be a pre-existing issue unrelated to this session's changes, but it needs RCA - suspect a stockData state update/re-render issue in the [selectedStocks, scannerResults, momentumStocks, positions] effect (fetchStockData confirmed firing and succeeding via console log once, but the consuming render block never picks up the updated stockData[symbol])."
+  ],
+  "critical_code_review_comments": [
+    "Dashboard.js levels computation (lines 81-89) correctly prioritizes selectedPosition.avg_entry_price over currentPrice for the entry anchor, and correctly keeps trailingStop pegged to live currentPrice (not entry) - matches the exact behavior described in the bug report.",
+    "MiniChartTile.js / ChartGrid.js are thin, correctly-typed pass-through wrappers with no logic bugs.",
+    "OpenPositionsPanel.js (the Dashboard positions strip) has no onClick to select/chart a held position's symbol - the only way to chart an already-held position is if it also currently appears in the scanner table. Not in scope of this bug fix, but worth a future usability note.",
+    "Trading.js is 2380 lines (previously flagged in iteration_22 too) - the multi-chart Loading-stuck bug found here would be easier to isolate/fix if the fetchStockData/stockData state and the StockChartCard render loop were extracted into a smaller dedicated component/hook."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only scope per request)", "frontend": "Dashboard feature: 100% (all sub-checks passed); Trading page regression check: 0% (chart never rendered)"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md, matches problem statement)",
+  "seed_data_creation": "Placed and fully sold a real paper ATPC position (5 shares @ $3.53) purely to verify post-buy entry-line anchoring on the Dashboard. Account left with only the pre-existing MAAS position (18 sh, unrelated to this test) as before.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Dashboard levels feature (this session's actual bug-fix scope) is fully verified working pre-buy and post-buy, with exact numeric matches against GET /api/positions and localStorage settings (stopLossPct=1 default, takeProfitPct=2 default, trailingStopPct=1 default, stopType=trailing default - all localStorage keys were empty/unset this run, so defaults were exercised; Trade Settings row on /trading showed Stop=1/RR=2/Target=2.0/Type=Trailing/Trail=1, consistent). The Trading page regression check could NOT be completed because the multi-chart comparison view (StockChartCard) never actually mounts a chart for any selected symbol - it hangs on a 'Loading {symbol}...' placeholder indefinitely despite the network calls succeeding. This needs a proper RCA (likely a React state/render bug in Trading.js's selectedStocks/stockData effect chain) before the pre-existing levels feature can be regression-tested there.",
+  "rca_of_the_issue": "Dashboard bug fix RCA: N/A - working as designed, root cause of original bug was simply that Dashboard.js never computed/passed a `levels` prop to ChartGrid/MiniChartTile/CandlestickChart before this session's change; confirmed fixed. Trading page issue RCA (not yet root-caused, flagging for main agent): fetchStockData's axios.all resolves and setStockData is called (confirmed once via captured console.log 'ATPC chart data source: ...'), but the multi-chart render block reading stockData[symbol] never reflects the update - suggests either a stale closure, a key mismatch, or the render section observed is a different/duplicate list than the one whose state actually gets updated. Needs main agent code-level investigation, not something fixable via test-side changes."
+}
