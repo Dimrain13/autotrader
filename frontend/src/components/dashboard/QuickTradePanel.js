@@ -32,10 +32,10 @@ export function QuickTradePanel({ symbol, currentPrice, position, account, onOrd
   // Margin trading, always at the max - size off buying power (includes
   // margin), never unlevered portfolio_value/equity.
   const buyingPower = account?.margin_buying_power || account?.buying_power || account?.portfolio_value;
+  const safePct = Math.min(100, Math.max(1, getSetting("positionSizePct", 10)));
   if (sizeMode === "percent" && buyingPower > 0) {
     // Clamp defensively (1-100%) - a stray/corrupted stored value should
     // never be able to size an order at multiples of the whole account.
-    const safePct = Math.min(100, Math.max(1, getSetting("positionSizePct", 10)));
     dollarAmount = buyingPower * (safePct / 100);
   }
   const defaultQty = currentPrice > 0 ? Math.max(1, Math.floor(dollarAmount / currentPrice)) : 1;
@@ -122,8 +122,9 @@ export function QuickTradePanel({ symbol, currentPrice, position, account, onOrd
         </div>
       )}
       {currentPrice > 0 && (
-        <span className="text-[10px] text-neutral-500 font-mono" data-testid="quick-trade-est-cost">
+        <span className="text-[10px] text-neutral-500 font-mono" data-testid="quick-trade-est-cost" title={sizeMode === "percent" ? `${safePct}% of $${buyingPower?.toFixed(2)} buying power` : `Flat $${dollarAmount.toFixed(2)} per stock`}>
           ~${(buyQty * currentPrice).toFixed(2)}
+          {sizeMode === "percent" && ` (${safePct}% of BP)`}
         </span>
       )}
     </div>

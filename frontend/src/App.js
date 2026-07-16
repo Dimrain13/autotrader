@@ -386,7 +386,18 @@ function App() {
           positions={positions}
           recentOrders={recentOrders}
           scanner={scanner}
-          onOrderPlaced={() => { fetchAccount(); fetchPositions(); fetchRecentOrders(); }}
+          onOrderPlaced={() => {
+            fetchAccount(); fetchPositions(); fetchRecentOrders();
+            // Alpaca can take a moment to register a fresh market order's
+            // fill server-side - a single immediate re-fetch right after
+            // submission can still miss it, leaving the user staring at
+            // the OLD position list for up to 30s (the next scheduled
+            // poll) with no way to tell if their trade actually went
+            // through. Re-poll a couple more times over the next few
+            // seconds so it reliably shows up almost immediately instead.
+            setTimeout(() => { fetchAccount(); fetchPositions(); fetchRecentOrders(); }, 1500);
+            setTimeout(() => { fetchAccount(); fetchPositions(); fetchRecentOrders(); }, 4000);
+          }}
         />
         <Toaster position="top-right" />
       </div>

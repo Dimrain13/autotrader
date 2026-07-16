@@ -31,7 +31,7 @@ export default function History() {
 
   const fetchTradeHistory = async () => {
     try {
-      const response = await axios.get(`${API}/trade-history?limit=100`, { timeout: 10000 });
+      const response = await axios.get(`${API}/trade-history?limit=2000`, { timeout: 10000 });
       setTrades(response.data.trades || []);
     } catch (error) {
       console.error('Failed to fetch trade history:', error);
