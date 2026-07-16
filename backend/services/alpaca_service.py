@@ -27,8 +27,10 @@ class AlpacaRateLimiter:
     reliably triggers "too many requests" 429s and silently drops candidates.
     Capped below the real 200/min limit to leave headroom for other Alpaca
     calls happening at the same time (Trading page quotes, auto-trader).
+    190 leaves a 10/min buffer for sliding-window timing jitter while still
+    using ~95% of the Basic plan's real ceiling for faster scans.
     """
-    def __init__(self, max_per_minute: int = 170):
+    def __init__(self, max_per_minute: int = 190):
         self.max_per_minute = max_per_minute
         self._timestamps = deque()
         self._lock = threading.Lock()
@@ -46,17 +48,19 @@ class AlpacaRateLimiter:
             time.sleep(max(wait_time, 0.05))
 
 
-alpaca_rate_limiter = AlpacaRateLimiter(max_per_minute=170)
+alpaca_rate_limiter = AlpacaRateLimiter(max_per_minute=190)
 
 
-def mount_larger_connection_pool(session, pool_size: int = 20):
+def mount_larger_connection_pool(session, pool_size: int = 60):
     """
     Alpaca's SDK clients each own a single shared `requests.Session()` used
     by every concurrent ThreadPoolExecutor worker. The default urllib3
     HTTPAdapter pool_maxsize is only 10, so 10 concurrent threads hitting
     the same host can exceed it and trigger noisy "Connection pool is full,
-    discarding connection" warnings/churn. Mount a larger pool on the same
-    session so concurrent workers get a stable connection instead.
+    discarding connection" warnings/churn. 60 comfortably covers the busiest
+    observed burst (multi-tile dashboard x 4 timeframes + scanner's own
+    6-12 concurrent workers hitting the same client). This is a purely
+    local resource cap, independent of Alpaca's real 200/min rate limit.
     """
     adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
     session.mount('https://', adapter)
