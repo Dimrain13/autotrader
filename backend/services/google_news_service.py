@@ -118,7 +118,7 @@ def score_headline(title: str, min_score: int = 10) -> Optional[Dict]:
     if has_negative or score < min_score:
         return None
 
-    sentiment_label = 'strong_catalyst' if score >= 10 else ('momentum' if score >= 5 else 'weak')
+    sentiment_label = 'strong_catalyst' if score >= 10 else ('momentum' if score >= 5 else ('weak' if score >= 2 else 'neutral'))
 
     return {'score': score, 'sentiment': sentiment_label, 'catalysts': matched_catalysts[:3]}
 
@@ -331,8 +331,11 @@ class GoogleNewsService:
                 # Move to next item
                 search_pos = item_end + 7
             
-            # Return results
+            # Return results (highest-relevance catalysts first, not just
+            # chronological RSS order - see the identical fix/reasoning in
+            # scanner_service.check_alpaca_news())
             if articles:
+                articles.sort(key=lambda a: a['score'], reverse=True)
                 logger.info(f"{symbol}: Found {len(articles)} news article(s)")
                 result = {'has_news': True, 'articles': articles}
             else:

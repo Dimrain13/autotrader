@@ -178,6 +178,12 @@ class ScannerService:
                 })
 
             if articles:
+                # Highest-relevance catalysts first, not just chronological -
+                # otherwise a real "FDA approval" headline from an hour ago
+                # could sit below 3 routine market-commentary mentions from
+                # 5 minutes ago (found 2026-07, user report: "the news is
+                # coming in now, but its not being ranked at all").
+                articles.sort(key=lambda a: a['score'], reverse=True)
                 logger.info(f"{symbol}: Alpaca/Benzinga found {len(articles)} catalyst news article(s)")
                 return {'has_news': True, 'articles': articles}
             return {'has_news': False, 'articles': []}

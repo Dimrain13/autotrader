@@ -1,0 +1,33 @@
+{
+  "summary": "Tested the news RANKING follow-up fix (sorting by score desc + neutral sentiment tier + frontend sentiment badges). All backend and frontend checks passed. 20/20 new pytest tests passed; live curl checks across 7 symbols (NVDA, AMZN, TSLA, AAPL, AMD, META, GOOGL) confirmed non-increasing score order and correct 'neutral' labeling for score=0 articles. Frontend verified end-to-end via Playwright: CATALYST (orange #FF9900), MOMENTUM (blue), MENTION (gray/weak) badges render correctly for score>=2 articles; score=0 articles correctly show NO badge; badged articles appear above unbadged ones (sort-then-badge visual confirmed on real symbols VEEE and CJMB). No console errors related to news feature; all /api/news/* and dashboard calls returned 200 OK.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_news_sort_and_neutral_tier.py",
+    "/app/test_reports/pytest/pytest_news_sort_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "google_news_service.score_headline() and scanner_service.check_alpaca_news() sort logic is correctly implemented and consistent between both news sources (Benzinga/Alpaca + Google News fallback).",
+    "NewsFeedPanel.js SENTIMENT_BADGE map correctly omits an entry for 'neutral' so score=0 articles render no badge, matching the intended 'quiet' treatment.",
+    "Pre-existing/unrelated issue observed (NOT part of this fix, noting for visibility): navigating to the Missed Opportunities tab logs repeated React console warnings 'Encountered two children with the same key' - likely duplicate id/date keys in the opportunities list rendering. Not caused by this news-sorting change; recommend a separate follow-up to dedupe keys (e.g. combine id+index) in MissedOpportunities.js.",
+    "Confirmed via static source check that scanner_service._check_candidate_news() (auto-trader entry path) does not pass min_score, so the sort/tier changes do not affect auto-trader entry decisions - only cosmetic ordering of the informational panel, as intended."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_news_sort_and_neutral_tier.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None - used real live Alpaca/Benzinga news data and a loosened manual scan (min_price=0.5, min_change=0, min_volume_ratio=0.01) purely to populate scanner candidates for UI symbol-selection testing (Dashboard has no manual symbol search, only scanner-row selection). Did not persist any changes to production criteria (scannerCriteria remains in localStorage of the test browser session only).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "News sorting/neutral-tier/badge fix (follow-up to iteration_34) fully verified working both backend (pytest + live curl) and frontend (Playwright, real symbols VEEE=weak/MENTION, CJMB=strong_catalyst/CATALYST orange). Dashboard requires a scanner candidate to select a symbol before NewsFeedPanel shows anything - if market is closed/no candidates match default criteria (10% change, 5x vol, <20M float), use the Scan tab to loosen criteria (min_price>0 required, min_volume_ratio>0 required per backend Pydantic validation - min_price=0 and min_volume_ratio=0 both cause 422) and run a manual scan first, all within the SAME Playwright script invocation (scanner state is in-memory/localStorage, not persisted across separate script/page loads).",
+  "rca_of_the_issue": "N/A - this was a verification pass on an already-implemented fix, no new bugs found in the feature under test."
+}
