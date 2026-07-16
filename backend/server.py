@@ -106,7 +106,11 @@ async def market_data_ws(websocket: WebSocket, token: Optional[str] = Query(None
             if data.get("action") == "subscribe":
                 symbols = [str(s).upper() for s in data.get("symbols", []) if s]
                 client_symbols.update(symbols)
-                await market_data_stream.subscribe(symbols)
+                # `priority=True` is sent for the symbol currently on-screen
+                # (charted or an open position) - guarantees it always has a
+                # live trade/quote slot, evicting an older scanner-only
+                # symbol if the 25-symbol cap is already full.
+                await market_data_stream.subscribe(symbols, priority=bool(data.get("priority")))
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -796,7 +800,8 @@ async def get_auto_trader_status():
     # Get account info for portfolio value
     try:
         account = await asyncio.to_thread(alpaca_service.get_account)
-        portfolio_value = float(account.get('portfolio_value', 0))
+        # Margin trading, always at the max - see get_account() for details.
+        portfolio_value = float(account.get('margin_buying_power', 0)) or float(account.get('portfolio_value', 0))
     except:
         portfolio_value = 0
     
@@ -1189,10 +1194,10 @@ async def get_quote(symbol: str):
     try:
         cached = market_data_stream.get_cached_quote(symbol)
         if cached:
-            asyncio.create_task(market_data_stream.subscribe([symbol]))
+            asyncio.create_task(market_data_stream.subscribe([symbol], priority=True))
             return cached
         quotes = await asyncio.to_thread(alpaca_service.get_quotes, [symbol])
-        asyncio.create_task(market_data_stream.subscribe([symbol]))
+        asyncio.create_task(market_data_stream.subscribe([symbol], priority=True))
         if quotes and symbol in quotes:
             return quotes[symbol]
         else:
@@ -1250,7 +1255,11 @@ async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_f
             # built entirely from real trade ticks off the live WebSocket
             # stream (self-bucketed, never fabricated). Only available once
             # the symbol has been streaming for a little while.
-            asyncio.create_task(market_data_stream.subscribe([symbol]))
+            # priority=True: this endpoint is only ever called for the
+            # chart currently on-screen, so it must always get a live
+            # trade/quote slot even if the 25-symbol cap is otherwise full
+            # of scanner candidates.
+            asyncio.create_task(market_data_stream.subscribe([symbol], priority=True))
             bars = market_data_stream.get_tick_bars(symbol, bucket_seconds=10, limit=limit)
             return {
                 'bars': bars,
@@ -1262,7 +1271,8 @@ async def get_bars(symbol: str, timeframe: str = "1Day", limit: int = 100, use_f
         if use_fallback and timeframe in ["5Min", "1Min"]:
             # Keep this symbol streaming going forward (fire-and-forget -
             # doesn't block this request; benefits the NEXT call/tick).
-            asyncio.create_task(market_data_stream.subscribe([symbol]))
+            # priority=True: same reasoning as the 10Sec branch above.
+            asyncio.create_task(market_data_stream.subscribe([symbol], priority=True))
             # Use fallback method for intraday data - run in thread pool to avoid blocking
             result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, timeframe, limit, since_dt)
             bars = market_data_stream.merge_with_stream(symbol, result.get('bars', []), timeframe, limit)
@@ -1467,7 +1477,8 @@ async def auto_trader_loop():
                 if candidate_symbols:
                     await market_data_stream.subscribe(candidate_symbols)
                 account = await asyncio.to_thread(alpaca_service.get_account)
-                portfolio_value = account.get('portfolio_value', 0)
+                # Margin trading, always at the max - see get_account() for details.
+                portfolio_value = account.get('margin_buying_power') or account.get('portfolio_value', 0)
                 await auto_trader.process_scanner_results(scanner_results, portfolio_value)
         except Exception as e:
             logger.error(f"Auto-trader loop error: {str(e)}")
@@ -1576,8 +1587,10 @@ async def startup_services():
 
         # Immediately start streaming live data for any open positions -
         # no need to wait for the auto-trader loop's next scan cycle.
+        # priority=True: open positions must never lose their trade/quote
+        # slot to a scanner-only candidate.
         if existing_positions:
-            await market_data_stream.subscribe([p['symbol'] for p in existing_positions])
+            await market_data_stream.subscribe([p['symbol'] for p in existing_positions], priority=True)
     except Exception as e:
         logger.error(f"Failed to auto-sync positions on startup: {e}")
 

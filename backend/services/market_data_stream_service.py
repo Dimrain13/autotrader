@@ -77,6 +77,9 @@ class MarketDataStreamManager:
         # re-sent immediately after every re-auth).
         self._subscribed_bars: Set[str] = set()
         self._subscribed_tq: Set[str] = set()  # trades + quotes (capped)
+        self._tq_order: deque = deque()  # insertion order, for FIFO eviction of non-priority symbols
+        self._tq_priority: Set[str] = set()  # symbols that must always keep a live trade/quote slot
+        # (open positions + whatever chart is currently on-screen) - never evicted to make room for a scanner-only symbol.
         self._sub_lock = asyncio.Lock()
 
         # In-memory latest-data caches - always fresher than REST for
@@ -298,26 +301,53 @@ class MarketDataStreamManager:
     # ------------------------------------------------------------------
     # Dynamic subscription (scanner/auto-trader/frontend driven)
     # ------------------------------------------------------------------
-    async def subscribe(self, symbols: List[str]):
+    async def subscribe(self, symbols: List[str], priority: bool = False):
         """
         Add symbols to the live stream (idempotent, safe to call repeatedly).
         Bar subscriptions are unlimited; trade/quote subscriptions are
         capped at MAX_TRADE_QUOTE_SYMBOLS to respect Alpaca's free-tier limit.
+
+        `priority=True` marks symbols that must ALWAYS have a live trade/quote
+        slot - open positions and whatever chart is currently on-screen. If
+        the cap is already full of scanner-only (non-priority) symbols, the
+        oldest one is evicted to make room instead of the priority symbol
+        silently never getting real tick data (this was the root cause of
+        "10-second chart never loads" - the selected symbol could lose the
+        race for a slot to whatever scanner candidates streamed in first).
         """
         if not self.is_configured or not symbols:
             return
-        new_bars, new_tq = [], []
+        new_bars, new_tq, evicted = [], [], []
         async with self._sub_lock:
             for s in symbols:
                 s = (s or "").upper().strip()
                 if not s:
                     continue
+                if priority:
+                    self._tq_priority.add(s)
                 if s not in self._subscribed_bars:
                     self._subscribed_bars.add(s)
                     new_bars.append(s)
-                if s not in self._subscribed_tq and len(self._subscribed_tq) < MAX_TRADE_QUOTE_SYMBOLS:
+                if s in self._subscribed_tq:
+                    continue
+                if len(self._subscribed_tq) < MAX_TRADE_QUOTE_SYMBOLS:
                     self._subscribed_tq.add(s)
+                    self._tq_order.append(s)
                     new_tq.append(s)
+                elif priority:
+                    victim = next((c for c in self._tq_order if c not in self._tq_priority), None)
+                    if victim:
+                        self._tq_order.remove(victim)
+                        self._subscribed_tq.discard(victim)
+                        evicted.append(victim)
+                        self._subscribed_tq.add(s)
+                        self._tq_order.append(s)
+                        new_tq.append(s)
+                    else:
+                        logger.warning(f"📡 Trade/quote slots are full of priority symbols - can't add {s} for live ticks")
+        if evicted:
+            await self._queue_unsubscribe(evicted)
+            logger.info(f"📡 Evicted {evicted} from live trade/quote stream to make room for priority symbol(s)")
         if new_bars or new_tq:
             await self._queue_subscribe(new_bars, new_tq)
 
@@ -330,6 +360,11 @@ class MarketDataStreamManager:
             msg["bars"] = bar_symbols
         if len(msg) > 1:
             await self._outgoing.put(msg)
+
+    async def _queue_unsubscribe(self, tq_symbols: List[str]):
+        if not tq_symbols:
+            return
+        await self._outgoing.put({"action": "unsubscribe", "trades": tq_symbols, "quotes": tq_symbols})
 
     # ------------------------------------------------------------------
     # Read access for REST endpoints / auto-trader (real-time-first data)
@@ -467,6 +502,7 @@ class MarketDataStreamManager:
             "bar_subscribed_count": len(self._subscribed_bars),
             "trade_quote_subscribed_count": len(self._subscribed_tq),
             "trade_quote_limit": MAX_TRADE_QUOTE_SYMBOLS,
+            "trade_quote_priority_symbols": sorted(self._tq_priority),
             "last_message_age_seconds": round(time.time() - self._last_message_at, 1) if self._last_message_at else None,
         }
 

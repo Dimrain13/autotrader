@@ -89,8 +89,15 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
   } : null;
 
   useEffect(() => {
-    if (selectedSymbol) subscribe([selectedSymbol]);
+    if (selectedSymbol) subscribe([selectedSymbol], true);
   }, [selectedSymbol, subscribe]);
+
+  // Open positions must always keep a live trade/quote slot too, regardless
+  // of whether they're currently charted.
+  useEffect(() => {
+    const heldSymbols = (positions || []).map((p) => p.symbol);
+    if (heldSymbols.length > 0) subscribe(heldSymbols, true);
+  }, [positions, subscribe]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-64px)]" data-testid="dashboard-page">

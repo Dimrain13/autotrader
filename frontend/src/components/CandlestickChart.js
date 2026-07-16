@@ -5,7 +5,8 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRefs = useRef({});
-  const userHasZoomedRef = useRef(false);
+  const isFollowingRef = useRef(true); // true = auto-snap to the newest bar (default "live" mode)
+  const suppressRangeEventRef = useRef(false); // true while WE are programmatically moving the view (avoids treating our own scrollToRealTime() call as a user pan)
   const isFirstLoadRef = useRef(true);
   const lastBarRef = useRef(null);
 
@@ -92,9 +93,23 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
     };
     window.addEventListener('resize', handleResize);
 
-    // Track when user manually zooms/pans - this is the key!
-    chart.timeScale().subscribeVisibleTimeRangeChange(() => {
-      userHasZoomedRef.current = true;
+    // Track whether the user is still "at the live edge" (following) or has
+    // intentionally panned back into history. Zooming while at the edge
+    // (or scrolling back TO the edge) immediately re-snaps to the newest
+    // bar at whatever zoom level they landed on - only a deliberate pan
+    // backward in time turns auto-follow off, and only until they return.
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      if (suppressRangeEventRef.current) return;
+      let pos = 0;
+      try { pos = chart.timeScale().scrollPosition(); } catch (e) {}
+      if (pos < -1.5) {
+        isFollowingRef.current = false;
+      } else {
+        isFollowingRef.current = true;
+        suppressRangeEventRef.current = true;
+        try { chart.timeScale().scrollToRealTime(); } catch (e) {}
+        requestAnimationFrame(() => { suppressRangeEventRef.current = false; });
+      }
     });
 
     // Cleanup ONLY on unmount
@@ -116,16 +131,6 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
     const { candlestick: candlestickSeries, volume: volumeSeries } = seriesRefs.current;
     
     if (!candlestickSeries || !volumeSeries) return;
-
-    // SAVE current visible range BEFORE updating data
-    let savedRange = null;
-    if (userHasZoomedRef.current) {
-      try {
-        savedRange = chart.timeScale().getVisibleRange();
-      } catch (e) {
-        // Range not available
-      }
-    }
 
     // Prepare candle data - sort and deduplicate by timestamp
     const candleDataRaw = data
@@ -333,20 +338,18 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
       });
     }
 
-    // RESTORE zoom after data update, or fit on first load
-    if (userHasZoomedRef.current && savedRange) {
-      // User has zoomed - restore their exact view
-      try {
-        chart.timeScale().setVisibleRange(savedRange);
-      } catch (e) {
-        console.warn('Could not restore zoom range');
-      }
-    } else if (isFirstLoadRef.current) {
-      // First load only - fit content
+    // Snap to the newest bar if the user is still at the live edge (default
+    // "following" state, or they've scrolled back to it themselves), at
+    // whatever zoom/bar-spacing they've currently got - never yanks them
+    // back to it if they've deliberately panned into history to review it.
+    if (isFirstLoadRef.current) {
       chart.timeScale().fitContent();
       isFirstLoadRef.current = false;
+    } else if (isFollowingRef.current) {
+      suppressRangeEventRef.current = true;
+      try { chart.timeScale().scrollToRealTime(); } catch (e) {}
+      requestAnimationFrame(() => { suppressRangeEventRef.current = false; });
     }
-    // Otherwise leave zoom as-is
 
   }, [data, vwap, levels, blockTrades]); // Update when data changes, but don't destroy chart
 

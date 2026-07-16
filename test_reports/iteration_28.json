@@ -1,0 +1,38 @@
+{
+  "summary": "Tested 4 in-scope changes: margin buying power sizing, WS priority/eviction bookkeeping, 10-second chart faster refresh, and CandlestickChart auto-snap-to-newest-bar. Backend: 12/12 new pytest tests passed (margin_buying_power field correctness, auto-trader status/process no-crash, stream-status shape, 10Sec/1Min bars mark symbol priority, bulk eviction stays under 25-cap with no crash). Frontend: Dashboard/scanner/login/ChartGrid regression all pass with zero console errors; all 4 chart tiles (10Sec/1Min/5Min/1Day) render correctly, 10Sec correctly shows the expected 'no real-time trade ticks yet' placeholder (MARKET_STREAM_ENABLED=false is intentional). Zoom-in-then-stay-at-live-edge behavior (item b) verified working via before/after screenshots. However, found a real bug in the manual-pan-into-history behavior (item c): dragging the chart backward after a zoom does NOT preserve the zoomed bar-spacing while shifting the visible window - it visually reverts to a much wider/zoomed-out view instead, reproduced twice (fast wheel-timed drag and slow 20-step incremental drag), stable after an 8s wait (not a delayed re-snap, the distortion happens immediately during/at the end of the drag itself).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "CandlestickChart.js (Effect 1, subscribeVisibleLogicalRangeChange handler ~line 101-113)",
+        "issue": "After zooming in and then manually dragging/panning backward into history, the chart does not simply shift the same zoomed view backward in time as expected - it visually snaps to a much wider (zoomed-out) range instead. Reproduced consistently with both a fast wheel+drag sequence and a slow 20-step incremental drag (final screenshots byte-identical, so it's not a delayed re-snap over time - the distortion happens during the drag gesture itself). Likely root cause: the range-change handler fires continuously DURING an active drag and calls chart.timeScale().scrollToRealTime() on any intermediate event where scrollPosition() >= -1.5 (which is common in the early part of a drag that starts from the live edge), fighting the user's own in-progress pan before it accumulates past the -1.5 threshold - the suppressRangeEventRef guard only protects against the code's OWN programmatic scrollToRealTime() calls, not against the user's live drag racing with those calls mid-gesture.",
+        "selector": "[data-testid='chart-tile-1Min']",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_margin_and_stream_priority.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Review CandlestickChart.js's subscribeVisibleLogicalRangeChange handler for a race between the user's active drag and the code's own scrollToRealTime() re-snap calls firing on intermediate (not-yet-past-threshold) range-change events during that same drag - consider only evaluating/acting on the FINAL settled range-change event after a drag/zoom gesture ends (e.g. debounce, or listen for a 'drag end' style signal) rather than reacting synchronously to every intermediate event while pos is still close to 0.",
+    "Re-verify part (c) of the auto-snap requirement (manual pan into history should stay put, not snap back) manually or with a more granular Playwright reproduction after a fix, since current evidence points to a real UX regression rather than a test artifact (two independent drag speeds reproduced the same distorted end-state)."
+  ],
+  "critical_code_review_comments": [
+    "alpaca_service.py get_account(): margin_buying_power = max(buying_power, day_trading_buying_power) is correctly implemented and matches spec; day_trading_buying_power defaults to 0.0 (not None) so max() never crashes on non-margin accounts.",
+    "server.py: all 3 call sites (auto-trader/status ~L804, auto_trader_loop ~L1481, and the earlier reviewed process call site) correctly read account.get('margin_buying_power') with a safe fallback to portfolio_value if missing/falsy (using 'or' - correctly falls back on 0 too, not just None).",
+    "market_data_stream_service.py subscribe(): eviction logic (FIFO via _tq_order, never evicts a _tq_priority symbol, logs a warning if slots are full of priority symbols) is correctly implemented and verified via REST-observable bookkeeping (stream-status endpoint) with no crashes under a 30-symbol bulk-fill + new priority symbol scenario.",
+    "MiniChartTile.js: 10Sec tile 3s poll vs other tiles' 30s poll is correctly implemented per explicit prior user preference; no excessive re-render/infinite loop observed over ~30s of live observation."
+  ],
+  "updated_files": ["/app/backend/tests/test_margin_and_stream_priority.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "~90% (all flows pass except item c chart-pan bug)"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None - used existing paper account and live scanner data",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Margin sizing (item 1) and WS priority/eviction (item 2) are fully verified and passing - no retest needed unless server.py/alpaca_service.py/market_data_stream_service.py change again. 10-second refresh cadence (item 3) verified working, no issues. Chart auto-snap (item 4) is PARTIALLY working: zoom-in-stays-at-live-edge (b) confirmed working via screenshots; manual-pan-stays-put (c) FAILED - reproduced twice, see ui_bugs. Screenshots from this run are in /app/.screenshots/ (before_zoom.png, after_zoom_in.png, after_pan_back.png, after_pan_wait.png, z1/z2/z3_*.png) for visual reference if needed.",
+  "rca_of_the_issue": "The subscribeVisibleLogicalRangeChange callback in CandlestickChart.js Effect 1 evaluates chart.timeScale().scrollPosition() on EVERY range-change event and immediately calls scrollToRealTime() whenever pos >= -1.5, with suppressRangeEventRef only guarding against the code's own subsequent scrollToRealTime() side-effect (not against a real user drag that is still in-progress and hasn't yet crossed the -1.5 threshold). Since a drag gesture starting from the live edge produces many intermediate range-change events before the cumulative pan crosses -1.5, several of those early events trigger a forced scrollToRealTime() mid-drag, which visibly fights/distorts the user's pan and produces the observed wider/zoomed-out final state instead of a clean shift-while-preserving-zoom."
+}

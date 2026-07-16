@@ -7,7 +7,12 @@ const API = process.env.REACT_APP_BACKEND_URL + "/api";
 
 // All 4 tiles refresh on the same 30s cadence (per user preference) - real
 // Alpaca data either way, just less redraw churn than a faster interval.
+// EXCEPTION: the 10Sec tile refreshes much faster (every 3s) - at 30s it
+// was effectively a "30-second chart" since new 10-second buckets only
+// appeared once per poll; the live-tick overlay (CandlestickChart's
+// `livePrice` effect) fills the gap between polls either way.
 const REFRESH_MS = 30000;
+const FAST_REFRESH_MS = 3000;
 const LABELS = { "10Sec": "10 Sec", "1Min": "1 Min", "5Min": "5 Min", "1Day": "1 Day" };
 
 // Bar counts sized to cover a FULL trading day (the app's own extended
@@ -71,8 +76,9 @@ export function MiniChartTile({ symbol, timeframe, liveTrade, levels }) {
 
     fetchBars(!!cached);
     fetchBlockTrades();
-    const barsInterval = setInterval(() => fetchBars(true), REFRESH_MS);
-    const blockInterval = setInterval(fetchBlockTrades, REFRESH_MS);
+    const refreshMs = timeframe === "10Sec" ? FAST_REFRESH_MS : REFRESH_MS;
+    const barsInterval = setInterval(() => fetchBars(true), refreshMs);
+    const blockInterval = setInterval(fetchBlockTrades, refreshMs);
     return () => { clearInterval(barsInterval); clearInterval(blockInterval); };
   }, [symbol, timeframe, fetchBars, fetchBlockTrades]);
 

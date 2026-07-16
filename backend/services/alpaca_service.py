@@ -185,16 +185,26 @@ class AlpacaService:
         if not self.trading_client:
             raise Exception("Alpaca API not configured")
         account = self.trading_client.get_account()
+        buying_power = float(account.buying_power)
+        # Not all accounts (e.g. cash/non-margin) have day-trading buying power -
+        # Alpaca returns None in that case. Default to 0 rather than crashing.
+        day_trading_buying_power = float(account.daytrading_buying_power) if account.daytrading_buying_power is not None else 0.0
         return {
             "account_number": account.account_number,
-            "buying_power": float(account.buying_power),
+            "buying_power": buying_power,
             "cash": float(account.cash),
             "portfolio_value": float(account.portfolio_value),
             "status": account.status,
-            # Not all accounts (e.g. cash/non-margin) have day-trading buying power -
-            # Alpaca returns None in that case. Default to 0 rather than crashing.
-            "day_trading_buying_power": float(account.daytrading_buying_power) if account.daytrading_buying_power is not None else 0.0,
-            "pattern_day_trader": bool(account.pattern_day_trader)
+            "day_trading_buying_power": day_trading_buying_power,
+            "pattern_day_trader": bool(account.pattern_day_trader),
+            # Margin trading, always at the max: use whichever buying-power
+            # figure Alpaca reports as highest (day-trading buying power is
+            # ~4x equity intraday for PDT-qualified margin accounts;
+            # standard buying_power is ~2x overnight Reg-T margin) instead
+            # of unlevered portfolio_value, so position sizing actually
+            # deploys the account's full margin capacity rather than just
+            # its cash/equity value.
+            "margin_buying_power": max(buying_power, day_trading_buying_power),
         }
     
     def _is_extended_hours(self):

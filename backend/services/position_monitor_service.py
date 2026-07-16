@@ -115,6 +115,14 @@ class PositionMonitorService:
                 alpaca_positions = await asyncio.to_thread(alpaca_service.get_positions)
                 alpaca_symbols = {pos['symbol']: pos for pos in alpaca_positions}
 
+                # Re-assert priority on every tick (cheap/idempotent) so
+                # every open position - however it was entered - always
+                # keeps a live trade/quote slot, evicting a scanner-only
+                # symbol if the 25-symbol cap is otherwise full.
+                if alpaca_symbols:
+                    from services.market_data_stream_service import market_data_stream
+                    asyncio.create_task(market_data_stream.subscribe(list(alpaca_symbols.keys()), priority=True))
+
                 for symbol, config in list(self.monitored_positions.items()):
                     if symbol not in alpaca_symbols:
                         logger.info(f"{symbol}: Position closed, removing from monitor")

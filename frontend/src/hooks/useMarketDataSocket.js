@@ -18,7 +18,10 @@ function toWsUrl(httpUrl) {
  *   trades: { [symbol]: { price, size, timestamp } }
  *   bars:   { [symbol]: { timestamp, open, high, low, close, volume } } - latest completed 1-min bar
  *   connected: boolean
- *   subscribe(symbols: string[]): add symbols to the live stream
+ *   subscribe(symbols: string[], priority?: boolean): add symbols to the live
+ *     stream. priority=true (open positions / the chart currently on-screen)
+ *     guarantees a live trade/quote slot even if the backend's 25-symbol cap
+ *     is otherwise full of scanner candidates.
  */
 export function useMarketDataSocket() {
   const [quotes, setQuotes] = useState({});
@@ -28,6 +31,7 @@ export function useMarketDataSocket() {
 
   const wsRef = useRef(null);
   const subscribedRef = useRef(new Set());
+  const priorityRef = useRef(new Set());
   const reconnectTimerRef = useRef(null);
   const mountedRef = useRef(true);
 
@@ -42,6 +46,9 @@ export function useMarketDataSocket() {
       setConnected(true);
       if (subscribedRef.current.size > 0) {
         ws.send(JSON.stringify({ action: "subscribe", symbols: Array.from(subscribedRef.current) }));
+      }
+      if (priorityRef.current.size > 0) {
+        ws.send(JSON.stringify({ action: "subscribe", symbols: Array.from(priorityRef.current), priority: true }));
       }
     };
 
@@ -92,12 +99,15 @@ export function useMarketDataSocket() {
     };
   }, [connect]);
 
-  const subscribe = useCallback((symbols) => {
+  const subscribe = useCallback((symbols, priority = false) => {
     const clean = (symbols || []).filter(Boolean).map((s) => s.toUpperCase());
-    const newOnes = clean.filter((s) => !subscribedRef.current.has(s));
-    clean.forEach((s) => subscribedRef.current.add(s));
+    const newOnes = clean.filter((s) => !subscribedRef.current.has(s) || (priority && !priorityRef.current.has(s)));
+    clean.forEach((s) => {
+      subscribedRef.current.add(s);
+      if (priority) priorityRef.current.add(s);
+    });
     if (newOnes.length > 0 && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: "subscribe", symbols: newOnes }));
+      wsRef.current.send(JSON.stringify({ action: "subscribe", symbols: newOnes, priority }));
     }
   }, []);
 

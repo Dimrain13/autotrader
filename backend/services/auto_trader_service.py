@@ -12,7 +12,7 @@ for the full breakdown with screenshots):
 2. The 50% Rule: the pullback must hold at least 50% of the initial surge -
    if it retraces further than the surge's midpoint, the setup is discarded
    (too weak / low conviction).
-3. Position Size: 10% of account per trade (up to 5 concurrent = 50% max exposure)
+3. Position Size: 10% of margin buying power per trade (up to 5 concurrent = 50% max exposure of margin buying power - trading always at max margin, not unlevered equity)
 4. Stop Loss: structural - the LOW of the pullback (not an arbitrary %),
    capped at max_stop_distance_pct for safety (skip the trade entirely if
    the structural stop is further away than that cap - too risky).
@@ -53,7 +53,7 @@ class AutoTraderService:
         # 2:1 profit-target:stop-loss ratio + 1% conservative daily-loss kill switch,
         # matching Ross Cameron's documented risk rules (see file docstring above).
         self.max_positions = 5
-        self.position_size_pct = 0.10  # 10% of account per trade (up to 5 concurrent = 50% max exposure)
+        self.position_size_pct = 0.10  # 10% of margin buying power per trade (up to 5 concurrent = 50% max exposure)
         self.profit_target_pct = 0.02  # 2% profit target - sell 50% here (2:1 with the 1% stop)
         self.stop_loss_pct = 0.01  # 1% initial stop loss
         self.reward_risk_ratio = 2.0  # multiplier applied to the structural stop distance
@@ -309,8 +309,11 @@ class AutoTraderService:
 
     def calculate_position_size(self, portfolio_value: float, stock_price: float) -> int:
         """
-        Calculate shares to buy based on position_size_pct of REAL account value
-        (portfolio_value must come from the live Alpaca account - never simulated).
+        Calculate shares to buy based on position_size_pct of REAL account
+        MARGIN BUYING POWER (portfolio_value here is actually the account's
+        margin_buying_power - see alpaca_service.get_account() - so trades
+        are always sized against the full margin capacity, not unlevered
+        equity; must come from the live Alpaca account - never simulated).
         """
         position_capital = portfolio_value * self.position_size_pct
         shares = int(position_capital / stock_price)
