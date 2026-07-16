@@ -353,7 +353,7 @@ function App() {
     <BrowserRouter>
       <div className="min-h-screen bg-[#050505]">
         <NavBar account={account} tradingMode={tradingMode} onLogout={handleLogout} />
-        <main className="container mx-auto p-4 md:p-6">
+        <main className={window.location.pathname === '/' ? "w-full" : "container mx-auto p-4 md:p-6"}>
           {loading ? (
             <div className="flex justify-center items-center h-96">
               <div className="text-lg text-neutral-500">Loading...</div>

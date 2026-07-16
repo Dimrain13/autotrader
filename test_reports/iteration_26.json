@@ -1,0 +1,44 @@
+{
+  "summary": "Frontend-only regression test of Dashboard resizable-panel id-collision fix and full-width layout fix (per main agent's request). Resize/independence/persistence fixes VERIFIED WORKING. Found one new regression in the App.js full-width fix: layout doesn't update reliably on client-side (SPA) navigation.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "App.js <main> full-width conditional (line ~356: `window.location.pathname === '/' ? \"w-full\" : \"container mx-auto p-4 md:p-6\"`)",
+        "issue": "This check reads window.location.pathname directly during render instead of using the reactive useLocation() hook, and App itself does not subscribe to router location changes. Result: clicking a nav Link (client-side route change, e.g. Dashboard -> /trading) does NOT immediately update the <main> className. Verified deterministically (2/2 trials) that 300ms after clicking nav-trading from Dashboard, main className was still 'w-full' (full-width, no container/padding) instead of switching to 'container mx-auto p-4 md:p-6'. It eventually self-corrects only when App happens to re-render for an unrelated reason (e.g. the 30s account/position poll, or the scanner's 1s countdown state), which is a race condition - sometimes it corrected within ~1s, sometimes it was still wrong after 4s+. A full page reload (direct page.goto) on /trading always shows the correct container layout immediately, so the bug is specific to SPA/client-side navigation.",
+        "selector": "main",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "In App.js, replace `window.location.pathname === '/'` with the reactive `useLocation()` hook (e.g. `const { pathname } = useLocation(); ... className={pathname === '/' ? 'w-full' : 'container mx-auto p-4 md:p-6'}`) so the layout updates immediately/synchronously on client-side route changes instead of depending on an incidental re-render from polling."
+  ],
+  "critical_code_review_comments": [
+    "Dashboard.js / ChartGrid.js: explicit unique id/order props on every ResizablePanelGroup/ResizablePanel confirmed correct and no longer collide - verified via live drag tests (see below). Good fix.",
+    "App.js main className logic works correctly on full page load/reload for any route, but is not reactive to React Router client-side navigation - see ui_bugs above."
+  ],
+  "verified_working": [
+    "Dashboard (/) renders full-width (main box left=0, right=1920 at 1920x1080 viewport) with no side gutters - confirmed via direct page load.",
+    "/trading (and by extension other non-dashboard routes) render with the normal 'container mx-auto p-4 md:p-6' centered/padded layout - confirmed via direct page load (left=192, right=1728, width=1536 at 1920x1080).",
+    "Dragging the chart-grid's row1-internal vertical handle (between 10Sec/1Min tiles) resized only row1's two tiles (641/641 -> 491/791px); row2's two tiles (5Min/1Day) remained unchanged at 641/641px - this is the key regression check for the id-collision theory and it PASSED, confirming row1-cols and row2-cols no longer collide.",
+    "Dragging the horizontal handle between chart-grid row1/row2 resized the two rows independently and correctly.",
+    "Dragging the main sidebar<->chart-area handle and the left-sidebar Stocks<->News handle both worked smoothly without glitching.",
+    "After manually resizing panels, waited 13s (covering a data refresh cycle) and re-measured tile pixel dimensions - sizes were byte-for-byte identical before/after, confirming panel sizes do NOT snap back or shift on data refresh."
+  ],
+  "action_items_note": "10Sec chart tile showing 'No real-time trade ticks yet for this symbol' is expected per main agent's note (MARKET_STREAM_ENABLED=false in this sandbox) - NOT flagged as a bug.",
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only scope)", "frontend": "90%"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! - worked correctly for login",
+  "seed_data_creation": "none",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Core resize-independence and persistence bugs from the id-collision theory are CONFIRMED FIXED via live drag tests with screenshots. Dashboard full-width and other-page container layout are also confirmed correct on fresh page loads. The only remaining issue is a minor SPA-navigation layout lag in App.js (see action_items) - low complexity fix (swap to useLocation hook). No backend testing was performed per review scope (frontend only).",
+  "rca_of_the_issue": "App.js's <main> className is computed inline from `window.location.pathname` at render time. Since App itself has no state tied to the router (only NavBar uses useLocation), clicking a React Router <Link> updates the URL/History but does not by itself force App to re-render, so the stale pathname check lingers until some unrelated state update (polling interval, countdown timer) happens to re-render App. Fix: use `useLocation()` in App so the pathname check is reactive to route changes."
+}
