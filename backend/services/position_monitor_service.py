@@ -208,7 +208,38 @@ class PositionMonitorService:
                 logger.error(f"{symbol}: Failed to cancel stale order {existing_sell['order_id']}: {e}")
                 return None
 
-        return await asyncio.to_thread(alpaca_service.place_market_order, symbol, qty, "sell")
+        try:
+            return await asyncio.to_thread(alpaca_service.place_market_order, symbol, qty, "sell")
+        except Exception as e:
+            # Alpaca rejected the sell - almost always because a resting
+            # order the pre-check above missed (transient API error/rate
+            # limit on get_open_orders, etc) is already holding the shares.
+            # Previously this just logged the rejection and waited for the
+            # NEXT ~2s tick to retry the same pre-check - if that pre-check
+            # kept missing the order, the position stayed COMPLETELY
+            # unprotected for as long as that kept happening (real incident:
+            # ATPC stop-loss blocked for 17+ minutes while price fell from
+            # $4.80 to $4.29 before finally exiting late at $4.34). React to
+            # Alpaca's own authoritative rejection immediately instead of
+            # hoping the next tick's pre-check works: force-cancel any
+            # resting sell order(s) for this symbol right now and retry
+            # once, closing the gap from "minutes" to "this same call".
+            if 'insufficient qty' not in str(e).lower():
+                raise
+            logger.warning(f"🔁 {symbol}: Sell rejected (insufficient qty) - force-cancelling any resting sell order(s) for this symbol and retrying immediately")
+            try:
+                blocking_orders = await asyncio.to_thread(alpaca_service.get_open_orders, symbol)
+            except Exception as e2:
+                logger.error(f"{symbol}: Could not re-check open orders after rejection: {e2}")
+                blocking_orders = []
+            for o in blocking_orders:
+                if o.get('side') == 'sell':
+                    try:
+                        await asyncio.to_thread(alpaca_service.cancel_order, o['order_id'])
+                        logger.warning(f"🔁 {symbol}: Force-cancelled blocking sell order {o['order_id']}")
+                    except Exception as cancel_err:
+                        logger.error(f"{symbol}: Failed to force-cancel blocking order {o['order_id']}: {cancel_err}")
+            return await asyncio.to_thread(alpaca_service.place_market_order, symbol, qty, "sell")
 
 
     async def _handle_trailing_stop(self, symbol: str, config: Dict, current_price: float, profit_pct: float):

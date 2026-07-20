@@ -172,6 +172,7 @@ class ScannerService:
                     'pubDate': created_at.isoformat() if created_at else '',
                     'sentiment': scored['sentiment'],
                     'score': scored['score'],
+                    'temperature': scored['temperature'],
                     'catalysts': scored['catalysts'],
                     'freshness': freshness,
                     'days_old': days_old
@@ -756,17 +757,20 @@ class ScannerService:
                 # Extract freshness from the article
                 news_freshness = 'unknown'
                 news_days_old = None
+                news_temperature = None
                 if news_result['articles']:
                     article = news_result['articles'][0]
                     news_freshness = article.get('freshness', 'unknown')
                     news_days_old = article.get('days_old')
+                    news_temperature = article.get('temperature')
                 
                 result['has_positive_news'] = has_news
                 result['news_headline'] = headline if has_news else "No recent news found"
                 result['news_needs_check'] = False
                 result['news_source'] = news_source if has_news else None
-                result['news_freshness'] = news_freshness  # breaking, warm, cold, unknown
+                result['news_freshness'] = news_freshness  # breaking, warm, cold, unknown (article AGE)
                 result['news_days_old'] = news_days_old
+                result['news_temperature'] = news_temperature  # hot, medium, cold (catalyst STRENGTH - drives the flame color)
                 
                 # Update criteria (criteria_count recomputed in final pass -
                 # see scan_stocks - since volume/float/news now run concurrently)
@@ -778,6 +782,7 @@ class ScannerService:
                 result['has_positive_news'] = False
                 result['news_headline'] = "Error checking news"
                 result['news_freshness'] = 'unknown'
+                result['news_temperature'] = None
                 return result, False
         
         # Process news checks in parallel (12 workers - I/O-bound Google News/Alpaca

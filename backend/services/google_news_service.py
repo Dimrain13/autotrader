@@ -120,7 +120,20 @@ def score_headline(title: str, min_score: int = 10) -> Optional[Dict]:
 
     sentiment_label = 'strong_catalyst' if score >= 10 else ('momentum' if score >= 5 else ('weak' if score >= 2 else 'neutral'))
 
-    return {'score': score, 'sentiment': sentiment_label, 'catalysts': matched_catalysts[:3]}
+    # "Temperature" for the UI's flame icon - this is deliberately catalyst
+    # STRENGTH (hot=real catalyst, medium=price-action momentum, cold=weak
+    # generic mention), NOT article age. It used to be conflated with
+    # `classify_freshness()` (age: breaking/warm/cold) on the frontend,
+    # which meant a headline that was merely RECENT (e.g. "XYZ stock
+    # surges 20%") rendered the exact same bright "hot" flame as a real
+    # merger/FDA/earnings catalyst just because it was freshly published -
+    # user report: "Hot/Cold ranking flags generic stock price increases
+    # as Hot instead of reserving that for true catalysts". Freshness/age
+    # is still tracked separately (classify_freshness below) and shown as
+    # plain text ("2d ago"), just no longer drives the flame's color.
+    temperature = {'strong_catalyst': 'hot', 'momentum': 'medium', 'weak': 'cold'}.get(sentiment_label)
+
+    return {'score': score, 'sentiment': sentiment_label, 'temperature': temperature, 'catalysts': matched_catalysts[:3]}
 
 
 def classify_freshness(published_at: datetime) -> Tuple[str, Optional[int]]:
@@ -285,6 +298,7 @@ class GoogleNewsService:
                         continue
                     score = scored['score']
                     sentiment_label = scored['sentiment']
+                    temperature = scored['temperature']
                     matched_catalysts = scored['catalysts']
                     
                     # Extract link
@@ -321,8 +335,9 @@ class GoogleNewsService:
                         'pubDate': pubDate,
                         'sentiment': sentiment_label,
                         'score': score,
+                        'temperature': temperature,  # hot, medium, cold (catalyst strength - drives flame color)
                         'catalysts': matched_catalysts,  # Top 3 matched keywords
-                        'freshness': news_freshness,  # breaking, warm, cold
+                        'freshness': news_freshness,  # breaking, warm, cold (article age - text only)
                         'days_old': days_old
                     })
                     

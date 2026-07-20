@@ -12,6 +12,14 @@ Covers:
    b) existing open sell order >= stale_after_seconds old -> cancels it then
       calls place_market_order (recovers from a stuck/never-filled order).
    c) no existing open order -> calls place_market_order directly (normal path).
+3. NEW (this session): reactive force-cancel-and-retry when place_market_order
+   itself raises an "insufficient qty" rejection despite the pre-check missing
+   a resting order (real incident: ATPC stop-loss blocked 17+ min) -
+   a) rejection containing "insufficient qty" -> re-checks open orders,
+      force-cancels any resting SELL order(s), retries place_market_order ONCE.
+   b) unrelated exceptions (e.g. "insufficient buying power", network errors)
+      must propagate unchanged, NOT be swallowed/retried.
+   c) retry that also fails should raise (no infinite loop / silent swallow).
 """
 import os
 import pytest
@@ -155,6 +163,109 @@ class TestSellWithDedup:
 
             mock_alpaca.place_market_order.assert_called_once_with("ATPC", 3020, "sell")
             assert result == {"order_id": "fallback-1"}
+
+
+class TestReactiveForceCancelOnInsufficientQty:
+    """NEW this session: _sell_with_dedup's try/except around the final
+    place_market_order call - reacts immediately to Alpaca's own
+    authoritative "insufficient qty" rejection instead of waiting for the
+    next ~2s tick's pre-check."""
+
+    def setup_method(self):
+        self.monitor = PositionMonitorService()
+
+    @pytest.mark.asyncio
+    async def test_insufficient_qty_rejection_force_cancels_and_retries(self):
+        """First place_market_order call raises 'insufficient qty available for
+        order' (real Alpaca wording) despite pre-check seeing NO open orders
+        (simulating the pre-check missing a resting order due to a race/lag).
+        Should re-check open orders, force-cancel the resting SELL order,
+        then retry place_market_order ONCE and return its result."""
+        blocking_sell = {
+            "order_id": "blocking-sell-1",
+            "symbol": "ATPC",
+            "side": "sell",
+            "status": "new",
+            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        }
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
+            # Pre-check (first get_open_orders call) sees nothing; the
+            # re-check after rejection (second call) finds the blocker.
+            mock_alpaca.get_open_orders.side_effect = [[], [blocking_sell]]
+            mock_alpaca.cancel_order = MagicMock(return_value=True)
+            mock_alpaca.place_market_order = MagicMock(
+                side_effect=[
+                    Exception("insufficient qty available for order (requested: 3020, available: 0)"),
+                    {"order_id": "retry-success-1", "filled_avg_price": 1.5}
+                ]
+            )
+
+            result = await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            assert mock_alpaca.place_market_order.call_count == 2
+            mock_alpaca.cancel_order.assert_called_once_with("blocking-sell-1")
+            assert result == {"order_id": "retry-success-1", "filled_avg_price": 1.5}
+
+    @pytest.mark.asyncio
+    async def test_unrelated_exception_propagates_unchanged(self):
+        """A rejection NOT containing 'insufficient qty' (e.g. insufficient
+        buying power, or a generic network/API error) must be re-raised as-is,
+        not caught/retried by the new fallback."""
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
+            mock_alpaca.get_open_orders.return_value = []
+            mock_alpaca.place_market_order = MagicMock(
+                side_effect=Exception("insufficient buying power")
+            )
+            mock_alpaca.cancel_order = MagicMock()
+
+            with pytest.raises(Exception, match="insufficient buying power"):
+                await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            mock_alpaca.cancel_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_retry_also_fails_raises_not_swallowed(self):
+        """If the retry after force-cancel ALSO fails, the exception must
+        propagate (no infinite loop, no silent swallow leaving the position
+        unprotected without any error surfaced upstream)."""
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
+            mock_alpaca.get_open_orders.side_effect = [[], []]
+            mock_alpaca.cancel_order = MagicMock()
+            mock_alpaca.place_market_order = MagicMock(
+                side_effect=[
+                    Exception("insufficient qty available for order"),
+                    Exception("insufficient qty available for order")
+                ]
+            )
+
+            with pytest.raises(Exception, match="insufficient qty"):
+                await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            assert mock_alpaca.place_market_order.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_only_sell_side_orders_force_cancelled_not_buy(self):
+        """The re-check after rejection must only force-cancel SELL orders on
+        the symbol, never a resting BUY order (which is unrelated to the
+        stuck-exit scenario and shouldn't be touched)."""
+        buy_order = {"order_id": "buy-1", "symbol": "ATPC", "side": "buy", "status": "new",
+                     "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}
+        sell_order = {"order_id": "sell-1", "symbol": "ATPC", "side": "sell", "status": "new",
+                      "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
+            mock_alpaca.get_open_orders.side_effect = [[], [buy_order, sell_order]]
+            mock_alpaca.cancel_order = MagicMock(return_value=True)
+            mock_alpaca.place_market_order = MagicMock(
+                side_effect=[
+                    Exception("insufficient qty available for order"),
+                    {"order_id": "retry-2"}
+                ]
+            )
+
+            result = await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            mock_alpaca.cancel_order.assert_called_once_with("sell-1")
+            assert result == {"order_id": "retry-2"}
 
 
 if __name__ == "__main__":

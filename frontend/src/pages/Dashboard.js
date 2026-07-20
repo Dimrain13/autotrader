@@ -121,7 +121,7 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
               <ResizableHandle withHandle />
 
               <ResizablePanel id="dashboard-panel-news" order={2} defaultSize={50} minSize={15} className="min-h-0 border border-neutral-800 rounded-lg bg-[#0A0A0A] p-2 pl-3 pt-2">
-                <NewsFeedPanel symbol={selectedSymbol} />
+                <NewsFeedPanel symbol={selectedSymbol} scannerResults={results} />
               </ResizablePanel>
             </ResizablePanelGroup>
           </ResizablePanel>

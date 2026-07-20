@@ -26,7 +26,7 @@ export function ReadyToTradePanel({ results, selectedSymbol, onSelect }) {
               }`}
             >
               {s.symbol}
-              <NewsFlame freshness={s.news_freshness} hasNews={s.has_positive_news} />
+              <NewsFlame temperature={s.news_temperature} hasNews={s.has_positive_news} />
               <span className="opacity-70 font-mono">${s.current_price?.toFixed(2)}</span>
             </button>
           ))}

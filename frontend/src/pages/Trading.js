@@ -45,6 +45,11 @@ export default function Trading({ account }) {
   // poll tick. Cleared for a symbol when its chart is closed, so reopening
   // it later fetches fresh data again.
   const loadedChartsRef = useRef(new Set());
+  // In-flight tracker (separate from loadedChartsRef) so a slow first fetch
+  // doesn't get double-submitted by this same effect re-running again
+  // before it resolves (e.g. scannerResults/positions polling ticking
+  // mid-fetch) - not marked "loaded" until it actually succeeds.
+  const fetchingChartsRef = useRef(new Set());
 
   // Mirror the latest selectedStocks/positions/scannerResults/momentumStocks
   // in refs so the 15s chartUpdateInterval (created once, deps=[demoMode,
@@ -181,6 +186,14 @@ export default function Trading({ account }) {
   const [stockData, setStockData] = useState({}); // {symbol: {bars, quote, sma20}}
   const [stockNews, setStockNews] = useState({}); // {symbol: {has_news, articles, last_updated}}
   const [loading, setLoading] = useState(false); // Start with false for instant display
+  // Tracks symbols whose initial chart-data fetch failed (network hiccup,
+  // API timeout, rate limit, etc) so the multi-chart grid can show a retry
+  // button instead of sitting on "Loading..." forever - see loadedChartsRef
+  // comment above: a failed fetch used to still get marked "loaded",
+  // permanently bricking that chart until the user closed and reopened it
+  // (found 2026-07, user report: "multi-chart comparison view stuck on
+  // Loading {symbol}...").
+  const [chartLoadErrors, setChartLoadErrors] = useState({});
 
   // Resolves the current manual-buy sizing setting (dollar-flat or percent-
   // of-account) into an actual $ amount to spend on one stock. Falls back to
@@ -391,7 +404,7 @@ export default function Trading({ account }) {
     // on every 15-60s poll tick, hammering the market data API and making
     // charts flicker/reset constantly.
     Array.from(selectedStocks).forEach(symbol => {
-      if (loadedChartsRef.current.has(symbol)) return;
+      if (loadedChartsRef.current.has(symbol) || fetchingChartsRef.current.has(symbol)) return;
 
       // Try to find in scanner results
       let stock = scannerResults.find(s => s.symbol === symbol);
@@ -418,8 +431,16 @@ export default function Trading({ account }) {
       }
 
       if (stock) {
-        loadedChartsRef.current.add(symbol);
-        fetchStockData(stock);
+        // Only mark as "loaded" once the fetch actually succeeds - on
+        // failure, leave it out of loadedChartsRef so the next time this
+        // effect re-runs (scannerResults/momentumStocks/positions poll on
+        // a 15-60s cycle) it retries automatically instead of being
+        // permanently stuck showing "Loading {symbol}..." forever.
+        fetchingChartsRef.current.add(symbol);
+        fetchStockData(stock).then((success) => {
+          fetchingChartsRef.current.delete(symbol);
+          if (success) loadedChartsRef.current.add(symbol);
+        });
       }
     });
 
@@ -767,8 +788,17 @@ export default function Trading({ account }) {
           spread_pct: quoteData?.spread_pct || 0
         }
       }));
+      setChartLoadErrors(prev => {
+        if (!prev[stock.symbol]) return prev;
+        const next = { ...prev };
+        delete next[stock.symbol];
+        return next;
+      });
+      return true;
     } catch (error) {
       console.error(`Failed to fetch data for ${stock.symbol}:`, error);
+      setChartLoadErrors(prev => ({ ...prev, [stock.symbol]: true }));
+      return false;
     }
   };
 
@@ -2278,7 +2308,28 @@ export default function Trading({ account }) {
             if (!stock) return null;
             
             const data = stockData[symbol];
-            if (!data) return <div key={symbol} className="text-center text-neutral-500">Loading {symbol}...</div>;
+            if (!data) {
+              // chartLoadErrors[symbol] means the last fetch attempt failed
+              // (not just "hasn't finished yet") - show a retry button
+              // instead of an infinite spinner (found 2026-07, user report:
+              // "multi-chart comparison view stuck on Loading {symbol}...").
+              if (chartLoadErrors[symbol]) {
+                return (
+                  <div key={symbol} className="text-center py-8 space-y-2" data-testid={`chart-load-error-${symbol}`}>
+                    <div className="text-[#FF1A40] text-sm">Failed to load chart data for {symbol}</div>
+                    <Button
+                      size="sm"
+                      onClick={() => fetchStockData(stock)}
+                      className="bg-[#2E5CFF] text-white hover:bg-[#2450DB]"
+                      data-testid={`chart-retry-button-${symbol}`}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                );
+              }
+              return <div key={symbol} className="text-center text-neutral-500" data-testid={`chart-loading-${symbol}`}>Loading {symbol}...</div>;
+            }
             
             // Get the most recent price - PRIORITIZE FRESH QUOTE DATA
             const quote = data.quote;

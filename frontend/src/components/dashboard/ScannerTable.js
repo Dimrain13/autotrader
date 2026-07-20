@@ -83,7 +83,7 @@ export function ScannerTable({ results, selectedSymbol, onSelect }) {
             >
               <td className="px-2 py-1.5 font-semibold text-neutral-100 flex items-center gap-1">
                 {s.symbol}
-                <NewsFlame freshness={s.news_freshness} hasNews={s.has_positive_news} />
+                <NewsFlame temperature={s.news_temperature} hasNews={s.has_positive_news} />
                 {s._stale && (
                   <span className="text-[8px] text-neutral-500 font-normal uppercase tracking-wider" data-testid={`stale-badge-${s.symbol}`}>
                     stale
