@@ -389,6 +389,23 @@ class ScannerService:
                 r['criteria_count'] = sum(1 for v in r['criteria_met'].values() if v)
                 r['meets_all_criteria'] = r['criteria_count'] == 5
                 r['ready_to_trade'] = r['meets_all_criteria']
+                # "No-Catalyst / Scalping Trade (No News)" candidate: every
+                # pillar EXCEPT news is verified-true (price/change/volume/
+                # float all real, not estimates) - a pure technical momentum
+                # gap with zero underlying catalyst. This is exactly the
+                # T12-halt-risk profile (large move, no news to justify it)
+                # user requested a warning for, and what the separate
+                # no-news auto-trader entry path (auto_trader_service.py)
+                # is gated on.
+                cm = r['criteria_met']
+                r['no_news_scalp_candidate'] = (
+                    r['criteria_count'] == 4
+                    and not cm.get('positive_news', True)
+                    and cm.get('price_range', False)
+                    and cm.get('pct_change', False)
+                    and cm.get('volume_ratio', False)
+                    and cm.get('float', False)
+                )
             
             # Keep all results but mark which ones were fully verified
             verified_symbols = {r['symbol'] for r in top_results}
@@ -510,6 +527,7 @@ class ScannerService:
                 "criteria_count": criteria_count,  # Count without volume
                 "meets_all_criteria": meets_all_criteria,
                 "ready_to_trade": meets_all_criteria,
+                "no_news_scalp_candidate": False,  # Only ever set True after the authoritative 4/5-recompute below (needs verified volume+float+news)
                 "spread_pct": 0,  # Will be populated with live quote data
                 "bid_price": 0,
                 "ask_price": 0

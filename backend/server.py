@@ -840,7 +840,10 @@ async def get_auto_trader_status():
             "enable_partial_profit": auto_trader.enable_partial_profit,  # True
             "breakeven_buffer_pct": auto_trader.breakeven_buffer_pct * 100,  # 0.2%
             "topping_tail_wick_ratio": auto_trader.topping_tail_wick_ratio,  # 0.5
-            "eod_close_time": "3:30 PM EST"
+            "eod_close_time": "3:30 PM EST",
+            "no_news_scalp_enabled": auto_trader.no_news_scalp_enabled,
+            "no_news_position_size_pct": auto_trader.no_news_position_size_pct * 100,  # 25%
+            "no_news_bailout_seconds": auto_trader.no_news_bailout_seconds  # 60
         },
         "entry_conditions": {
             "pullback_min_candles": auto_trader.pullback_min_candles,
@@ -902,7 +905,10 @@ async def update_auto_trader_settings(settings: dict):
                 "topping_tail_wick_ratio": auto_trader.topping_tail_wick_ratio,
                 "max_positions": auto_trader.max_positions,
                 "position_size_pct": auto_trader.position_size_pct * 100,
-                "daily_max_loss_pct": auto_trader.daily_max_loss_pct * 100
+                "daily_max_loss_pct": auto_trader.daily_max_loss_pct * 100,
+                "no_news_scalp_enabled": auto_trader.no_news_scalp_enabled,
+                "no_news_position_size_pct": auto_trader.no_news_position_size_pct * 100,
+                "no_news_bailout_seconds": auto_trader.no_news_bailout_seconds
             }
         }
     except Exception as e:

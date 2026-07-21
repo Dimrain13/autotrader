@@ -1,4 +1,4 @@
-import { Flame } from "lucide-react";
+import { Flame, AlertTriangle } from "lucide-react";
 
 // Flame color = catalyst STRENGTH ("temperature"), never article age.
 // hot = red (real catalyst: merger/FDA/earnings), medium = orange (price
@@ -46,5 +46,25 @@ export function CriteriaDots({ count }) {
         />
       ))}
     </div>
+  );
+}
+
+// T12 Halt Risk warning: a stock hitting every OTHER pillar (price/change/
+// volume/float, all verified-real) with ZERO underlying news catalyst -
+// pure retail-momentum/short-squeeze action. These setups are highly prone
+// to a sudden exchange-mandated T12 (halted pending investigation) circuit
+// breaker. Shown ONLY for confirmed 4/4-non-news candidates (scanner's
+// `no_news_scalp_candidate`), never for stocks that simply lack news
+// entirely (which is most stocks, not a warning-worthy state).
+export function T12HaltBadge() {
+  return (
+    <span
+      className="text-[8px] font-bold uppercase tracking-wider text-[#FF1A40] border border-[#FF1A40]/50 bg-[#FF1A40]/10 rounded px-1 py-0.5 inline-flex items-center gap-0.5 shrink-0"
+      title="High T12 Halt Risk: No Catalyst Detected. Do not hold into a circuit-breaker pause."
+      data-testid="t12-halt-badge"
+    >
+      <AlertTriangle className="w-2.5 h-2.5" />
+      NO CATALYST
+    </span>
   );
 }

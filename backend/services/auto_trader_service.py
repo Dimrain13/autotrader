@@ -87,6 +87,32 @@ class AutoTraderService:
         self.sma_period = 20
         self.breakout_bailout_seconds = 90  # "Breakout or bailout": exit if not in profit within this many seconds of entry
 
+        # --- "Scalping Trade (No News)" mode - Ross-Cameron-style B/C-tier
+        # setup handling for stocks hitting every OTHER pillar (price/change/
+        # volume/float, all verified) with ZERO underlying news catalyst.
+        # A massive no-catalyst gap is pure retail momentum/short-squeeze -
+        # prone to violent reversals and exchange T12 halts, so this mode
+        # trades it (still requiring the same First-Pullback technical
+        # pattern - grade the trade, don't skip the technicals) but with a
+        # hard-reduced size, a tighter technical+tiered-% stop, and a
+        # shorter bailout. OFF by default - explicit opt-in for this
+        # higher-risk mode required.
+        self.no_news_scalp_enabled = False
+        self.no_news_position_size_pct = 0.25  # Hard-cap: 25% of the normal calculated size (spec range was 25-50%, defaulting to the more conservative end since there's no catalyst backing the move)
+        self.no_news_bailout_seconds = 60  # Shorter than the normal 90s bailout - no catalyst means even less reason to wait for follow-through
+        # Tiered max stop-distance safety cap (price_min, price_max, max_pct).
+        # A flat % stop is wrong here: 5% of a $2 stock is a tight $0.10
+        # cushion, but 5% of a $20 stock is a full $1.00 - by the time a
+        # low-float momentum name drops $1 against you, the breakout pattern
+        # is long broken. Tightening the % cap as price rises keeps the
+        # DOLLAR risk in a sane, comparable band across the whole $2-$20
+        # scanner range. The structural (pullback-low) stop is still used
+        # first, same as the normal strategy - this only caps how far away
+        # that structural stop is allowed to be before the setup is skipped
+        # as too risky (same pattern as max_stop_distance_pct below, just
+        # tier-adjusted for the no-catalyst case).
+        self.no_news_stop_tiers = [(2, 5, 0.05), (5, 10, 0.03), (10, 20, 0.015)]
+
         # Daily tracking
         self.daily_pnl = 0.0
         self.consecutive_losses = 0
@@ -221,6 +247,12 @@ class AutoTraderService:
             self.position_size_pct = float(settings['position_size_pct']) / 100
         if 'daily_max_loss_pct' in settings:
             self.daily_max_loss_pct = float(settings['daily_max_loss_pct']) / 100
+        if 'no_news_scalp_enabled' in settings:
+            self.no_news_scalp_enabled = bool(settings['no_news_scalp_enabled'])
+        if 'no_news_position_size_pct' in settings:
+            self.no_news_position_size_pct = float(settings['no_news_position_size_pct']) / 100
+        if 'no_news_bailout_seconds' in settings:
+            self.no_news_bailout_seconds = int(settings['no_news_bailout_seconds'])
 
         logger.info(f"Auto-trader settings updated: {settings}")
 
@@ -740,13 +772,107 @@ class AutoTraderService:
             logger.error(f"Error checking entry for {symbol}: {str(e)}")
             return None
 
+    def _no_news_max_stop_pct(self, price: float) -> float:
+        """Tiered max stop-distance % for the no-news scalp mode - see
+        no_news_stop_tiers comment in __init__ for why a flat % is wrong."""
+        for lo, hi, max_pct in self.no_news_stop_tiers:
+            if lo <= price < hi:
+                return max_pct
+        return self.no_news_stop_tiers[-1][2] if price >= self.no_news_stop_tiers[-1][1] else self.max_stop_distance_pct
+
+    async def check_no_news_scalp_entry(self, stock: Dict) -> Optional[Dict]:
+        """
+        "Scalping Trade (No News)" entry path - a stock hitting every OTHER
+        scanner pillar (price/change/volume/float, all verified-real) with
+        ZERO underlying news catalyst (scanner's `no_news_scalp_candidate`).
+        Pure retail-momentum/short-squeeze action with no fundamental floor
+        under it - still requires the SAME First-Pullback technical pattern
+        + volume/MACD/SMA confirmation as the normal strategy (grade the
+        trade down, don't skip the technicals), just with the news pillar
+        excused and a tighter tiered stop-distance cap in its place.
+        """
+        symbol = stock.get('symbol')
+        if not self.no_news_scalp_enabled:
+            return None
+        if not stock.get('no_news_scalp_candidate', False):
+            return None
+        try:
+            if symbol in self.open_positions or symbol in self.exited_today:
+                return None
+
+            bars = await self._get_real_bars(symbol, timeframe="5Min", limit=100)
+            if not bars or len(bars) < 50:
+                logger.debug(f"{symbol}: [no-news scalp] Skipped - insufficient real market data")
+                return None
+
+            pullback_check = self.check_first_pullback(bars)
+            if not pullback_check['is_valid']:
+                logger.debug(f"{symbol}: [no-news scalp] No valid first-pullback pattern - {pullback_check.get('reason', 'n/a')}")
+                return None
+
+            entry_price = pullback_check['entry_price']
+            stop_loss_price = pullback_check['stop_loss_price']
+            risk_per_share = entry_price - stop_loss_price
+            if risk_per_share <= 0:
+                return None
+
+            risk_pct = risk_per_share / entry_price
+            max_stop_pct = self._no_news_max_stop_pct(entry_price)
+            if risk_pct > max_stop_pct:
+                logger.debug(f"{symbol}: [no-news scalp] Structural stop too far ({risk_pct*100:.1f}% > {max_stop_pct*100:.1f}% tiered max for ${entry_price:.2f}) - too risky without a catalyst backing it, skipping")
+                return None
+
+            volume_check = self.check_volume_confirmation(bars)
+            if self.require_volume_confirmation and not volume_check['confirmed']:
+                return None
+
+            closes = [b['close'] for b in bars]
+            macd_check = self.calculate_macd(closes)
+            if self.require_macd_crossover and not macd_check['crossover']:
+                return None
+            elif not self.require_macd_crossover and not macd_check['bullish']:
+                return None
+
+            sma_check = self.check_sma_confirmation(bars)
+            if self.require_sma_crossover and not sma_check['crossover']:
+                return None
+            elif not self.require_sma_crossover and not sma_check['confirmed']:
+                return None
+
+            target_price = entry_price + (self.reward_risk_ratio * risk_per_share)
+
+            entry_signal = {
+                'symbol': symbol,
+                'entry_price': entry_price,
+                'stop_loss_price': stop_loss_price,
+                'target_price': target_price,
+                'psych_target_price': None,
+                'hod_based_target': False,
+                'risk_per_share': risk_per_share,
+                'criteria_count': stock.get('criteria_count', 4),
+                'first_pullback': pullback_check,
+                'is_no_news_scalp': True,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            }
+
+            logger.info(f"⚠️ NO-NEWS SCALP ENTRY SIGNAL: {symbol} @ ${entry_price:.2f} (4/5 - no catalyst) | Stop: ${stop_loss_price:.2f} ({risk_pct*100:.1f}%, tiered max {max_stop_pct*100:.1f}%) | Target ({self.reward_risk_ratio}:1): ${target_price:.2f} | Bailout: {self.no_news_bailout_seconds}s")
+            return entry_signal
+
+        except Exception as e:
+            logger.error(f"Error checking no-news scalp entry for {symbol}: {str(e)}")
+            return None
+
     async def execute_entry(self, signal: Dict, portfolio_value: float) -> bool:
         """Execute buy order with structural stop-loss (pullback low) + 2:1 profit target"""
         try:
             symbol = signal['symbol']
             entry_price = signal['entry_price']
+            is_no_news_scalp = signal.get('is_no_news_scalp', False)
 
             shares = self.calculate_position_size(portfolio_value, entry_price)
+            if is_no_news_scalp:
+                # Hard-reduced size - no catalyst backing this move
+                shares = max(1, int(shares * self.no_news_position_size_pct))
 
             if shares < 1:
                 logger.warning(f"Position size too small for {symbol}")
@@ -774,14 +900,18 @@ class AutoTraderService:
                     'partial_sell_done': False,
                     'breakeven_stop_active': False,
                     'entry_time': datetime.now(timezone.utc).isoformat(),
-                    'status': 'open'
+                    'status': 'open',
+                    'is_no_news_scalp': is_no_news_scalp,
+                    'strategy': 'Scalping Trade (No News)' if is_no_news_scalp else 'Auto-Trader (Warrior Trading)'
                 }
 
                 self.partial_sold[symbol] = False
                 await self.save_state()
 
-                logger.info(f"✅ AUTO-BUY: {symbol} - {shares} shares @ ${entry_price:.2f}")
-                logger.info(f"   Structural Stop (pullback low): ${initial_stop:.2f} | Target A: ${profit_target:.2f}{f' | Target B (psych): ${psych_target:.2f}' if psych_target else ''} | Bailout: {self.breakout_bailout_seconds}s if no follow-through")
+                tag = "⚠️ AUTO-BUY (No-News Scalp)" if is_no_news_scalp else "✅ AUTO-BUY"
+                logger.info(f"{tag}: {symbol} - {shares} shares @ ${entry_price:.2f}")
+                bailout = self.no_news_bailout_seconds if is_no_news_scalp else self.breakout_bailout_seconds
+                logger.info(f"   Structural Stop (pullback low): ${initial_stop:.2f} | Target A: ${profit_target:.2f}{f' | Target B (psych): ${psych_target:.2f}' if psych_target else ''} | Bailout: {bailout}s if no follow-through")
                 if self.enable_partial_profit:
                     logger.info(f"   At first target: Sell {self.partial_sell_pct*100:.0f}% and move stop to ${entry_price * (1 + self.breakeven_buffer_pct):.2f} (above break-even)")
                 else:
@@ -945,13 +1075,14 @@ class AutoTraderService:
                 # into profit within breakout_bailout_seconds, get out now
                 # rather than waiting for the full structural stop to hit.
                 bailout_triggered = False
+                bailout_seconds = self.no_news_bailout_seconds if position_data.get('is_no_news_scalp') else self.breakout_bailout_seconds
                 if not should_exit and not position_data.get('partial_sell_done', False) and current_price <= entry_price:
                     entry_time_str = position_data.get('entry_time')
                     if entry_time_str:
                         try:
                             entry_dt = datetime.fromisoformat(entry_time_str)
                             seconds_since_entry = (datetime.now(timezone.utc) - entry_dt).total_seconds()
-                            bailout_triggered = seconds_since_entry >= self.breakout_bailout_seconds
+                            bailout_triggered = seconds_since_entry >= bailout_seconds
                         except Exception:
                             bailout_triggered = False
 
@@ -964,7 +1095,7 @@ class AutoTraderService:
 
                 elif not should_exit and bailout_triggered:
                     should_exit = True
-                    exit_reason = f"BREAKOUT OR BAILOUT - no follow-through within {self.breakout_bailout_seconds}s ({pnl_pct:.2f}%)"
+                    exit_reason = f"BREAKOUT OR BAILOUT - no follow-through within {bailout_seconds}s ({pnl_pct:.2f}%)"
 
                 elif not should_exit and past_trading_hours:
                     should_exit = True
@@ -1027,7 +1158,7 @@ class AutoTraderService:
                             'exit_reason': exit_reason,
                             'entry_time': position_data.get('entry_time'),
                             'exit_time': datetime.now(timezone.utc).isoformat(),
-                            'strategy': 'Auto-Trader (Warrior Trading)'
+                            'strategy': position_data.get('strategy', 'Auto-Trader (Warrior Trading)')
                         })
 
                         del self.open_positions[symbol]
@@ -1083,6 +1214,25 @@ class AutoTraderService:
                     success = await self.execute_entry(entry_signal, portfolio_value)
                     if success:
                         logger.info(f"✅ Trade executed for {entry_signal['symbol']}")
+
+            # "Scalping Trade (No News)" mode - only after all real-catalyst
+            # (5/5) entries above have had first claim on available position
+            # slots; a verified catalyst is always the higher-conviction
+            # setup. Fully opt-in (no_news_scalp_enabled), OFF by default.
+            if self.no_news_scalp_enabled and len(self.open_positions) < self.max_positions:
+                no_news_stocks = [s for s in scanner_results if s.get('no_news_scalp_candidate', False)]
+                if no_news_stocks:
+                    logger.info(f"⚠️ Scanner: {len(no_news_stocks)} no-catalyst scalp candidate(s) (4/5, no news)")
+                for stock in no_news_stocks:
+                    if len(self.open_positions) >= self.max_positions:
+                        break
+
+                    entry_signal = await self.check_no_news_scalp_entry(stock)
+
+                    if entry_signal:
+                        success = await self.execute_entry(entry_signal, portfolio_value)
+                        if success:
+                            logger.info(f"⚠️ No-News Scalp trade executed for {entry_signal['symbol']}")
 
             await self.monitor_exits(portfolio_value)
 

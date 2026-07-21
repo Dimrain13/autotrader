@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
-import { NewsFlame, ChangeCell, CriteriaDots } from "./ScannerCells";
+import { NewsFlame, ChangeCell, CriteriaDots, T12HaltBadge } from "./ScannerCells";
 
 // Column definitions: `key` is the field to sort by, `defaultDir` is which
 // direction that column sorts on first click (biggest/most-extreme first
@@ -81,14 +81,17 @@ export function ScannerTable({ results, selectedSymbol, onSelect }) {
                 selectedSymbol === s.symbol ? "bg-[#00E599]/10" : s.pct_change >= 20 ? "bg-[#00E599]/5" : ""
               }`}
             >
-              <td className="px-2 py-1.5 font-semibold text-neutral-100 flex items-center gap-1">
-                {s.symbol}
-                <NewsFlame temperature={s.news_temperature} hasNews={s.has_positive_news} />
-                {s._stale && (
-                  <span className="text-[8px] text-neutral-500 font-normal uppercase tracking-wider" data-testid={`stale-badge-${s.symbol}`}>
-                    stale
-                  </span>
-                )}
+              <td className="px-2 py-1.5 font-semibold text-neutral-100">
+                <div className="flex items-center gap-1">
+                  {s.symbol}
+                  <NewsFlame temperature={s.news_temperature} hasNews={s.has_positive_news} />
+                  {s._stale && (
+                    <span className="text-[8px] text-neutral-500 font-normal uppercase tracking-wider" data-testid={`stale-badge-${s.symbol}`}>
+                      stale
+                    </span>
+                  )}
+                </div>
+                {s.no_news_scalp_candidate && <T12HaltBadge />}
               </td>
               <td className="text-right px-2 py-1.5 font-mono tabular-nums text-neutral-300">${s.current_price?.toFixed(2)}</td>
               <td className="text-right px-2 py-1.5"><ChangeCell pct={s.pct_change} /></td>

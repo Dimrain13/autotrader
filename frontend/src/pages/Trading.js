@@ -84,7 +84,10 @@ export default function Trading({ account }) {
     stop_loss_pct: 1.0,
     max_positions: 5,
     position_size_pct: 10.0,
-    daily_max_loss_pct: 5.0
+    daily_max_loss_pct: 5.0,
+    no_news_scalp_enabled: false,
+    no_news_position_size_pct: 25.0,
+    no_news_bailout_seconds: 60
   });
   
   const [dollarAmountPerStock, setDollarAmountPerStock] = useState(() => {
@@ -302,7 +305,10 @@ export default function Trading({ account }) {
           reward_risk_ratio: response.data.strategy?.reward_risk_ratio || 2.0,
           max_positions: response.data.max_positions || 5,
           position_size_pct: response.data.strategy?.position_size_pct || 10.0,
-          daily_max_loss_pct: response.data.strategy?.daily_max_loss_pct || 5.0
+          daily_max_loss_pct: response.data.strategy?.daily_max_loss_pct || 5.0,
+          no_news_scalp_enabled: response.data.strategy?.no_news_scalp_enabled || false,
+          no_news_position_size_pct: response.data.strategy?.no_news_position_size_pct || 25.0,
+          no_news_bailout_seconds: response.data.strategy?.no_news_bailout_seconds || 60
         };
         setAutoTraderSettings(settings);
         // Keep the backend auto-trader's own reward:risk target calc in sync
@@ -1953,6 +1959,30 @@ export default function Trading({ account }) {
                 
                 <div className="text-[10px] text-purple-400/70 ml-auto">
                   ✓ = Crossover required | □ = Just above/below
+                </div>
+
+                <div className="h-px w-full bg-[#FF1A40]/20 my-2" />
+
+                {/* Scalping Trade (No News) - opt-in higher-risk mode for
+                    stocks hitting every OTHER pillar (price/change/volume/
+                    float) with ZERO news catalyst. OFF by default. */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="no-news-scalp-enabled"
+                      checked={autoTraderSettings.no_news_scalp_enabled || false}
+                      onChange={(e) => updateAutoTraderSettings({ no_news_scalp_enabled: e.target.checked })}
+                      className="w-4 h-4 rounded border-[#FF1A40]/30 bg-[#121212] text-[#FF1A40]"
+                      data-testid="no-news-scalp-toggle"
+                    />
+                    <Label htmlFor="no-news-scalp-enabled" className="text-xs text-[#FF1A40] font-bold cursor-pointer uppercase">
+                      ⚠ Scalping Trade (No News)
+                    </Label>
+                  </div>
+                  <span className="text-[10px] text-neutral-500">
+                    Auto-trade 4/5 no-catalyst gappers at {autoTraderSettings.no_news_position_size_pct || 25}% size, tiered stop, {autoTraderSettings.no_news_bailout_seconds || 60}s bailout - high T12 halt risk
+                  </span>
                 </div>
               </div>
             </div>

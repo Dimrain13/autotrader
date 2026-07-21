@@ -1,0 +1,42 @@
+{
+  "summary": "First test pass of the brand-new 'Scalping Trade (No News)' feature (entirely new code). Verified via: (1) re-running the 17 pre-existing pytest unit tests in test_no_news_scalp_mode.py - all pass; (2) full backend regression suite (193 passed, 13 skipped, 2 pre-existing/unrelated websocket-loop failures in test_market_data_stream.py not related to this feature); (3) live backend API calls with real login (daniel.r.millner@gmail.com) - GET /api/auto-trader/status confirmed no_news_scalp_enabled defaults to False, no_news_position_size_pct=25.0, no_news_bailout_seconds=60; POST /api/auto-trader/settings round-trip toggling on/off worked and persisted correctly, reset to False at the end; (4) live POST /api/scanner/scan (real market data, 155 results) found 2 GENUINE no_news_scalp_candidate rows (VIVK, GREE) both correctly criteria_count==4 with positive_news=False and all other 4 pillars (price_range/pct_change/volume_ratio/float) True - confirms the authoritative recompute logic is correct on live data, not just theoretical; GET /api/scanner/demo does NOT set this field at all (minor gap, demo endpoint uses a separate lightweight demo_scanner_service.py that was not updated - spec technically allows 'absent' so this is not a functional break, just noting the demo path wasn't touched); (5) Playwright E2E on the real preview URL: T12 'NO CATALYST' red badge (data-testid='t12-halt-badge') rendered live on the Dashboard ScannerTable for both VIVK and GREE with correct tooltip text 'High T12 Halt Risk: No Catalyst Detected. Do not hold into a circuit-breaker pause.'; on the Trading page, the 'Scalping Trade (No News)' toggle (data-testid='no-news-scalp-toggle') inside the Entry Conditions panel defaulted to unchecked, toggling ON worked with a success toast ('Auto-trader settings updated'), state persisted across a full page reload, and was toggled back OFF and confirmed OFF via a final API check as required (real-money-risk feature left in safe default state).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/scanner/demo", "issue": "demo_scanner_service.py was not updated to compute no_news_scalp_candidate - field is entirely absent from demo scan rows (not False, just missing key). Not a functional break since the authoritative POST /api/scanner/scan path works correctly, but noted as a gap versus the real scanner for anyone testing exclusively via the demo endpoint."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_no_news_scalp_mode.py",
+    "/app/test_reports/pytest/pytest_no_news_scalp.xml",
+    "/app/test_reports/pytest/pytest_full_regression_noscalp.xml"
+  ],
+  "action_items": [
+    "Optional/low priority: consider adding no_news_scalp_candidate computation to demo_scanner_service.py for parity with the real scanner, if the demo endpoint is meant to be a full feature-parity sandbox."
+  ],
+  "critical_code_review_comments": [
+    "scanner_service.py's authoritative recompute block (line ~401) correctly gates no_news_scalp_candidate on criteria_count==4 AND all 4 non-news pillars True AND positive_news False - matches spec exactly, and this was independently confirmed against LIVE market data (VIVK/GREE), not just the mocked unit tests.",
+    "auto_trader_service.py's _no_news_max_stop_pct() tiered lookup (2-5:5%, 5-10:3%, 10-20:1.5%, capped at last tier for >=20) is correct and rejects (returns None, never clamps) when structural stop exceeds the tier cap - confirmed by test_structural_stop_too_far_for_tier_skips passing.",
+    "execute_entry() correctly branches on is_no_news_scalp to reduce shares to no_news_position_size_pct (25% hard cap) and tags open_positions with is_no_news_scalp=True + strategy='Scalping Trade (No News)'; normal entries unaffected (verified both directions via existing tests).",
+    "monitor_exits() correctly computes bailout_seconds per-position (60s for is_no_news_scalp=True, 90s normal breakout_bailout_seconds otherwise) rather than a single global value - verified via code + unit test.",
+    "process_scanner_results() correctly gates the entire no-news-scalp loop behind self.no_news_scalp_enabled and runs it AFTER the normal ready_stocks loop (so normal 5/5 signals get first claim on position slots, per spec).",
+    "Frontend Trading.js toggle correctly defaults to false in initial state AND re-fetches from GET /api/auto-trader/status on mount (fetchAutoTraderSettings merge) for persistence across refresh - verified live.",
+    "T12HaltBadge in ScannerCells.js/ScannerTable.js is a pure conditional render (s.no_news_scalp_candidate) independent of selection/order-placement state, satisfying the 'always visible on qualifying scanner rows' requirement - confirmed live, badge appeared on Dashboard scanner table rows without any stock being selected or traded."
+  ],
+  "updated_files": [
+    "/app/test_reports/pytest/pytest_no_news_scalp.xml",
+    "/app/test_reports/pytest/pytest_full_regression_noscalp.xml"
+  ],
+  "success_rate": {"backend": "100% (feature-specific: 17/17); full suite 193/195 excluding 2 pre-existing unrelated websocket test failures", "frontend": "100%"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md) - used successfully for live login.",
+  "seed_data_creation": "None. No orders were placed (no_news_scalp_enabled was toggled on/off for UI verification only, then confirmed OFF via API before finishing - no live trades executed, account remained flat).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The 'Scalping Trade (No News)' feature is fully implemented and verified across backend unit tests (17/17), live backend API (status/settings round-trip, real scanner scan producing 2 genuine live candidates VIVK/GREE), and frontend E2E (T12 badge + Trading page toggle with persistence). Only gap found: demo_scanner_service.py (GET /api/scanner/demo) doesn't compute no_news_scalp_candidate at all - low priority since the real scan path (POST /api/scanner/scan) is authoritative and works correctly. The 2 test_market_data_stream.py websocket failures are pre-existing test-infra issues (asyncio event loop in worker thread), unrelated to this feature - not investigated further as out of scope. Toggle was left OFF (confirmed via final API check) as required.",
+  "rca_of_the_issue": "N/A - no bugs found in the new feature; only a minor scope gap noted (demo endpoint) which is informational, not a defect."
+}
