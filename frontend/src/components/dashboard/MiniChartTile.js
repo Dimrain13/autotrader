@@ -28,6 +28,7 @@ export function MiniChartTile({ symbol, timeframe, liveTrade, levels }) {
   const [bars, setBars] = useState([]);
   const [blockTrades, setBlockTrades] = useState([]);
   const [meta, setMeta] = useState({ source: null, warning: null });
+  const [fetchError, setFetchError] = useState(null);
   const barsRef = useRef([]);
 
   const fetchBars = useCallback((isIncremental = false) => {
@@ -46,8 +47,20 @@ export function MiniChartTile({ symbol, timeframe, liveTrade, levels }) {
       barsRef.current = merged;
       setBars(merged);
       setMeta({ source: res.data.source, warning: res.data.warning });
+      setFetchError(null);
       if (merged.length > 0) barsCache.set(symbol, timeframe, merged);
-    }).catch(() => {});
+    }).catch((err) => {
+      // Previously silently swallowed - if this symbol/timeframe never had
+      // bars cached yet (barsRef.current still empty), a single failed
+      // request left the tile showing "Loading real data..." FOREVER with
+      // zero indication anything was wrong (found 2026-07, user report:
+      // chart tiles look stuck when clicking a stock). Surface it instead -
+      // the existing 30s (or 3s for 10Sec) refresh interval will keep
+      // retrying automatically regardless.
+      if (barsRef.current.length === 0) {
+        setFetchError(err.response?.status ? `Failed to load (HTTP ${err.response.status}) - retrying...` : "Failed to load chart data - retrying...");
+      }
+    });
   }, [symbol, timeframe]);
 
   const fetchBlockTrades = useCallback(() => {
@@ -62,6 +75,7 @@ export function MiniChartTile({ symbol, timeframe, liveTrade, levels }) {
       barsRef.current = [];
       setBars([]);
       setBlockTrades([]);
+      setFetchError(null);
       return;
     }
 
@@ -73,6 +87,7 @@ export function MiniChartTile({ symbol, timeframe, liveTrade, levels }) {
     barsRef.current = cached ? cached.bars : [];
     setBars(barsRef.current);
     setBlockTrades([]);
+    setFetchError(null);
 
     fetchBars(!!cached);
     fetchBlockTrades();
@@ -97,8 +112,10 @@ export function MiniChartTile({ symbol, timeframe, liveTrade, levels }) {
         {!symbol ? (
           <div className="h-full flex items-center justify-center text-xs text-neutral-600">No symbol selected</div>
         ) : bars.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-xs text-neutral-600 text-center px-2">
-            {meta.warning || "Loading real data..."}
+          <div className="h-full flex items-center justify-center text-xs text-center px-2" data-testid={`chart-tile-status-${timeframe}`}>
+            <span className={fetchError ? "text-[#FF1A40]" : "text-neutral-600"}>
+              {fetchError || meta.warning || "Loading real data..."}
+            </span>
           </div>
         ) : (
           <CandlestickChart data={bars} height={220} vwap={vwap} blockTrades={blockTrades} livePrice={liveTrade} levels={levels} />
