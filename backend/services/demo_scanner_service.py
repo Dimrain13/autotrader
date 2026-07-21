@@ -149,6 +149,10 @@ class DemoScannerService:
             stock["meets_all_criteria"] = meets_all_criteria
             stock["ready_to_trade"] = meets_all_criteria
             stock["has_positive_news"] = True
+            # Demo mode always simulates positive_news=True (line above) so
+            # this is always False here by construction - present for field
+            # parity with the real scanner_service.py, not a live signal.
+            stock["no_news_scalp_candidate"] = False
             stock["news_headline"] = f"{stock['symbol']} shows strong momentum on volume spike"
             
             results.append(stock)
