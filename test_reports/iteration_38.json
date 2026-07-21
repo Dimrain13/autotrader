@@ -1,0 +1,37 @@
+{
+  "summary": "DIAGNOSIS-ONLY task (no fixes applied). Logged into MomentumX Dashboard as daniel.r.millner@gmail.com, started the scanner, and clicked on multiple different scanner rows (VIVK, GREE, PRPL) across 2 separate test sessions, including a rapid-symbol-switch scenario (3 clicks within ~2.5s). Captured live network responses for all /api/market/bars/{symbol}?timeframe=... calls and browser console output. FINDING: The reported bug (all 4 chart tiles stuck on 'Loading real data...' forever) did NOT reproduce in this environment at this time. For every symbol tested, the 1Min/5Min/1Day tiles received 200 OK responses (typically <1s) with real bar arrays and rendered actual candlestick charts with VWAP/levels overlays. The 10Sec tile also returned 200 OK every time but with an empty bars array and a specific warning message from the backend ('No real-time trade ticks yet for this symbol - 10-second bars build up as trades stream in (no historical 10-second data exists on Alpaca)') - this is NOT the generic stuck 'Loading real data...' fallback text, it is the intended meta.warning path in MiniChartTile.js (line 101), so the 10Sec tile is behaving as designed, not stuck/broken. News panel and Quick Trade panel (BUY button) also rendered correctly for every symbol clicked, ruling out a broader selectedSymbol propagation bug at this time.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "WebSocket live market-data stream",
+        "issue": "Console warning on every single test run at initial page load/login: \"WebSocket connection to 'wss://.../api/ws/market-data?token=...' failed: WebSocket is closed before the connection is established.\" This is a real, reproducible, consistent warning (seen 4/4 times) but did NOT block the REST-based /api/market/bars calls, which all returned 200. It may be an artifact of automated navigation timing (page.goto interrupting the socket handshake) rather than a real user-facing issue in manual browsing - recommend the main agent verify manually or check if this happens on real user sessions too, since it could explain intermittent live-tick/price-overlay issues (separate from the chart-tile-stuck bug being investigated) if it also happens for real users on slower connections/tab restores.",
+        "affected_selectors": []
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Could NOT reproduce the user's exact complaint (all chart tiles stuck on 'Loading real data...' for every stock) in this session - across 3 different symbols (VIVK, GREE, PRPL) and a rapid-symbol-switch scenario, /api/market/bars/{symbol} for 1Min/5Min/1Day always returned 200 with real data within ~1s and rendered correctly.",
+    "Suggest asking the user: (a) is the bug still happening right now when they retest, (b) which specific symbol(s) it happens on, (c) whether it happens on first page load vs after the app has been open a while, (d) check if it correlates with the intermittent WebSocket connection failure noted above (e.g. bug appears right after a tab was backgrounded/restored, or after leaving the app open for a long time where the token could be near expiry).",
+    "Investigate the recurring 'WebSocket is closed before the connection is established' console warning on every session start - not proven to be the root cause of the chart-stuck bug (REST bars calls are independent of the WS connection and worked fine), but it is a real, 100% reproducible issue worth root-causing separately since MiniChartTile's live overlay and scanner row live-price ticks depend on this same WS stream.",
+    "Consider adding a visible error state in MiniChartTile.js's .catch(() => {}) (currently swallows errors silently) so that IF this bug recurs, the tile would show an actual error message instead of being indistinguishable between 'still loading' and 'failed silently' - this would make future live-diagnosis much faster without needing to intercept network traffic."
+  ],
+  "critical_code_review_comments": [
+    "MiniChartTile.js line 50: axios.get(...).catch(() => {}) silently swallows ALL fetch errors (network failure, 401, 500, timeout) with no state change - if the user's bug is real but transient/intermittent, this is exactly why it would look like an infinite stuck spinner with zero diagnostic signal in the UI. Recommend surfacing the error into `meta.warning` (e.g. 'Failed to load chart data - retrying...') on catch so users/future debugging isn't blind.",
+    "The 10Sec tile's warning text ('No real-time trade ticks yet...') is functionally correct today, but is visually indistinguishable at a glance from a genuinely stuck tile unless the user reads the full sentence - since it's rendered in the same neutral-600 gray text/positioning as the default 'Loading real data...' fallback. This is a code-review observation, not a bug: worth considering a distinct visual treatment (icon/color) if user confusion continues."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only per request)", "frontend": "100% of reproduction attempts succeeded in loading real chart data - bug not observed"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! (from /app/memory/test_credentials.md) - login worked correctly in all sessions.",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bug not reproduced live as of this test run (Feb 2026 test session, market apparently open/active - scanner returned 155 candidates). If the user reports this again, get the EXACT symbol and exact time it happened, and check backend logs at that timestamp for Alpaca API errors/429s, since the backend itself confirmed working via curl per the main agent's own note. Also worth checking if this happens specifically when Alpaca's live data key/secondary key pool (data_pool/news_pool in alpaca_service.py) hits a rate limit - a 429/500 from Alpaca would be swallowed by the same silent .catch(() => {}) in MiniChartTile.js and look identical to 'stuck forever' from the user's perspective, but no such failure was observed in this run.",
+  "rca_of_the_issue": "Not established - no failure occurred during this diagnostic session to root-cause. The suspected code path (MiniChartTile.js's silent .catch(() => {})) IS a latent bug that would perfectly explain the symptom IF any backend/network error occurred (401, 429 rate-limit from Alpaca, 500, timeout) because bars would stay [] forever with no error surfaced to the UI - but this was not observed to actually trigger in ~4 fresh click cycles across 2 sessions. Recommend main agent proactively fix the silent catch as a defensive improvement regardless, since it's a code smell independent of whether it's the actual cause of this specific bug report."
+}
