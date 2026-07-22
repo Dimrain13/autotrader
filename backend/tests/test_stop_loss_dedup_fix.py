@@ -77,10 +77,17 @@ class TestSellWithDedup:
         self.monitor = PositionMonitorService()
 
     @pytest.mark.asyncio
-    async def test_fresh_pending_order_skips_resubmit(self):
-        """Existing sell order < stale_after_seconds old -> return None, no new order placed"""
+    async def test_resting_sell_order_force_cancelled_regardless_of_age(self):
+        """Existing sell order (e.g. a bracket's own stop-loss/take-profit
+        leg, or a genuine stale duplicate) is force-cancelled immediately
+        and replaced with a fresh sell - no more waiting up to
+        stale_after_seconds to see if it fills on its own (that used to
+        block/delay every legitimate sell placed shortly after a bracket
+        buy, since the bracket ALWAYS leaves its own resting sell leg -
+        found by testing_agent_v4 immediately after the bracket-at-entry
+        fix, iteration_40)."""
         recent_order = {
-            "order_id": "recent-1",
+            "order_id": "bracket-leg-1",
             "symbol": "ATPC",
             "side": "sell",
             "status": "new",
@@ -88,14 +95,14 @@ class TestSellWithDedup:
         }
         with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
             mock_alpaca.get_open_orders.return_value = [recent_order]
-            mock_alpaca.place_market_order = MagicMock()
-            mock_alpaca.cancel_order = MagicMock()
+            mock_alpaca.place_market_order = MagicMock(return_value={"order_id": "fresh-sell-1"})
+            mock_alpaca.cancel_order = MagicMock(return_value=True)
 
             result = await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
 
-            assert result is None
-            mock_alpaca.place_market_order.assert_not_called()
-            mock_alpaca.cancel_order.assert_not_called()
+            mock_alpaca.cancel_order.assert_called_once_with("bracket-leg-1")
+            mock_alpaca.place_market_order.assert_called_once_with("ATPC", 3020, "sell")
+            assert result == {"order_id": "fresh-sell-1"}
 
     @pytest.mark.asyncio
     async def test_stale_pending_order_cancelled_and_replaced(self):
@@ -134,8 +141,13 @@ class TestSellWithDedup:
             assert result == {"order_id": "direct-1"}
 
     @pytest.mark.asyncio
-    async def test_ignores_open_buy_orders_only_checks_sell(self):
-        """An open BUY order on the same symbol should not block a sell (dedup is sell-side only)"""
+    async def test_pending_buy_order_resolves_then_sell_proceeds(self):
+        """An open BUY order on the same symbol (parent buy not yet filled)
+        should briefly poll rather than immediately raise or block forever -
+        once the buy order is no longer open (filled), the sell proceeds
+        normally. Guards the 'cannot open a short sell while a long buy
+        order is open' raw Alpaca 500 found by testing_agent_v4, iteration_40,
+        right after every buy started always placing a real bracket order."""
         buy_order = {
             "order_id": "buy-1",
             "symbol": "ATPC",
@@ -143,14 +155,40 @@ class TestSellWithDedup:
             "status": "new",
             "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         }
-        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca:
-            mock_alpaca.get_open_orders.return_value = [buy_order]
-            mock_alpaca.place_market_order = MagicMock(return_value={"order_id": "sell-after-buy-check"})
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca, \
+             patch('asyncio.sleep', new=AsyncMock()):
+            # Pre-loop check sees the pending buy; first in-loop recheck
+            # sees it resolved (filled) - sell should proceed normally.
+            mock_alpaca.get_open_orders.side_effect = [[buy_order], []]
+            mock_alpaca.place_market_order = MagicMock(return_value={"order_id": "sell-after-buy-fills"})
+            mock_alpaca.cancel_order = MagicMock()
 
             result = await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
 
             mock_alpaca.place_market_order.assert_called_once_with("ATPC", 3020, "sell")
-            assert result == {"order_id": "sell-after-buy-check"}
+            assert result == {"order_id": "sell-after-buy-fills"}
+
+    @pytest.mark.asyncio
+    async def test_pending_buy_order_never_resolves_raises_clean_error(self):
+        """If the buy order never fills within the brief polling window,
+        raise a clear, user-facing error instead of letting Alpaca's raw
+        same-symbol-conflict rejection surface as an opaque 500."""
+        buy_order = {
+            "order_id": "buy-2",
+            "symbol": "ATPC",
+            "side": "buy",
+            "status": "new",
+            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        }
+        with patch('services.position_monitor_service.alpaca_service') as mock_alpaca, \
+             patch('asyncio.sleep', new=AsyncMock()):
+            mock_alpaca.get_open_orders.return_value = [buy_order]  # never resolves
+            mock_alpaca.place_market_order = MagicMock()
+
+            with pytest.raises(Exception, match="hasn't filled yet"):
+                await self.monitor._sell_with_dedup("ATPC", 3020, stale_after_seconds=10)
+
+            mock_alpaca.place_market_order.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_open_orders_exception_falls_back_to_place_order(self):

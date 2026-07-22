@@ -522,7 +522,12 @@ async def place_order(request: Request, order: TradeOrder):
                 # "insufficient qty available" 500 whenever an earlier
                 # sell order for the same symbol was still resting/unfilled
                 # (found by testing_agent_v4, iteration_32).
-                result = await position_monitor._sell_with_dedup(order.symbol, order.qty)
+                try:
+                    result = await position_monitor._sell_with_dedup(order.symbol, order.qty)
+                except Exception as sell_err:
+                    if "hasn't filled yet" in str(sell_err):
+                        raise HTTPException(status_code=409, detail=str(sell_err))
+                    raise
                 if result is None:
                     raise HTTPException(
                         status_code=409,

@@ -155,7 +155,7 @@ export default function Settings() {
                 <strong>Exit Signals:</strong> Structural stop (pullback low) hit | 2:1 profit target (sell 50%, breakeven stop) | Breakout-or-Bailout (exit if not in profit within 90s) | End of window (3:30 PM)
               </div>
               <div className="text-neutral-400 text-xs mt-2">
-                <strong>Note:</strong> All stops are software-managed (pre-market/extended hours have no broker stops). Params match Ross Cameron's documented "First Pullback" Warrior Trading rules (2:1 reward:risk off the pullback low, 1% conservative daily-loss limit, 3-strikes circuit breaker, $2-$20 low-float momentum universe).
+                <strong>Note:</strong> A real stop-loss and take-profit order is placed on the broker at the moment of entry (regular market hours); the software layer manages trailing-up/partial-sell/breakeven on top of that. Params match Ross Cameron's documented "First Pullback" Warrior Trading rules (2:1 reward:risk off the pullback low, 1% conservative daily-loss limit, 3-strikes circuit breaker, $2-$20 low-float momentum universe).
               </div>
             </div>
           </div>

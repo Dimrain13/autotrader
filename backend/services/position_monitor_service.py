@@ -170,19 +170,30 @@ class PositionMonitorService:
 
     async def _sell_with_dedup(self, symbol: str, qty: int, stale_after_seconds: int = 10):
         """
-        Submits a market SELL for `qty` shares of `symbol`, but first checks
-        for an already-resting open order on the same symbol first - a
-        second sell while shares are still held by an earlier unfilled
-        order gets rejected by Alpaca with "insufficient qty available",
-        and since every exit-check here re-runs every ~2s, retrying blindly
-        just spammed that same rejection forever instead of ever actually
-        exiting (found by testing_agent_v4, iteration_30).
+        Submits a market SELL for `qty` shares of `symbol`.
 
-        - No existing open order: places the sell immediately, as before.
-        - An open order exists and is < stale_after_seconds old: skip this
-          cycle (return None) - give it a real chance to fill first.
-        - An open order exists and is stale (>= stale_after_seconds): cancel
-          it (it isn't going to fill) and place a fresh market sell instead.
+        Since every buy now ALWAYS places a real Alpaca bracket order at
+        entry (2026-07 fix - "there should have been a stop loss put in
+        place at the time of buying, same with take profit"), a resting
+        SELL order on this symbol is the COMMON case (the bracket's own
+        stop-loss/take-profit leg), not the rare "someone else's duplicate
+        sell click still in flight" case this method originally assumed.
+        Waiting up to `stale_after_seconds` to see if that leg fills on its
+        own (the old behavior) blocked/delayed every legitimate manual/auto
+        sell placed within that window, surfacing as a confusing 409 (found
+        by testing_agent_v4, iteration_40, immediately after the bracket-at-
+        entry fix). Any existing resting sell order for this symbol - the
+        bracket's leg or a genuine stale duplicate - is now force-cancelled
+        immediately before placing the fresh sell, mirroring the same
+        force-cancel-and-retry pattern already used for the reactive
+        "insufficient qty" path below and in `auto_trader_service.sell_with_retry`.
+
+        Also guards the other regression found in the same test pass: if the
+        symbol's own parent BUY order hasn't filled yet (a sell attempted
+        within ~0s of buying), Alpaca rejects a same-symbol sell outright
+        ("cannot open a short sell while a long buy order is open") - briefly
+        poll for the buy to fill instead of letting that raw rejection
+        surface as an opaque 500.
         """
         try:
             open_orders = await asyncio.to_thread(alpaca_service.get_open_orders, symbol)
@@ -190,40 +201,47 @@ class PositionMonitorService:
             logger.error(f"{symbol}: Could not check for existing open orders before selling: {e}")
             open_orders = []
 
-        existing_sell = next((o for o in open_orders if o.get('side') == 'sell'), None)
-        if existing_sell:
-            age_seconds = stale_after_seconds  # assume stale if we can't parse the timestamp
-            try:
-                created_at = datetime.fromisoformat(existing_sell['created_at'].replace('Z', '+00:00'))
-                age_seconds = (datetime.now(created_at.tzinfo) - created_at).total_seconds()
-            except Exception:
-                pass
-            if age_seconds < stale_after_seconds:
-                logger.info(f"⏳ {symbol}: Sell order {existing_sell['order_id']} already pending ({age_seconds:.0f}s old) - waiting for it to fill before retrying exit")
-                return None
-            logger.warning(f"🔁 {symbol}: Cancelling stale pending sell order {existing_sell['order_id']} ({age_seconds:.0f}s old, never filled) and replacing with a fresh market sell")
-            try:
-                await asyncio.to_thread(alpaca_service.cancel_order, existing_sell['order_id'])
-            except Exception as e:
-                logger.error(f"{symbol}: Failed to cancel stale order {existing_sell['order_id']}: {e}")
-                return None
+        # Parent BUY order still unfilled - give it a brief moment to fill
+        # (paper-trading market buys normally fill in well under a second)
+        # rather than passing Alpaca's raw same-symbol-conflict rejection
+        # through as an opaque 500.
+        pending_buy = next((o for o in open_orders if o.get('side') == 'buy'), None)
+        if pending_buy:
+            for _ in range(4):
+                await asyncio.sleep(0.5)
+                try:
+                    open_orders = await asyncio.to_thread(alpaca_service.get_open_orders, symbol)
+                except Exception:
+                    break
+                if not any(o.get('side') == 'buy' for o in open_orders):
+                    break
+            else:
+                logger.warning(f"{symbol}: Buy order {pending_buy.get('order_id')} still unfilled after 2s - refusing to sell yet")
+                raise Exception(f"Buy order for {symbol} hasn't filled yet - please wait a moment and retry the sell.")
+
+        # Force-cancel ANY resting sell order for this symbol right now
+        # (the bracket's own protective leg, or a genuine stale duplicate -
+        # either way, a fresh deliberate sell supersedes it) - no staleness
+        # wait, this symbol's shares are about to be sold regardless.
+        for o in open_orders:
+            if o.get('side') == 'sell':
+                try:
+                    await asyncio.to_thread(alpaca_service.cancel_order, o['order_id'])
+                    logger.info(f"🔁 {symbol}: Cancelled resting sell order {o['order_id']} (bracket leg or stale duplicate) before placing fresh sell")
+                except Exception as e:
+                    logger.error(f"{symbol}: Failed to cancel resting order {o['order_id']}: {e}")
 
         try:
             return await asyncio.to_thread(alpaca_service.place_market_order, symbol, qty, "sell")
         except Exception as e:
             # Alpaca rejected the sell - almost always because a resting
-            # order the pre-check above missed (transient API error/rate
-            # limit on get_open_orders, etc) is already holding the shares.
-            # Previously this just logged the rejection and waited for the
-            # NEXT ~2s tick to retry the same pre-check - if that pre-check
-            # kept missing the order, the position stayed COMPLETELY
-            # unprotected for as long as that kept happening (real incident:
-            # ATPC stop-loss blocked for 17+ minutes while price fell from
-            # $4.80 to $4.29 before finally exiting late at $4.34). React to
-            # Alpaca's own authoritative rejection immediately instead of
-            # hoping the next tick's pre-check works: force-cancel any
-            # resting sell order(s) for this symbol right now and retry
-            # once, closing the gap from "minutes" to "this same call".
+            # order the cancel pass above missed (transient API error/rate
+            # limit on get_open_orders, etc) is still holding the shares.
+            # React to Alpaca's own authoritative rejection immediately
+            # instead of hoping the next tick's pre-check works: force-
+            # cancel any resting sell order(s) for this symbol right now
+            # and retry once, closing the gap from "minutes" to "this same
+            # call" (real incident: ATPC stop-loss blocked 17+ minutes).
             if 'insufficient qty' not in str(e).lower():
                 raise
             logger.warning(f"🔁 {symbol}: Sell rejected (insufficient qty) - force-cancelling any resting sell order(s) for this symbol and retrying immediately")
