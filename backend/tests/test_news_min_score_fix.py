@@ -1,27 +1,30 @@
 """
-Regression test for the news display fix (2026-07/2026-02 session):
+Regression test for the news display/filtering architecture (2026-07 series):
 
-score_headline()/check_alpaca_news()/search_stock_news() now accept a
-`min_score` parameter (default 10 - the strict "real catalyst only" bar
-used by the AUTO-TRADER's entry-decision logic in scanner_service.py
-scan_stocks()/_check_candidate_news(), which must stay unchanged).
+score_headline() used to REJECT (return None) any headline below a
+`min_score` threshold or containing a negative keyword - this silently
+dropped raw data before callers ever saw it, which is what made the news
+panel look empty on days with plenty of real-but-not-catalyst-worded news.
 
-The informational GET /api/news/{symbol} endpoint (server.py, consumed by
-NewsFeedPanel.js) now explicitly passes min_score=0 so a human browsing the
-Live News panel sees real, current headlines instead of an empty list -
-previously almost no real headline matched one of the ~50 hardcoded exact
-STRONG_CATALYSTS phrases, so the panel looked empty even on days with
-plenty of real news.
+Per explicit user feedback (2026-07): "we shouldn't be filtering the news
+we receive on a stock - we should have raw news come in, then it's sorted
+into different levels." score_headline() now ALWAYS returns a result for
+every headline (never None) - it only classifies (score/sentiment/
+temperature/is_negative). Filtering into a strict yes/no TRADING decision
+is now the CALLER's job: check_alpaca_news()/search_stock_news() still
+accept `min_score` and compute a derived `has_news` boolean from the full,
+UNFILTERED `articles` list they return - the auto-trader relies on
+`has_news`, a human-facing feed renders every article in `articles`.
 
 These tests verify:
-1. score_headline() min_score param behavior directly (unit-level).
-2. check_alpaca_news() default (strict, auto-trader) vs min_score=0
-   (relaxed, display) behave differently for the same symbol/headlines.
+1. score_headline() always returns a dict, never None - for weak, strong,
+   and negative headlines alike - only the sentiment/is_negative differ.
+2. check_alpaca_news()'s `articles` list is now identical regardless of
+   `min_score` (nothing is dropped) - only `has_news` can differ.
 3. GET /api/news/{symbol} (the display endpoint) returns has_news=True
    with real articles for liquid symbols during market hours.
 4. GET /api/news/{symbol} correctly falls back to Google News
-   (news_source == "Google News") for symbols Benzinga doesn't cover,
-   with the same relaxed min_score=0 applied on that path too.
+   (news_source == "Google News") for symbols Benzinga doesn't cover.
 """
 import os
 import pytest
@@ -62,39 +65,49 @@ def auth_headers():
     return {"Authorization": f"Bearer {token}"}
 
 
-class TestScoreHeadlineMinScore:
-    """Unit-level: score_headline() min_score parameter."""
+class TestScoreHeadlineNeverDropsData:
+    """score_headline() must always return a result - raw news is never discarded."""
 
-    def test_weak_headline_rejected_at_default_strict_bar(self):
-        # "gains" is a WEAK_POSITIVE keyword -> score 2, below default min_score=10
+    def test_weak_headline_still_returned_not_none(self):
+        # "gains" is a WEAK_POSITIVE keyword -> score 2 - must NOT be dropped
         result = score_headline("Some Company gains after announcement")
-        assert result is None
-
-    def test_weak_headline_accepted_with_min_score_zero(self):
-        result = score_headline("Some Company gains after announcement", min_score=0)
         assert result is not None
         assert result["score"] == 2
         assert result["sentiment"] == "weak"
 
-    def test_strong_catalyst_headline_passes_both_bars(self):
-        result_strict = score_headline("Company Receives FDA Approval For New Drug")
-        result_relaxed = score_headline("Company Receives FDA Approval For New Drug", min_score=0)
-        assert result_strict is not None
-        assert result_relaxed is not None
-        assert result_strict["score"] == 10
+    def test_strong_catalyst_headline_scores_10(self):
+        result = score_headline("Company Receives FDA Approval For New Drug")
+        assert result is not None
+        assert result["score"] == 10
+        assert result["sentiment"] == "strong_catalyst"
 
-    def test_negative_headline_rejected_regardless_of_min_score(self):
-        # Negative keywords are an automatic rejection even at min_score=0
-        result = score_headline("Company stock plunges after lawsuit", min_score=0)
-        assert result is None
+    def test_negative_headline_returned_tagged_negative_not_dropped(self):
+        # Previously an automatic rejection (returned None) - now it must
+        # still be returned, just tagged so the caller/UI can show it as a
+        # risk flag instead of it silently vanishing.
+        result = score_headline("Company stock plunges after lawsuit")
+        assert result is not None
+        assert result["is_negative"] is True
+        assert result["sentiment"] == "negative"
+
+    def test_large_dollar_deal_boosts_weak_wording_to_strong_catalyst(self):
+        # Real-world case (2026-07, VIVK): dry corporate wording ("expands",
+        # "announces") + a large quantified dollar figure is still a real
+        # catalyst, even without an exact "merger"/"acquisition" keyword.
+        result = score_headline("Company Expands Recurring Marketing Programs To ~$709M In Annualized Activity")
+        assert result["score"] == 10
+        assert result["sentiment"] == "strong_catalyst"
+
+    def test_small_dollar_amount_does_not_trigger_deal_boost(self):
+        result = score_headline("Company announces $500K community donation")
+        assert result["score"] != 10
 
 
-class TestCheckAlpacaNewsMinScoreDecoupling:
+class TestCheckAlpacaNewsArticlesNeverFiltered:
     """
-    scanner_service.check_alpaca_news() default (strict, min_score=10,
-    used by the auto-trader) vs explicit min_score=0 (relaxed, used by the
-    display endpoint) must behave differently when Alpaca/Benzinga has
-    real-but-not-catalyst-worded news for a symbol.
+    scanner_service.check_alpaca_news()'s `articles` list must be identical
+    regardless of `min_score` - raw news is never dropped based on score.
+    Only the derived `has_news` boolean may differ between calls.
     """
 
     def test_default_call_signature_unchanged_min_score_10(self):
@@ -102,17 +115,18 @@ class TestCheckAlpacaNewsMinScoreDecoupling:
         sig = inspect.signature(scanner_service.check_alpaca_news)
         assert sig.parameters["min_score"].default == 10
 
-    def test_default_vs_relaxed_min_score_can_differ_for_liquid_symbol(self):
+    def test_articles_identical_regardless_of_min_score(self):
         strict = scanner_service.check_alpaca_news("AAPL", hours_back=24, limit=5)
         relaxed = scanner_service.check_alpaca_news("AAPL", hours_back=24, limit=5, min_score=0)
 
         assert isinstance(strict["has_news"], bool)
         assert isinstance(relaxed["has_news"], bool)
 
-        # The relaxed call should never return FEWER articles than strict
-        # (strict is a subset - every article that passes score>=10 also
-        # passes score>=0).
-        assert len(relaxed["articles"]) >= len(strict["articles"])
+        # Raw articles are never filtered by score anymore - both calls see
+        # the exact same underlying headlines.
+        strict_titles = sorted(a["title"] for a in strict["articles"])
+        relaxed_titles = sorted(a["title"] for a in relaxed["articles"])
+        assert strict_titles == relaxed_titles
 
     def test_scan_stocks_news_check_site_uses_strict_default(self):
         """
@@ -151,9 +165,8 @@ class TestNewsDisplayEndpoint:
         # Soft assertion: during market hours these liquid symbols should
         # virtually always have real news at the relaxed bar. Not a hard
         # assert (news volume genuinely varies), but log for visibility.
-        if not data["has_news"]:
+        if not data["articles"]:
             pytest.skip(f"{symbol}: no news returned right now (non-deterministic, real API)")
-        assert len(data["articles"]) > 0
         first = data["articles"][0]
         assert "title" in first and len(first["title"]) > 0
         assert "source" in first

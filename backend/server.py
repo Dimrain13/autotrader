@@ -1432,14 +1432,14 @@ async def update_trading_mode(body: TradingModeUpdate):
 async def get_news(symbol: str, limit: int = 5):
     """
     Get recent news for a symbol - Alpaca/Benzinga first (fast, no scraping),
-    Google News RSS fallback for illiquid micro-caps Benzinga doesn't cover.
-    Same pipeline as the scanner's news check, but with a relaxed min_score
-    (0 instead of the scanner/auto-trader's strict 10) - this is a display
-    feed for a human to read, not an entry signal, so routine headlines
-    that don't hit one of the ~50 exact STRONG_CATALYSTS phrases should
-    still show up here (clearly-negative headlines are still filtered out
-    either way). Otherwise the panel could look completely empty even on
-    days with plenty of real, just-not-catalyst-worded news.
+    Google News RSS fallback ONLY when Alpaca has zero raw articles at all
+    for this symbol (illiquid micro-caps Benzinga doesn't cover). This is a
+    display feed for a human to read, not an entry signal - every raw
+    article Alpaca/Benzinga finds is returned as-is (sentiment/temperature
+    tagged, never dropped), even weak/neutral/negative ones. Falling back
+    to Google News only when Alpaca found NOTHING (not just "nothing that
+    clears the catalyst bar") avoids discarding real Alpaca articles in
+    favor of a different source's take on the same story.
     """
     try:
         from services.google_news_service import google_news_service
@@ -1448,7 +1448,7 @@ async def get_news(symbol: str, limit: int = 5):
         result = await asyncio.to_thread(scanner_service.check_alpaca_news, symbol, 24, limit, 0)
         news_source = 'Benzinga (Alpaca)'
 
-        if not result['has_news']:
+        if not result['articles']:
             company_name = None
             try:
                 asset_info = await asyncio.to_thread(alpaca_service.get_asset, symbol)
@@ -1462,7 +1462,7 @@ async def get_news(symbol: str, limit: int = 5):
             "symbol": symbol,
             "has_news": result['has_news'],
             "articles": result['articles'],
-            "news_source": news_source if result['has_news'] else None
+            "news_source": news_source if result['articles'] else None
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

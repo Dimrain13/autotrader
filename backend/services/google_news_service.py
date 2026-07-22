@@ -9,6 +9,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from datetime import datetime, timedelta
 import logging
+import re
 import time
 import threading
 from typing import Dict, Tuple, Optional
@@ -72,22 +73,45 @@ NEGATIVE_KEYWORDS = [
     'loss', 'losses', 'blood bath', 'nightmare'
 ]
 
+# Large quantified business deal - real dollar figure attached to a deal/
+# contract/transaction word. Found 2026-07: VIVK secured $289M in crude-oil
+# marketing deals (a real catalyst - shares surged 187% on it per Google
+# News), but Alpaca/Benzinga's own headline phrased it as "Vivakor Expands
+# Recurring Crude Oil Marketing Programs" / "Announces...Transactions...
+# Worth Combined $289M" - dry corporate wording that only matched the WEAK
+# tier ('expands'/'announces', score 2), completely missing that a
+# quantified $289M figure makes this materially different from a routine
+# announcement. A headline naming a specific large dollar amount tied to a
+# deal-type word is a real catalyst regardless of which exact verb the
+# newswire used - the DOLLAR FIGURE is the signal, the phrasing is noise.
+DEAL_INDICATOR_WORDS = [
+    'deal', 'deals', 'contract', 'contracts', 'agreement', 'agreements',
+    'transaction', 'transactions', 'notes', 'purchase', 'secures', 'secured',
+    'securing', 'lands', 'landed', 'wins', 'won', 'order', 'orders',
+    'marketing', 'worth', 'financing'
+]
+_DOLLAR_AMOUNT_RE = re.compile(r'\$\s?(\d+(?:\.\d+)?)\s?(million|billion|m|b)\b', re.IGNORECASE)
+MIN_MATERIAL_DEAL_MILLIONS = 10  # $10M+ is material for the $2-$20/low-float names this app trades
 
-def score_headline(title: str, min_score: int = 10) -> Optional[Dict]:
+
+def score_headline(title: str) -> Dict:
     """
     Score a headline for Warrior-Trading-style news catalyst strength.
 
-    Returns None if the headline should be rejected (contains negative
-    keywords, or doesn't clear `min_score`). Default `min_score=10` is the
-    strict "real catalyst only" bar used for AUTO-TRADER entry decisions
-    (momentum/weak words alone like "surge"/"gains" don't count). Callers
-    building an informational news FEED for a human to read (not an entry
-    signal) should pass a lower `min_score` (e.g. 0) - otherwise routine
-    Benzinga/Google headlines that don't contain one of the ~50 exact
-    STRONG_CATALYSTS phrases get silently hidden entirely, which is what
-    made the news panel look empty even on days with plenty of real,
-    just-not-catalyst-worded news (found 2026-07, user report: "I don't
-    see any news from Alpaca at all today").
+    IMPORTANT: this NEVER discards a headline - it always returns a result,
+    for every headline, no exceptions. Raw news should always flow through
+    unfiltered; sorting it into a tier (Hot/Medium/Cold/Negative/Neutral) is
+    a separate concern from whether to show it at all (user feedback,
+    2026-07: "we shouldn't be filtering the news we receive on a stock - we
+    should have raw news come in, then it's sorted into different levels").
+    Filtering IS still legitimate for a strict yes/no TRADING decision (the
+    auto-trader still needs a boolean "is there a real catalyst here" to
+    gate entries) - that filtering now happens in the CALLER (e.g. scanner's
+    `_check_candidate_news`), which checks `score >= threshold and not
+    is_negative` on the full, already-returned article list, instead of
+    this function silently dropping headlines before the caller ever sees
+    them. A human-facing news feed should just render every article,
+    tagged by its sentiment/temperature - nothing pre-filtered away.
     """
     title_lower = title.lower()
 
@@ -113,27 +137,48 @@ def score_headline(title: str, min_score: int = 10) -> Optional[Dict]:
                 matched_catalysts.append(keyword)
                 break
 
-    has_negative = any(keyword in title_lower for keyword in NEGATIVE_KEYWORDS)
+    # Large quantified business deal - see DEAL_INDICATOR_WORDS comment
+    # above. A specific large dollar figure tied to a deal/contract word
+    # is a real catalyst regardless of which dry corporate verb the
+    # newswire used (found 2026-07: VIVK's $289M crude-marketing deal
+    # only hit WEAK via 'expands'/'announces' despite being big enough to
+    # drive a 187% surge per Google News' own framing of the same story).
+    if score < 10:
+        dollar_match = _DOLLAR_AMOUNT_RE.search(title_lower)
+        if dollar_match:
+            amount = float(dollar_match.group(1))
+            unit = dollar_match.group(2).lower()
+            amount_millions = amount * 1000 if unit.startswith('b') else amount
+            if amount_millions >= MIN_MATERIAL_DEAL_MILLIONS and any(w in title_lower for w in DEAL_INDICATOR_WORDS):
+                score = 10
+                matched_catalysts.append(f"${amount:.0f}{unit[0].upper()} deal")
 
-    if has_negative or score < min_score:
-        return None
+    is_negative = any(keyword in title_lower for keyword in NEGATIVE_KEYWORDS)
 
-    sentiment_label = 'strong_catalyst' if score >= 10 else ('momentum' if score >= 5 else ('weak' if score >= 2 else 'neutral'))
+    if is_negative:
+        sentiment_label = 'negative'
+    elif score >= 10:
+        sentiment_label = 'strong_catalyst'
+    elif score >= 5:
+        sentiment_label = 'momentum'
+    elif score >= 2:
+        sentiment_label = 'weak'
+    else:
+        sentiment_label = 'neutral'
 
-    # "Temperature" for the UI's flame icon - this is deliberately catalyst
-    # STRENGTH (hot=real catalyst, medium=price-action momentum, cold=weak
-    # generic mention), NOT article age. It used to be conflated with
-    # `classify_freshness()` (age: breaking/warm/cold) on the frontend,
-    # which meant a headline that was merely RECENT (e.g. "XYZ stock
-    # surges 20%") rendered the exact same bright "hot" flame as a real
-    # merger/FDA/earnings catalyst just because it was freshly published -
-    # user report: "Hot/Cold ranking flags generic stock price increases
-    # as Hot instead of reserving that for true catalysts". Freshness/age
-    # is still tracked separately (classify_freshness below) and shown as
-    # plain text ("2d ago"), just no longer drives the flame's color.
-    temperature = {'strong_catalyst': 'hot', 'momentum': 'medium', 'weak': 'cold'}.get(sentiment_label)
+    # "Temperature" for the UI's flame icon - catalyst STRENGTH (hot=real
+    # catalyst, medium=price-action momentum, cold=weak generic mention,
+    # negative=risk/warning flag), never article age. See classify_freshness
+    # below for age, tracked and shown separately as plain text ("2d ago").
+    temperature = {'strong_catalyst': 'hot', 'momentum': 'medium', 'weak': 'cold', 'negative': 'negative'}.get(sentiment_label)
 
-    return {'score': score, 'sentiment': sentiment_label, 'temperature': temperature, 'catalysts': matched_catalysts[:3]}
+    return {
+        'score': score,
+        'sentiment': sentiment_label,
+        'temperature': temperature,
+        'catalysts': matched_catalysts[:3],
+        'is_negative': is_negative
+    }
 
 
 def classify_freshness(published_at: datetime) -> Tuple[str, Optional[int]]:
@@ -186,17 +231,23 @@ class GoogleNewsService:
     def search_stock_news(self, symbol: str, hours_back: int = 24, limit: int = 5, company_name: str = None, min_score: int = 10) -> Dict:
         """
         Search Google News for stock news and return articles with links
-        
+
         Args:
             symbol: Stock ticker (e.g., "AAPL")
             hours_back: How far back to look (default 24 hours)
             limit: Maximum number of articles to return (default 5)
             company_name: Company name (e.g., "Apple Inc") - improves search results
-            min_score: Minimum score_headline() score to keep an article -
-                default 10 (strict "real catalyst" bar, for AUTO-TRADER
-                entry decisions). Callers building an informational feed
-                for a human to read should pass a lower value (e.g. 0).
-        
+            min_score: threshold used ONLY to compute the returned `has_news`
+                convenience boolean (a real catalyst exists, score>=min_score
+                and not negative) - default 10, the strict bar AUTO-TRADER
+                entry decisions need. The `articles` list itself is ALWAYS
+                the full raw set (every relevant headline found, unfiltered
+                by score) - raw news is never dropped here, only classified
+                per-article (sentiment/temperature) for the caller/UI to
+                sort and display however it needs (user feedback, 2026-07:
+                "we shouldn't be filtering the news we receive on a stock -
+                raw news should come in, then it's sorted into levels").
+
         Returns:
             {
                 'has_news': bool,
@@ -291,11 +342,10 @@ class GoogleNewsService:
                     
                     # ENHANCED SENTIMENT SCORING - shared helper (same catalyst
                     # bar used for the Alpaca/Benzinga news check, so both
-                    # sources are judged identically)
-                    scored = score_headline(title, min_score=min_score)
-                    if scored is None:
-                        logger.debug(f"{symbol}: Rejected news: {title[:50]}")
-                        continue
+                    # sources are judged identically). Every relevant headline
+                    # is scored and kept - nothing is dropped for being a
+                    # weak/negative/neutral signal, it's just tagged as such.
+                    scored = score_headline(title)
                     score = scored['score']
                     sentiment_label = scored['sentiment']
                     temperature = scored['temperature']
@@ -335,8 +385,9 @@ class GoogleNewsService:
                         'pubDate': pubDate,
                         'sentiment': sentiment_label,
                         'score': score,
-                        'temperature': temperature,  # hot, medium, cold (catalyst strength - drives flame color)
+                        'temperature': temperature,  # hot, medium, cold, negative (catalyst strength - drives flame color)
                         'catalysts': matched_catalysts,  # Top 3 matched keywords
+                        'is_negative': scored['is_negative'],
                         'freshness': news_freshness,  # breaking, warm, cold (article age - text only)
                         'days_old': days_old
                     })
@@ -348,11 +399,14 @@ class GoogleNewsService:
             
             # Return results (highest-relevance catalysts first, not just
             # chronological RSS order - see the identical fix/reasoning in
-            # scanner_service.check_alpaca_news())
+            # scanner_service.check_alpaca_news()). `articles` is the FULL
+            # raw set (nothing dropped for sentiment/score) - `has_news` is
+            # just a derived convenience boolean for strict-decision callers.
             if articles:
                 articles.sort(key=lambda a: a['score'], reverse=True)
-                logger.info(f"{symbol}: Found {len(articles)} news article(s)")
-                result = {'has_news': True, 'articles': articles}
+                has_real_catalyst = any(a['score'] >= min_score and not a['is_negative'] for a in articles)
+                logger.info(f"{symbol}: Found {len(articles)} news article(s), has_real_catalyst={has_real_catalyst}")
+                result = {'has_news': has_real_catalyst, 'articles': articles}
             else:
                 logger.debug(f"{symbol}: No news found")
                 result = {'has_news': False, 'articles': []}

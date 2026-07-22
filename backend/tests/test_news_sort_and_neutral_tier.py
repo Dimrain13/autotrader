@@ -55,23 +55,23 @@ class TestScoreHeadlineNeutralTier:
     """score_headline() sentiment tier boundaries."""
 
     def test_zero_score_headline_is_neutral_not_weak(self):
-        result = score_headline("Company holds annual shareholder meeting", min_score=0)
+        result = score_headline("Company holds annual shareholder meeting")
         assert result is not None
         assert result["score"] == 0
         assert result["sentiment"] == "neutral"
 
     def test_weak_tier_score_2_to_4_is_weak(self):
-        result = score_headline("Some Company gains after announcement", min_score=0)
+        result = score_headline("Some Company gains after announcement")
         assert result["score"] == 2
         assert result["sentiment"] == "weak"
 
     def test_momentum_tier_score_5_to_9_is_momentum(self):
-        result = score_headline("Company shares surge on strong demand", min_score=0)
+        result = score_headline("Company shares surge on strong demand")
         assert result["score"] == 5
         assert result["sentiment"] == "momentum"
 
     def test_strong_catalyst_tier_score_10_plus(self):
-        result = score_headline("Company Receives FDA Approval For New Drug", min_score=0)
+        result = score_headline("Company Receives FDA Approval For New Drug")
         assert result["score"] == 10
         assert result["sentiment"] == "strong_catalyst"
 

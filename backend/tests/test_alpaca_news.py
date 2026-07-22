@@ -57,7 +57,8 @@ class TestAlpacaNewsAccess:
 
         catalyst_symbol = None
         for item in news_items:
-            if score_headline(item["headline"]) and item.get("symbols"):
+            scored = score_headline(item["headline"])
+            if scored["score"] >= 10 and not scored["is_negative"] and item.get("symbols"):
                 catalyst_symbol = item["symbols"][0]
                 break
 

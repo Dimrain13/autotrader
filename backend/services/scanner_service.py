@@ -119,12 +119,16 @@ class ScannerService:
         so both sources are judged identically. Returns the same shape as
         google_news_service.search_stock_news(): {'has_news', 'articles'}.
 
-        `min_score` defaults to 10 (strict "real catalyst only" bar, for
-        AUTO-TRADER entry decisions). Callers building an informational
-        news feed for a human to read should pass a lower value (e.g. 0) -
-        otherwise routine headlines that don't contain one of the ~50 exact
-        STRONG_CATALYSTS phrases get silently hidden entirely, which made
-        the news panel look empty even on days with plenty of real news.
+        `articles` is ALWAYS the full raw set Alpaca returned (every
+        headline, scored/tagged but never dropped) - `min_score` only
+        controls the returned `has_news` convenience boolean (a real
+        catalyst exists: score>=min_score and not negative). Raw news is
+        never filtered out here; sorting it into tiers is the caller/UI's
+        job (user feedback, 2026-07: "we shouldn't be filtering the news
+        we receive on a stock - raw news should come in, then it's sorted
+        into different levels"). Callers making a strict entry decision
+        (the auto-trader) should rely on `has_news`; callers building a
+        human-facing feed should render every article in `articles`.
         """
         if news_pool.configured_count == 0:
             return {'has_news': False, 'articles': []}
@@ -158,9 +162,7 @@ class ScannerService:
                 if not headline:
                     continue
 
-                scored = score_headline(headline, min_score=min_score)
-                if scored is None:
-                    continue
+                scored = score_headline(headline)
 
                 created_at = getattr(article, 'created_at', None)
                 freshness, days_old = classify_freshness(created_at) if created_at else ('unknown', None)
@@ -174,6 +176,7 @@ class ScannerService:
                     'score': scored['score'],
                     'temperature': scored['temperature'],
                     'catalysts': scored['catalysts'],
+                    'is_negative': scored['is_negative'],
                     'freshness': freshness,
                     'days_old': days_old
                 })
@@ -185,8 +188,9 @@ class ScannerService:
                 # 5 minutes ago (found 2026-07, user report: "the news is
                 # coming in now, but its not being ranked at all").
                 articles.sort(key=lambda a: a['score'], reverse=True)
-                logger.info(f"{symbol}: Alpaca/Benzinga found {len(articles)} catalyst news article(s)")
-                return {'has_news': True, 'articles': articles}
+                has_real_catalyst = any(a['score'] >= min_score and not a['is_negative'] for a in articles)
+                logger.info(f"{symbol}: Alpaca/Benzinga found {len(articles)} news article(s), has_real_catalyst={has_real_catalyst}")
+                return {'has_news': has_real_catalyst, 'articles': articles}
             return {'has_news': False, 'articles': []}
 
         except Exception as e:
