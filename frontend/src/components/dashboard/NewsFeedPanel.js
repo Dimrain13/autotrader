@@ -61,6 +61,17 @@ function ArticleRow({ a, i, showSymbolTag }) {
 // building on a stock is exactly when a trader wants to already see why
 // (found 2026-07, user report: "news only loads when explicitly clicked;
 // it should auto-load for any stock hitting 3/5 metrics").
+//
+// INSTANT DISPLAY (no fetch-on-click): every scanner row already carries
+// its own full `news_articles` list, pre-fetched by the backend at scan
+// cadence (~60s, see scanner_service.py::_attach_full_news_articles) for
+// EVERY visible row, not just clicked ones. So both manual and auto modes
+// read straight from `scannerResults` with zero network call/loading
+// state in the common case (user feedback, 2026-07: "news should be
+// pulled for all stocks at a cadence and shouldn't need to load once I
+// click on a stock"). A live fetch only happens as a fallback for a
+// symbol NOT currently in the scanner results (e.g. an open position that
+// dropped out of scan criteria, or before the very first scan completes).
 export function NewsFeedPanel({ symbol, scannerResults }) {
   const [state, setState] = useState({ loading: false, articles: [], source: null, mode: "empty" });
 
@@ -75,6 +86,14 @@ export function NewsFeedPanel({ symbol, scannerResults }) {
     let cancelled = false;
 
     if (symbol) {
+      const row = (scannerResults || []).find((r) => r.symbol === symbol);
+      if (row && Array.isArray(row.news_articles)) {
+        // Instant - this data already rode along with the last scan tick.
+        setState({ loading: false, articles: row.news_articles, source: null, mode: "manual" });
+        return;
+      }
+      // Fallback: symbol isn't in the current scanner results at all
+      // (not yet scanned, or an open position outside scan criteria).
       setState((s) => ({ ...s, loading: true, mode: "manual" }));
       axios.get(`${API}/news/${symbol}?limit=8`).then((res) => {
         if (cancelled) return;
@@ -90,20 +109,15 @@ export function NewsFeedPanel({ symbol, scannerResults }) {
       return;
     }
 
-    setState((s) => ({ ...s, loading: true, mode: "auto" }));
-    Promise.all(
-      autoSymbols.map((sym) =>
-        axios.get(`${API}/news/${sym}?limit=3`)
-          .then((res) => (res.data.articles || []).map((a) => ({ ...a, symbol: sym })))
-          .catch(() => [])
-      )
-    ).then((results) => {
-      if (cancelled) return;
-      const merged = results.flat().sort((a, b) => (b.score || 0) - (a.score || 0));
-      setState({ loading: false, articles: merged, source: null, mode: "auto" });
-    });
+    // Instant - merge the already-fetched per-row article lists, no
+    // network call needed.
+    const rows = (scannerResults || []).filter((r) => autoSymbols.includes(r.symbol));
+    const merged = rows
+      .flatMap((r) => (r.news_articles || []).map((a) => ({ ...a, symbol: r.symbol })))
+      .sort((a, b) => (b.score || 0) - (a.score || 0));
+    setState({ loading: false, articles: merged, source: null, mode: "auto" });
     return () => { cancelled = true; };
-  }, [symbol, autoSymbolsKey]);
+  }, [symbol, autoSymbolsKey, scannerResults]);
 
   const isAuto = state.mode === "auto";
 

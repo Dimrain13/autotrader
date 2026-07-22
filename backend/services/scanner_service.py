@@ -367,20 +367,26 @@ class ScannerService:
         
         # Second pass: Calculate accurate volume, float and news for promising candidates
         # OPTIMIZATION: Only verify top 50 candidates to save time.
-        # These three checks are independent (different criteria_met keys) so
-        # they run CONCURRENTLY - this is the "find news ASAP" fix: news no
-        # longer waits in line behind volume+float, cutting total second-pass
-        # latency roughly in half-to-a-third.
+        # These checks are independent (different criteria_met keys, or -
+        # for the 4th job - purely additive display data untouched by
+        # criteria scoring) so they run CONCURRENTLY - this is the "find
+        # news ASAP" fix: news no longer waits in line behind volume+float,
+        # cutting total second-pass latency roughly in half-to-a-third.
         if results:
             top_results = sorted(results, key=lambda x: x.get('criteria_count', 0), reverse=True)[:50]
             logger.info(f"Verifying volume, float and news for top {len(top_results)} candidates (concurrently)...")
 
             from concurrent.futures import ThreadPoolExecutor as _OuterPool
-            with _OuterPool(max_workers=3) as outer_pool:
+            with _OuterPool(max_workers=4) as outer_pool:
                 futures = [
                     outer_pool.submit(self._calculate_accurate_volume, top_results, criteria),
                     outer_pool.submit(self._calculate_accurate_float, top_results, criteria),
                     outer_pool.submit(self._check_candidate_news, top_results),
+                    # Full raw article list for EVERY visible row (all of
+                    # `results`, not just the top-50) - powers the News
+                    # Feed Panel's instant-on-click display at scan
+                    # cadence. Purely additive; never touches criteria_met.
+                    outer_pool.submit(self._attach_full_news_articles, results),
                 ]
                 for f in futures:
                     f.result()  # propagate any exception, wait for all to finish
@@ -532,6 +538,7 @@ class ScannerService:
                 "meets_all_criteria": meets_all_criteria,
                 "ready_to_trade": meets_all_criteria,
                 "no_news_scalp_candidate": False,  # Only ever set True after the authoritative 4/5-recompute below (needs verified volume+float+news)
+                "news_articles": None,  # Full raw article list (all rows, not just top-50) - populated by _attach_full_news_articles so the frontend News Feed Panel has it instantly on click, no fetch-on-click delay
                 "spread_pct": 0,  # Will be populated with live quote data
                 "bid_price": 0,
                 "ask_price": 0
@@ -757,12 +764,19 @@ class ScannerService:
             symbol = result['symbol']
             
             try:
-                # PRIMARY: Alpaca/Benzinga News API (fast, no scraping)
-                news_result = self.check_alpaca_news(symbol, hours_back=24, limit=1)
+                # PRIMARY: Alpaca/Benzinga News API (fast, no scraping).
+                # limit=8 (not just 1) - the FULL raw article list is kept
+                # on the row (`news_articles`) so the News Feed Panel has
+                # real data instantly on click, not just a single headline.
+                news_result = self.check_alpaca_news(symbol, hours_back=24, limit=8)
                 news_source = 'Benzinga (Alpaca)'
 
                 # FALLBACK: Google News RSS (slower, but broader coverage for
-                # illiquid micro-caps Benzinga doesn't index)
+                # illiquid micro-caps Benzinga doesn't index). Unchanged
+                # trigger condition (not has_news, same as before this
+                # session) - preserves the existing auto-trader entry
+                # decision behavior exactly; only the article limit/full
+                # list capture above changed.
                 if not news_result['has_news']:
                     company_name = None
                     try:
@@ -770,13 +784,13 @@ class ScannerService:
                         company_name = asset_info.get('name')
                     except:
                         pass
-                    news_result = google_news_service.search_stock_news(symbol, hours_back=24, limit=1, company_name=company_name)
+                    news_result = google_news_service.search_stock_news(symbol, hours_back=24, limit=8, company_name=company_name)
                     news_source = 'Google News'
 
                 has_news = news_result['has_news']
                 headline = news_result['articles'][0]['title'] if news_result['articles'] else ""
                 
-                # Extract freshness from the article
+                # Extract freshness from the top article
                 news_freshness = 'unknown'
                 news_days_old = None
                 news_temperature = None
@@ -793,6 +807,7 @@ class ScannerService:
                 result['news_freshness'] = news_freshness  # breaking, warm, cold, unknown (article AGE)
                 result['news_days_old'] = news_days_old
                 result['news_temperature'] = news_temperature  # hot, medium, cold (catalyst STRENGTH - drives the flame color)
+                result['news_articles'] = news_result['articles']  # full raw list (never filtered) - powers instant News Feed Panel display
                 
                 # Update criteria (criteria_count recomputed in final pass -
                 # see scan_stocks - since volume/float/news now run concurrently)
@@ -805,6 +820,7 @@ class ScannerService:
                 result['news_headline'] = "Error checking news"
                 result['news_freshness'] = 'unknown'
                 result['news_temperature'] = None
+                result['news_articles'] = []
                 return result, False
         
         # Process news checks in parallel (12 workers - I/O-bound Google News/Alpaca
@@ -822,6 +838,61 @@ class ScannerService:
                     logger.error(f"Error processing news future: {str(e)}")
         
         logger.info(f"News check complete: {news_found_count}/{checked_count} candidates have positive news")
+
+    def _attach_full_news_articles(self, results: List[Dict]):
+        """
+        Pre-fetch and attach the FULL raw news article list to EVERY scanner
+        row currently shown in the UI (not just the top-50 whose
+        volume/float/news get accurately re-verified for trading criteria
+        in `_check_candidate_news`/`_calculate_accurate_*` above).
+
+        This is what makes clicking ANY scanner row show its news feed
+        instantly with no fetch-on-click spinner: the full article list
+        already rode along with the last ~60s scan tick (user feedback,
+        2026-07: "news should be pulled for all stocks at a cadence and
+        shouldn't need to load once I click on a stock"). Runs concurrently
+        with the other 3 second-pass jobs (see scan_stocks) so it adds no
+        extra wall-clock time to the scan on its own.
+
+        Purely additive display data - never touches `criteria_met`/
+        `criteria_count` (those stay exactly as computed by the top-50
+        accurate pass, or the initial estimate for everything else) to
+        avoid any risk of changing trading-criteria/entry-decision logic.
+        Symbols already covered by the top-50 pass are skipped here (that
+        pass already set `news_articles` with the same limit=8 full list) -
+        no double-fetch for the same symbol.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from services.google_news_service import google_news_service
+
+        def fetch_for(result):
+            if result.get('news_articles') is not None:
+                return  # already fetched by the top-50 accurate-criteria pass
+            symbol = result['symbol']
+            try:
+                news_result = self.check_alpaca_news(symbol, hours_back=24, limit=8)
+                if not news_result['has_news'] and not news_result['articles']:
+                    company_name = None
+                    try:
+                        asset_info = alpaca_service.get_asset(symbol)
+                        company_name = asset_info.get('name')
+                    except Exception:
+                        pass
+                    news_result = google_news_service.search_stock_news(symbol, hours_back=24, limit=8, company_name=company_name)
+                result['news_articles'] = news_result['articles']
+            except Exception as e:
+                logger.debug(f"{symbol}: full news pre-fetch failed: {e}")
+                result['news_articles'] = []
+
+        pending = [r for r in results if r.get('news_articles') is None]
+        if not pending:
+            return
+        logger.info(f"Pre-fetching full news articles for {len(pending)} scanner rows (cadence cache for instant click)...")
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            futures = [executor.submit(fetch_for, r) for r in pending]
+            for f in as_completed(futures):
+                f.result()
+
     
     def scan_market(self, criteria: Dict = None) -> List[Dict]:
         """
