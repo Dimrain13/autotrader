@@ -882,7 +882,30 @@ class AutoTraderService:
             profit_target = signal['target_price']
             psych_target = signal.get('psych_target_price')
 
-            order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "buy")
+            # ALWAYS place a REAL bracket order (resting stop-loss + take-
+            # profit legs on the exchange) immediately at entry, not just a
+            # plain market buy watched later by the software monitor loop
+            # below (user feedback, 2026-07: "there should have been a stop
+            # loss put in place at the time of buying, same with take
+            # profit" - found after two manually-placed positions sat with
+            # ZERO resting protective order for their first tick(s) while
+            # only a software poll watched, during which a wide bid/ask
+            # spread had already baked in a large loss). The structural
+            # stop/2:1 target computed above become the bracket's legs;
+            # `monitor_exits()` below still fully manages the smarter
+            # dynamic behavior (breakout-bailout timer, psych/partial
+            # targets, trailing-to-breakeven) on top - the bracket is just
+            # the immediate hard floor. `sell_with_retry` force-cancels this
+            # resting bracket leg before any software-triggered sell (see
+            # its "insufficient qty" handling below), so the two coexist
+            # safely exactly like the manual-order flow in server.py.
+            try:
+                order = await asyncio.to_thread(
+                    alpaca_service.place_bracket_order, symbol, shares, initial_stop, profit_target
+                )
+            except Exception as bracket_err:
+                logger.warning(f"⚠️ {symbol}: Bracket order failed, falling back to plain market order (software-monitored stop only) - {bracket_err}")
+                order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "buy")
 
             if order and order.get('order_id'):
                 self.open_positions[symbol] = {
@@ -926,7 +949,16 @@ class AutoTraderService:
             return False
 
     async def sell_with_retry(self, symbol: str, shares: int, reason: str, max_retries: int = 3) -> bool:
-        """Robust sell with retry logic for slippage handling"""
+        """Robust sell with retry logic for slippage handling.
+
+        Also force-cancels any resting order for this symbol (e.g. the
+        bracket-order stop-loss/take-profit legs placed at entry by
+        `execute_entry`) on an "insufficient qty" rejection, then retries
+        immediately in the same attempt - same proven pattern as
+        `position_monitor_service._sell_with_dedup`, needed now that entries
+        always place a real resting bracket order rather than just a plain
+        market buy.
+        """
         for attempt in range(max_retries):
             try:
                 order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "sell")
@@ -936,7 +968,24 @@ class AutoTraderService:
                 else:
                     logger.warning(f"⚠️ Sell attempt {attempt+1} for {symbol} returned no order_id")
             except Exception as e:
-                logger.warning(f"⚠️ Sell attempt {attempt+1} for {symbol} failed: {str(e)}")
+                if 'insufficient qty' in str(e).lower():
+                    logger.warning(f"🔁 {symbol}: Sell rejected (insufficient qty) - force-cancelling resting order(s) (likely the entry bracket's stop/target legs) and retrying immediately")
+                    try:
+                        blocking_orders = await asyncio.to_thread(alpaca_service.get_open_orders, symbol)
+                        for o in blocking_orders:
+                            if o.get('side') == 'sell':
+                                try:
+                                    await asyncio.to_thread(alpaca_service.cancel_order, o['order_id'])
+                                except Exception as cancel_err:
+                                    logger.error(f"{symbol}: Failed to force-cancel blocking order {o['order_id']}: {cancel_err}")
+                        order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "sell")
+                        if order and order.get('order_id'):
+                            logger.info(f"✅ SELL: {symbol} - {shares} shares ({reason}) [attempt {attempt+1}, after force-cancel]")
+                            return True
+                    except Exception as e2:
+                        logger.warning(f"⚠️ Sell attempt {attempt+1} for {symbol} failed even after force-cancel: {str(e2)}")
+                else:
+                    logger.warning(f"⚠️ Sell attempt {attempt+1} for {symbol} failed: {str(e)}")
 
             if attempt < max_retries - 1:
                 await asyncio.sleep(1)

@@ -427,123 +427,92 @@ async def place_order(request: Request, order: TradeOrder):
                 spread_pct = 0
                 bid_price = current_price  # Fallback
             
-            # For TRAILING stops, use position monitor (software-based)
-            if order.stop_type == "trailing":
-                # Place simple market order first
+            # ALWAYS place a REAL bracket order (resting stop-loss + take-profit
+            # legs on the exchange) immediately at entry, regardless of
+            # stop_type - closes a gap where "trailing" stop-type buys got
+            # ONLY a plain market order with zero resting protection until
+            # the software position monitor's next poll (user feedback,
+            # 2026-07, after OTLY/SNTG both filled during an abnormally
+            # wide bid/ask spread with no real stop-loss/take-profit order
+            # actually in place at buy time - "there should have been a
+            # stop loss put in place at the time of buying, same with take
+            # profit"). `stop_type` still fully controls whether the
+            # software position monitor ALSO layers dynamic trailing-up/
+            # partial-sell/breakeven management on top (below) - the
+            # bracket order is just the immediate hard floor, protecting
+            # the position from the very first tick even before the
+            # monitor's first check. The existing insufficient-qty
+            # cancel+retry safety net in `_sell_with_dedup` already
+            # transparently cancels this resting bracket leg before any
+            # software-triggered sell, so the two mechanisms coexist safely.
+            # CRITICAL: Calculate stop loss from BID price, not entry price -
+            # this prevents instant stop loss triggers due to bid-ask spread
+            stop_reference_price = bid_price if bid_price > 0 else current_price
+
+            # Round to 2 decimal places to avoid sub-penny pricing errors
+            stop_loss_price = round(stop_reference_price * (1 - order.stop_loss_pct / 100), 2)
+            take_profit_price = round(current_price * (1 + order.take_profit_pct / 100), 2)
+
+            # Alpaca requires minimum $0.01 difference from base price
+            if stop_reference_price - stop_loss_price < 0.01:
+                stop_loss_price = round(stop_reference_price - 0.01, 2)
+            if take_profit_price - current_price < 0.01:
+                take_profit_price = round(current_price + 0.01, 2)
+
+            logger.info(f"📊 {order.symbol}: Placing bracket order - Stop ${stop_loss_price:.2f} (from BID ${stop_reference_price:.2f}), Target ${take_profit_price:.2f}")
+
+            try:
+                result = await asyncio.to_thread(
+                    alpaca_service.place_bracket_order,
+                    order.symbol,
+                    order.qty,
+                    stop_loss_price,
+                    take_profit_price
+                )
+                result['actual_price'] = current_price
+                result['stop_reference_price'] = stop_reference_price
+                result['spread_pct'] = spread_pct
+                if spread_warning:
+                    result['spread_warning'] = spread_warning
+            except Exception as bracket_err:
+                # Bracket order failed - fall back to a plain market order,
+                # software-monitored stop only (same as before this fix).
+                error_msg = str(bracket_err)
+                logger.warning(f"⚠️ {order.symbol}: Bracket order failed, using market order with trailing stop - {error_msg}")
+
                 result = await asyncio.to_thread(alpaca_service.place_market_order, order.symbol, order.qty, "buy")
-                
-                # Use current market price for position monitoring (not stale frontend price)
-                entry_price = current_price
-                
-                # CRITICAL: Calculate stop loss from BID price, not entry price
-                # This prevents instant stop loss triggers due to bid-ask spread
-                stop_reference_price = bid_price if bid_price > 0 else entry_price
-                
-                # Add to position monitor for trailing stop management
+                result['warning'] = f"Bracket order failed, using trailing stop instead"
+                result['price_changed'] = True
+                result['actual_price'] = current_price
+                result['stop_reference_price'] = stop_reference_price
+                result['spread_pct'] = spread_pct
+                if spread_warning:
+                    result['spread_warning'] = spread_warning
+
+            result['stop_type'] = order.stop_type
+
+            # Layer the software position monitor on top for TRAILING stops
+            # (moves the stop up / partial-sells / manages breakeven as
+            # price moves) or whenever a partial sell is configured - same
+            # condition/config shape as before this fix, just no longer
+            # gated on the bracket order having failed.
+            if 'monitored' not in result and (order.stop_type == 'trailing' or (order.partial_sell_pct and order.partial_sell_pct > 0)):
                 position_monitor.add_position(order.symbol, {
-                    'entry_price': entry_price,
-                    'stop_reference_price': stop_reference_price,  # Use BID for stop calculation
+                    'entry_price': current_price,
+                    'stop_reference_price': stop_reference_price,
                     'bid_at_entry': bid_price,
                     'ask_at_entry': ask_price,
                     'spread_at_entry': spread_pct,
                     'shares': order.qty,
-                    'stop_type': 'trailing',
+                    'stop_type': order.stop_type,
                     'stop_loss_pct': order.stop_loss_pct,
-                    'trailing_stop_pct': order.trailing_stop_pct,
+                    'trailing_stop_pct': order.trailing_stop_pct or order.stop_loss_pct,
                     'take_profit_pct': order.take_profit_pct,
                     'partial_sell_pct': order.partial_sell_pct,
                     'partial_sell_trigger_pct': order.partial_sell_trigger_pct,
                     'move_to_breakeven': order.move_to_breakeven
                 })
-                
-                result['stop_type'] = 'trailing'
                 result['monitored'] = True
-                result['actual_price'] = entry_price
-                result['stop_reference_price'] = stop_reference_price
-                result['spread_pct'] = spread_pct
-                if spread_warning:
-                    result['spread_warning'] = spread_warning
-            else:
-                # For FIXED stops, try Alpaca bracket orders first, fall back to trailing if fails
-                # CRITICAL: Calculate stop loss from BID price to prevent instant triggers
-                stop_reference_price = bid_price if bid_price > 0 else current_price
-                
-                # Round to 2 decimal places to avoid sub-penny pricing errors
-                stop_loss_price = round(stop_reference_price * (1 - order.stop_loss_pct / 100), 2)
-                take_profit_price = round(current_price * (1 + order.take_profit_pct / 100), 2)
-                
-                # Alpaca requires minimum $0.01 difference from base price
-                if stop_reference_price - stop_loss_price < 0.01:
-                    stop_loss_price = round(stop_reference_price - 0.01, 2)
-                if take_profit_price - current_price < 0.01:
-                    take_profit_price = round(current_price + 0.01, 2)
-                
-                logger.info(f"📊 {order.symbol}: Trying bracket order - Stop ${stop_loss_price:.2f} (from BID ${stop_reference_price:.2f}), Target ${take_profit_price:.2f}")
-                
-                try:
-                    result = await asyncio.to_thread(
-                        alpaca_service.place_bracket_order,
-                        order.symbol,
-                        order.qty,
-                        stop_loss_price,
-                        take_profit_price
-                    )
-                    result['actual_price'] = current_price
-                    result['stop_reference_price'] = stop_reference_price
-                    result['spread_pct'] = spread_pct
-                    if spread_warning:
-                        result['spread_warning'] = spread_warning
-                except Exception as bracket_err:
-                    # Bracket order failed - fall back to market order with trailing stop
-                    error_msg = str(bracket_err)
-                    logger.warning(f"⚠️ {order.symbol}: Bracket order failed, using market order with trailing stop - {error_msg}")
-                    
-                    # Place simple market order instead
-                    result = await asyncio.to_thread(alpaca_service.place_market_order, order.symbol, order.qty, "buy")
-                    result['warning'] = f"Bracket order failed, using trailing stop instead"
-                    result['price_changed'] = True
-                    result['actual_price'] = current_price
-                    result['stop_type'] = 'trailing'
-                    result['stop_reference_price'] = stop_reference_price
-                    result['spread_pct'] = spread_pct
-                    if spread_warning:
-                        result['spread_warning'] = spread_warning
-                    
-                    # Add to position monitor with trailing stop - use BID for stop calculation
-                    position_monitor.add_position(order.symbol, {
-                        'entry_price': current_price,
-                        'stop_reference_price': stop_reference_price,
-                        'bid_at_entry': bid_price,
-                        'ask_at_entry': ask_price,
-                        'spread_at_entry': spread_pct,
-                        'shares': order.qty,
-                        'stop_type': 'trailing',
-                        'stop_loss_pct': order.stop_loss_pct,
-                        'trailing_stop_pct': order.trailing_stop_pct or order.stop_loss_pct,
-                        'take_profit_pct': order.take_profit_pct,
-                        'partial_sell_pct': order.partial_sell_pct,
-                        'partial_sell_trigger_pct': order.partial_sell_trigger_pct,
-                        'move_to_breakeven': order.move_to_breakeven
-                    })
-                    result['monitored'] = True
-                
-                # Still add to monitor for partial sell feature (if bracket succeeded)
-                if 'monitored' not in result and order.partial_sell_pct > 0:
-                    position_monitor.add_position(order.symbol, {
-                        'entry_price': current_price,
-                        'stop_reference_price': stop_reference_price,
-                        'bid_at_entry': bid_price,
-                        'ask_at_entry': ask_price,
-                        'spread_at_entry': spread_pct,
-                        'shares': order.qty,
-                        'stop_type': 'fixed',
-                        'stop_loss_pct': order.stop_loss_pct,
-                        'trailing_stop_pct': 0,
-                        'take_profit_pct': order.take_profit_pct,
-                        'partial_sell_pct': order.partial_sell_pct,
-                        'partial_sell_trigger_pct': order.partial_sell_trigger_pct,
-                        'move_to_breakeven': order.move_to_breakeven
-                    })
         else:
             # Place simple market order (for sells or buys without stop/profit)
             if order.side.lower() == "sell":
