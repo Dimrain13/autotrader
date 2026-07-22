@@ -491,6 +491,34 @@ async def place_order(request: Request, order: TradeOrder):
 
             result['stop_type'] = order.stop_type
 
+            # Reconcile with the REAL fill price before registering with the
+            # software monitor. `current_price` above is a PRE-TRADE quote
+            # (the ask) fetched right before submitting the order - on a
+            # normal spread that's a fine proxy for the fill, but during an
+            # abnormally wide spread (the same condition that made the
+            # bracket-order fix necessary in the first place) a market
+            # order's actual fill can land far from that pre-trade quote
+            # (real incident, 2026-07: ADVB quoted at $17.73 ask/27.5%
+            # spread, actual bracket fill was $15.59 - a 12% gap). Every
+            # downstream trailing-stop/take-profit/breakeven/partial-sell %
+            # in `position_monitor` is computed OFF `entry_price`, so an
+            # entry_price anchored to the wrong (stale, too-high) quote
+            # makes the take-profit trigger require a much bigger real move
+            # than the user's configured % - "should have hit profit but
+            # didn't sell" was this exact bug. Poll the actual order for its
+            # true fill (same pattern already used by the plain-market-
+            # order branch below) and use that for tracking instead.
+            real_entry_price = current_price
+            try:
+                order_status = await asyncio.to_thread(alpaca_service.get_order, result.get('order_id'))
+                if order_status and order_status.get('filled_avg_price'):
+                    real_entry_price = float(order_status['filled_avg_price'])
+                    if abs(real_entry_price - current_price) > 0.01:
+                        logger.info(f"📊 {order.symbol}: Real fill ${real_entry_price:.2f} differs from pre-trade quote ${current_price:.2f} - using real fill for tracking")
+            except Exception as fill_err:
+                logger.warning(f"📊 {order.symbol}: Could not confirm real fill price, using pre-trade quote ${current_price:.2f}: {fill_err}")
+            result['actual_price'] = real_entry_price
+
             # Layer the software position monitor on top for TRAILING stops
             # (moves the stop up / partial-sells / manages breakeven as
             # price moves) or whenever a partial sell is configured - same
@@ -498,7 +526,7 @@ async def place_order(request: Request, order: TradeOrder):
             # gated on the bracket order having failed.
             if 'monitored' not in result and (order.stop_type == 'trailing' or (order.partial_sell_pct and order.partial_sell_pct > 0)):
                 position_monitor.add_position(order.symbol, {
-                    'entry_price': current_price,
+                    'entry_price': real_entry_price,
                     'stop_reference_price': stop_reference_price,
                     'bid_at_entry': bid_price,
                     'ask_at_entry': ask_price,
