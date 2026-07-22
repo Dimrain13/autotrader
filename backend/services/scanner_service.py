@@ -688,7 +688,7 @@ class ScannerService:
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        max_float = criteria.get('max_float', 20_000_000)
+        max_float = criteria.get('max_float', 45_000_000)
 
         def check_single_float(result):
             if not result.get('float_needs_calc'):
@@ -908,7 +908,7 @@ class ScannerService:
                 'min_price': 2,
                 'max_price': 20,
                 'min_volume_ratio': 5,
-                'max_float': 20_000_000,
+                'max_float': 45_000_000,
                 'min_pct_change': 10
             }
         

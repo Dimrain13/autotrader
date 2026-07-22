@@ -476,7 +476,7 @@ export default function Trading({ account }) {
           max_price: 20,
           min_change: 10,
           min_volume_ratio: 5,
-          max_float: 20000000
+          max_float: 45000000
         };
         
         let response;

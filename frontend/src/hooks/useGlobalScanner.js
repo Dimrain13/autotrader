@@ -28,7 +28,7 @@ export function useGlobalScanner() {
   const [criteria, setCriteria] = useState(() => {
     const saved = localStorage.getItem('scannerCriteria');
     if (saved) return JSON.parse(saved);
-    return { min_price: 2, max_price: 20, min_change: 10, min_volume_ratio: 5, max_float: 20000000 };
+    return { min_price: 2, max_price: 20, min_change: 10, min_volume_ratio: 5, max_float: 45000000 };
   });
 
   const intervalRef = useRef(null);

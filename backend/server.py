@@ -155,7 +155,7 @@ class ScanCriteria(BaseModel):
     max_price: float = Field(20.0, gt=0)
     min_change: float = Field(10.0, ge=0)
     min_volume_ratio: float = Field(5.0, gt=0)
-    max_float: int = Field(20_000_000, gt=0)
+    max_float: int = Field(45_000_000, gt=0)
 
     @field_validator('max_price')
     @classmethod
@@ -1142,9 +1142,9 @@ async def process_auto_trading(request: Request):
             "max_price": 20,
             "min_change": 10,
             "min_volume_ratio": 5,
-            "max_float": 20_000_000
+            "max_float": 45_000_000
         }
-        
+
         # scan_market() (not scan_stocks() directly) so this manual trigger
         # reuses the same 120s-cached scan the dashboard/background loop use
         # instead of running a duplicate full 128-batch snapshot scan.
@@ -1170,7 +1170,7 @@ async def run_demo_scan(
     max_price: float = 20.0,
     min_change: float = 10.0,
     min_volume_ratio: float = 5.0,
-    max_float: int = 20_000_000
+    max_float: int = 45_000_000
 ):
     """Run a demo scan with simulated market data"""
     from services.demo_scanner_service import demo_scanner
@@ -1489,7 +1489,7 @@ async def auto_trader_loop():
                     "max_price": 20,
                     "min_change": 10,
                     "min_volume_ratio": 5,
-                    "max_float": 20_000_000
+                    "max_float": 45_000_000
                 }
                 # scan_market() (not scan_stocks() directly) so this 60s loop
                 # reuses the same 120s-cached scan the dashboard's own poll
