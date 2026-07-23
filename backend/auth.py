@@ -48,9 +48,12 @@ async def seed_user():
     password in .env has since changed, update the stored hash - this way
     changing ADMIN_PASSWORD in .env and restarting is enough to rotate it.
     """
+    import logging
+    logger = logging.getLogger("auth")
     email = os.environ.get("ADMIN_EMAIL")
     password = os.environ.get("ADMIN_PASSWORD")
     if not email or not password:
+        logger.warning("seed_user(): ADMIN_EMAIL/ADMIN_PASSWORD not set (empty) - login will not work until backend/.env has both set and the service is restarted")
         return
     email = email.strip().lower()
     existing = await db.users.find_one({"email": email})
@@ -60,11 +63,15 @@ async def seed_user():
             "password_hash": hash_password(password),
             "created_at": datetime.now(timezone.utc).isoformat()
         })
+        logger.info(f"seed_user(): created new user account for {email}")
     elif not verify_password(password, existing["password_hash"]):
         await db.users.update_one(
             {"email": email},
             {"$set": {"password_hash": hash_password(password)}}
         )
+        logger.info(f"seed_user(): password changed in .env for {email} - updated stored hash")
+    else:
+        logger.info(f"seed_user(): {email} already up to date, no change")
 
 
 async def check_lockout(identifier: str):
