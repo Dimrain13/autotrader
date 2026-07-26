@@ -149,13 +149,16 @@ export default function Settings() {
             </div>
             <div className="mt-4 pt-4 border-t border-white/10">
               <div className="text-neutral-400 text-xs">
-                <strong>Entry Signals:</strong> First Pullback (1-3 red candles, breaks prior high, holds the 50% Rule, required) + MACD Bullish Crossover + SMA20/50 Crossover + Volume confirmation + Scanner 5/5
+                <strong>Entry Signals:</strong> First Pullback (1-3 red candles, breaks prior high, holds the 50% Rule, required) + MACD Bullish (above signal) + Price above SMA20/50 (uptrend confirmed) + Volume confirmation + Scanner 5/5
               </div>
               <div className="text-neutral-400 text-xs mt-1">
                 <strong>Exit Signals:</strong> Structural stop (pullback low) hit | 2:1 profit target (sell 50%, breakeven stop) | Breakout-or-Bailout (exit if not in profit within 90s) | End of window (3:30 PM)
               </div>
               <div className="text-neutral-400 text-xs mt-2">
                 <strong>Note:</strong> A real stop-loss and take-profit order is placed on the broker at the moment of entry (regular market hours); the software layer manages trailing-up/partial-sell/breakeven on top of that. Params match Ross Cameron's documented "First Pullback" Warrior Trading rules (2:1 reward:risk off the pullback low, 1% conservative daily-loss limit, 3-strikes circuit breaker, $2-$20 low-float momentum universe).
+              </div>
+              <div className="text-neutral-400 text-xs mt-2">
+                <strong>2026-02 fix:</strong> MACD/SMA confirmation used to require an exact crossover on the SAME candle as the pullback breakout - backtesting showed this produced ~0 valid signals across 10 real trading days (3 independent rare events almost never coincide on one candle). Now defaults to trend-state confirmation (MACD above signal, price's SMA20 above SMA50) instead, matching how Ross Cameron actually uses these as context, not a coincidence requirement. Still toggleable to strict crossover-only on the Trading page if wanted.
               </div>
             </div>
           </div>

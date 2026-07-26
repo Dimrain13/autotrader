@@ -80,8 +80,26 @@ class AutoTraderService:
         self.pullback_retracement_max_pct = 0.50  # The 50% Rule: pullback must hold >= 50% of the initial surge
         self.max_stop_distance_pct = 0.03  # Safety cap: skip trade if structural (pullback-low) stop is further than this from entry
         self.require_micro_pullback = True  # Require the 1-3 red-candle "first pullback" pattern (Warrior Trading core entry trigger)
-        self.require_macd_crossover = True  # Require MACD to cross above signal (not just be above)
-        self.require_sma_crossover = True   # Require price to cross above SMA (not just be above)
+        # require_macd_crossover/require_sma_crossover default to False
+        # (context/state check: MACD above signal + price's fast SMA above
+        # SMA50, i.e. "is this stock in an uptrend") rather than True (an
+        # exact crossover EVENT on the same 5-min candle as the pullback
+        # breakout). Backtested against 10 real trading days of TSLA/NVDA/
+        # AMD 5-min bars (2026-02): requiring all three - pullback breakout
+        # + MACD crossover + SMA crossover - to land on the SAME candle
+        # produced ZERO valid signals across all three stocks (these are 3
+        # independent low-probability events; stacking them is nearly
+        # impossible). The state-based check (this default) produced 6-13
+        # signals per stock over the same window - a realistic frequency -
+        # while every OTHER real filter (5/5 scanner criteria, first-
+        # pullback pattern, 50% retracement rule, volume confirmation, 3%
+        # max stop distance, 2:1 HOD quality filter) still applies
+        # unchanged. This matches Ross Cameron's actual teaching: MACD/SMA
+        # are trend-context confirmation, not required to coincide with the
+        # breakout candle. Still fully toggleable per-user via Settings/
+        # Trading page if strict crossover-only entries are ever wanted.
+        self.require_macd_crossover = False
+        self.require_sma_crossover = False
         self.require_bull_flag = False  # Require bull flag pattern (bonus condition)
         self.require_volume_confirmation = True  # Require green volume bars after red
         self.sma_period = 20
@@ -95,9 +113,10 @@ class AutoTraderService:
         # trades it (still requiring the same First-Pullback technical
         # pattern - grade the trade, don't skip the technicals) but with a
         # hard-reduced size, a tighter technical+tiered-% stop, and a
-        # shorter bailout. OFF by default - explicit opt-in for this
-        # higher-risk mode required.
-        self.no_news_scalp_enabled = False
+        # shorter bailout. ON by default (2026-02, user request) - still
+        # opt-out via Settings/Trading page if a purely news-catalyst-only
+        # strategy is preferred.
+        self.no_news_scalp_enabled = True
         self.no_news_position_size_pct = 0.25  # Hard-cap: 25% of the normal calculated size (spec range was 25-50%, defaulting to the more conservative end since there's no catalyst backing the move)
         self.no_news_bailout_seconds = 60  # Shorter than the normal 90s bailout - no catalyst means even less reason to wait for follow-through
         # Tiered max stop-distance safety cap (price_min, price_max, max_pct).

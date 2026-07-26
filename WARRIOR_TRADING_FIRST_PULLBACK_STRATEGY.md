@@ -103,17 +103,28 @@ pullback low; `check_entry_signals()` rejects the trade if
 > work on this pullback as an entry? The answer is no. The MACD needs to
 > be positive."
 
-MACD(12, 26, 9) must show a **bullish crossover** (MACD line crossing
-above the signal line) at the moment of entry. If MACD has already
-crossed bearish during the pullback, the setup is skipped — momentum is
-fading, not resuming.
+MACD(12, 26, 9) must be **bullish** (MACD line above the signal line)
+at the moment of entry — checked as ongoing trend state by default, not
+as a same-candle crossover event (see the 2026-02 correction note below).
 
 ![MACD Crossover](https://static.prod-images.emergentagent.com/jobs/7da4d582-bcba-40ea-92a1-b6fd98458b9e/images/98777956bc704703147f2d32328e452286a7fa1b5a8cc93cccbdd486be5fab91.png)
 
 **Code**: `calculate_macd()` + `require_macd_crossover` gate in
-`check_entry_signals()`. Also required in this bot (extra confirmation
-beyond Ross Cameron's base rules): SMA20/50 bullish crossover + green
+`check_entry_signals()`. Also checked in this bot (extra confirmation
+beyond Ross Cameron's base rules): SMA20/50 bullish state + green
 volume bars after a red bar.
+
+> **2026-02 correction**: `require_macd_crossover`/`require_sma_crossover`
+> previously defaulted to `True`, requiring MACD to cross its signal line
+> AND SMA20 to cross SMA50 on the EXACT SAME 5-min candle as the pullback
+> breakout. Backtested against 10 real trading days of TSLA/NVDA/AMD
+> 5-min bars: this produced **zero** valid entry signals for any of the
+> three stocks — three independent low-probability events essentially
+> never coincide on one candle. Both now default to `False` (state-based:
+> MACD above signal, SMA20 above SMA50 — trend context, as Ross Cameron
+> actually uses them) which produced 6-13 real signals per stock over the
+> same 10-day window. Still toggleable to strict crossover-only via
+> Settings/Trading page.
 
 ---
 
@@ -167,8 +178,8 @@ Scanner: 5/5 pillars met?
                        risk_pct = risk / entry
                        ├─ risk_pct > max_stop_distance_pct (3%)? YES → skip ("too risky")
                        └─ NO → target = entry + 2×risk
-                                ├─ MACD bullish crossover? NO → skip
-                                ├─ SMA20/50 bullish crossover? NO → skip
+                                ├─ MACD bullish (above signal)? NO → skip
+                                ├─ SMA20/50 bullish (20 above 50)? NO → skip
                                 ├─ Volume confirmation (green after red)? NO → skip
                                 └─ ALL YES → BUY
 
@@ -193,8 +204,8 @@ Located in `/app/backend/services/auto_trader_service.py`
 | `pullback_retracement_max_pct` | 50% | The 50% Rule ceiling |
 | `max_stop_distance_pct` | 3% | Safety cap — skip if structural stop is farther than this |
 | `breakout_bailout_seconds` | 90s | Time-stop if trade never turns profitable |
-| `require_macd_crossover` | True | MACD bullish crossover required |
-| `require_sma_crossover` | True | SMA20/50 bullish crossover required |
+| `require_macd_crossover` | False (2026-02) | If True, requires an exact MACD/signal crossover on the same candle as the breakout (near-impossible in practice, see §5) instead of state-based bullish |
+| `require_sma_crossover` | False (2026-02) | If True, requires an exact SMA20/SMA50 crossover on the same candle as the breakout, instead of state-based (SMA20 > SMA50) |
 | `position_size_pct` | 10% | Capital per trade (max 5 concurrent = 50% exposure) |
 | `daily_max_loss_pct` | 1% | Hard kill switch — blocks all new BUYs for the day |
 | `max_consecutive_losses` | 3 | "Three strikes" — done for the day |

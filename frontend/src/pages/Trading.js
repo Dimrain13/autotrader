@@ -73,8 +73,8 @@ export default function Trading({ account }) {
     pullback_min_pct: 1.0,
     pullback_max_pct: 3.0,
     pullback_lookback_bars: 10,
-    require_macd_crossover: true,
-    require_sma_crossover: true,
+    require_macd_crossover: false,
+    require_sma_crossover: false,
     require_bull_flag: false,
     sma_period: 20,
     trading_start_hour: 7,
@@ -85,7 +85,7 @@ export default function Trading({ account }) {
     max_positions: 5,
     position_size_pct: 10.0,
     daily_max_loss_pct: 5.0,
-    no_news_scalp_enabled: false,
+    no_news_scalp_enabled: true,
     no_news_position_size_pct: 25.0,
     no_news_bailout_seconds: 60
   });
@@ -306,7 +306,7 @@ export default function Trading({ account }) {
           max_positions: response.data.max_positions || 5,
           position_size_pct: response.data.strategy?.position_size_pct || 10.0,
           daily_max_loss_pct: response.data.strategy?.daily_max_loss_pct || 5.0,
-          no_news_scalp_enabled: response.data.strategy?.no_news_scalp_enabled || false,
+          no_news_scalp_enabled: response.data.strategy?.no_news_scalp_enabled ?? true,
           no_news_position_size_pct: response.data.strategy?.no_news_position_size_pct || 25.0,
           no_news_bailout_seconds: response.data.strategy?.no_news_bailout_seconds || 60
         };
@@ -1965,7 +1965,8 @@ export default function Trading({ account }) {
 
                 {/* Scalping Trade (No News) - opt-in higher-risk mode for
                     stocks hitting every OTHER pillar (price/change/volume/
-                    float) with ZERO news catalyst. OFF by default. */}
+                    float) with ZERO news catalyst. ON by default (2026-02,
+                    user request) - opt-out available below. */}
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-2">
                     <input

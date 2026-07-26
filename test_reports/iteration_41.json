@@ -1,0 +1,38 @@
+{
+  "summary": "Tested the 3 intentional changes: (1) require_macd_crossover/require_sma_crossover default False, (2) no_news_scalp_enabled default True, (3) updated UI copy. All confirmed correct via backend GET/POST curl calls and frontend Playwright checks (checkbox states, toast confirmation, refresh-persistence, Settings page copy). Full backend pytest suite run (219 tests): 157 passed, 15 failed, 43 skipped. Of the failures, exactly one is directly caused by this change (test hardcodes OLD default) as flagged in the review request; the rest are pre-existing/unrelated (dead ALPACA_DATA key -> 401s, market-closed 400s, news-sentiment classification, other pre-existing flaky tests) per the session's own scope notes.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "N/A - unit test", "issue": "backend/tests/test_no_news_scalp_mode.py::TestNoNewsScalpEntryGating::test_disabled_by_default_returns_none asserts `auto_trader.no_news_scalp_enabled is False` - this hardcodes the OLD default and now fails since the intentional new default is True. Needs updating to match new default (assert is True, and adjust the test body to explicitly set False again before testing the 'disabled' gating logic).", "priority": "MEDIUM"},
+      {"endpoint": "/api/auto-trader/entry-conditions/{symbol}", "issue": "Could not verify 'macd_bullish'/'above_sma' condition key labels live - all symbols (AAPL/TSLA/NVDA/AMD) return 'No real market data available' due to pre-existing dead ALPACA_DATA_API_KEY returning 401 (confirmed in backend logs, unrelated to this session's change, as flagged in review request). Code review of server.py lines ~982-1042 confirms the conditional logic correctly maps to 'macd_bullish'/'above_sma' keys when require_macd_crossover/require_sma_crossover are False - logic is correct by inspection, just not observable live this session.", "priority": "LOW"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Global (all pages)", "issues": ["Minor pre-existing React console warning: 'Encountered two children with the same key' appears on Dashboard/Scan/History/Missed/Settings - unrelated to this session's changes, likely a list rendering key collision somewhere in a shared component. Not blocking, but flagging for visibility."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_no_news_scalp_mode.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Update backend/tests/test_no_news_scalp_mode.py::test_disabled_by_default_returns_none to reflect the new intentional default (no_news_scalp_enabled=True) - either flip the assertion or explicitly set self.auto_trader.no_news_scalp_enabled=False at the start of that specific test before checking the gating behavior when disabled.",
+    "Optional/low priority: investigate the 'two children with same key' React warning (pre-existing, not caused by this session's change).",
+    "Not in scope this session (per instructions) but still open: the dead ALPACA_DATA_API_KEY (401s) blocks live entry-conditions/{symbol} verification and several other tests (test_alpaca_news.py, parts of test_hod_psych_topping_tail_strategy.py)."
+  ],
+  "critical_code_review_comments": [
+    "auto_trader_service.py defaults (require_macd_crossover=False, require_sma_crossover=False, no_news_scalp_enabled=True) verified correct at lines 101-102, 119, matching the fix description exactly, with clear inline documentation of the backtest rationale.",
+    "server.py entry-conditions endpoint (~982-1042) correctly branches condition key naming ('macd_crossover' vs 'macd_bullish', 'sma_crossover' vs 'above_sma') based on the require_* flags - verified by code read, logic is sound.",
+    "Trading.js: initial useState defaults (line 76-77, 88), fetch effect fallback (line 309, correctly uses `?? true` not `|| false` so a false value fetched from backend is respected, not overridden), and checkbox JSX all consistent with new defaults.",
+    "Settings.js Entry Signals text and new '2026-02 fix' note (lines 152, 160-162) match the requested copy exactly.",
+    "In-memory-only settings (not persisted across backend restart) confirmed as pre-existing/expected behavior per review request - not flagged as a bug."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "97% for in-scope changes (100% of the 3 targeted changes verified correct; 1 unrelated stale test needs updating); full suite 157/172 collected non-error tests passed (~91%), most failures pre-existing/unrelated", "frontend": "100% for in-scope changes (checkbox defaults, toggle+toast+persistence, Settings copy all verified)"},
+  "test_credentials": "daniel.r.millner@gmail.com / Black0rkid5! - confirmed working via login flow",
+  "seed_data_creation": "None - no new test data created; settings toggles reverted back to defaults after testing (require_macd_crossover=false, require_sma_crossover=false, no_news_scalp_enabled=true confirmed restored via curl and UI)",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "This session's 3 targeted changes (crossover defaults, scalping default, UI copy) are all CONFIRMED CORRECT on both backend (curl GET/POST /api/auto-trader/status and /settings) and frontend (Playwright: Trading page Entry Conditions panel checkbox states, toggle+toast+refresh-persistence, Settings page copy screenshot). The only actionable finding is that backend/tests/test_no_news_scalp_mode.py has one stale test asserting the OLD no_news_scalp_enabled default - needs a one-line-ish update. entry-conditions/{symbol} live verification of 'macd_bullish'/'above_sma' response keys is still blocked by the known dead ALPACA_DATA_API_KEY (401), unrelated to this change - verified correct via code inspection only. The previously-flagged sell-immediately-after-bracket-buy regression (iteration_40) was NOT touched or retested this session per scope instructions.",
+  "rca_of_stale_test_issue": "test_no_news_scalp_mode.py was written when no_news_scalp_enabled defaulted to False (pre-2026-02 fix). The test's docstring/assertion 'no_news_scalp_enabled defaults to False - must not silently auto-trade this mode' is now factually outdated since the user explicitly requested defaulting this to True. The test needs to be rewritten to test the CURRENT expected default (True) and, for the 'disabled' gating behavior, explicitly toggle it to False within the test body first."
+}
