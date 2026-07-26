@@ -117,12 +117,20 @@ class TestNoNewsScalpEntryGating:
         self.auto_trader = AutoTraderService()
 
     @pytest.mark.asyncio
-    async def test_disabled_by_default_returns_none(self):
-        """no_news_scalp_enabled defaults to False - must not silently auto-trade this mode."""
-        assert self.auto_trader.no_news_scalp_enabled is False
+    async def test_disabled_when_explicitly_off_returns_none(self):
+        """no_news_scalp_enabled now defaults to True (2026-02, user request) -
+        this test verifies the gating logic itself still correctly blocks
+        entries when a caller explicitly disables the mode, not the default
+        value (see TestDefaults below for the actual default assertion)."""
+        self.auto_trader.no_news_scalp_enabled = False
         stock = {'symbol': 'TEST1', 'no_news_scalp_candidate': True}
         result = await self.auto_trader.check_no_news_scalp_entry(stock)
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_enabled_by_default(self):
+        """2026-02 fix: no_news_scalp_enabled defaults to True on a fresh instance."""
+        assert self.auto_trader.no_news_scalp_enabled is True
 
     @pytest.mark.asyncio
     async def test_enabled_but_not_a_candidate_returns_none(self):

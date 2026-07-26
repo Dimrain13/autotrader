@@ -952,10 +952,15 @@ async def check_entry_conditions(symbol: str):
         # chain), merged with the real-time WebSocket stream to fill the free-tier's
         # ~15 minute REST embargo gap. Never fabricate bars; if no real data is
         # available, skip this symbol.
+        # 1Min (not 5Min): matches auto_trader_service's check_entry_signals -
+        # the "first pullback" pattern is a fast, sub-5-minute event per Ross
+        # Cameron's own description ("resolves instantly"), so this diagnostic
+        # must use the exact same timeframe the live auto-trader actually
+        # checks against (2026-02 fix).
         await market_data_stream.subscribe([symbol])
-        bars_result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, "5Min", 100)
+        bars_result = await asyncio.to_thread(alpaca_service.get_bars_with_fallback, symbol, "1Min", 100)
         bars = [] if bars_result.get('no_historical_data') else bars_result.get('bars', [])
-        bars = market_data_stream.merge_with_stream(symbol, bars, "5Min", 100)
+        bars = market_data_stream.merge_with_stream(symbol, bars, "1Min", 100)
         
         if not bars or len(bars) < 20:
             return {
