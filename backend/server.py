@@ -155,7 +155,7 @@ class ScanCriteria(BaseModel):
     max_price: float = Field(20.0, gt=0)
     min_change: float = Field(10.0, ge=0)
     min_volume_ratio: float = Field(5.0, gt=0)
-    max_float: int = Field(45_000_000, gt=0)
+    max_float: int = Field(20_000_000, gt=0)
 
     @field_validator('max_price')
     @classmethod
@@ -629,6 +629,13 @@ async def place_order(request: Request, order: TradeOrder):
                 # Get actual entry time from order history
                 entry_time = await asyncio.to_thread(alpaca_service.get_position_entry_time, order.symbol)
                 if not entry_time:
+                    # Try auto_trader state first for accurate entry_time
+                    try:
+                        at_pos = auto_trader.open_positions.get(symbol.upper(), {})
+                        entry_time = at_pos.get("entry_time")
+                    except Exception:
+                        pass
+                if not entry_time:
                     entry_time = datetime.now(timezone.utc).isoformat()
                 
                 await trade_history.log_trade({
@@ -845,7 +852,24 @@ async def get_auto_trader_status():
             "eod_close_time": "3:30 PM EST",
             "no_news_scalp_enabled": auto_trader.no_news_scalp_enabled,
             "no_news_position_size_pct": auto_trader.no_news_position_size_pct * 100,  # 25%
-            "no_news_bailout_seconds": auto_trader.no_news_bailout_seconds  # 60
+            "no_news_bailout_seconds": auto_trader.no_news_bailout_seconds,
+            "bull_flag_breakout_enabled": auto_trader.bull_flag_breakout_enabled,
+            "vwap_bounce_enabled": auto_trader.vwap_bounce_enabled,
+            "orb_enabled": auto_trader.orb_enabled,
+                "bull_flag_breakout_enabled": auto_trader.bull_flag_breakout_enabled,
+                "vwap_bounce_enabled": auto_trader.vwap_bounce_enabled,
+                "orb_enabled": auto_trader.orb_enabled,
+                "tiered_sizing_enabled": auto_trader.tiered_sizing_enabled,
+                "psych_level_partials_enabled": auto_trader.psych_level_partials_enabled,
+                "volume_climax_exit_enabled": auto_trader.volume_climax_exit_enabled,
+                "ema9_dip_enabled": auto_trader.ema9_dip_enabled,  # 60
+            "bull_flag_breakout_enabled": auto_trader.bull_flag_breakout_enabled,
+            "vwap_bounce_enabled": auto_trader.vwap_bounce_enabled,
+            "orb_enabled": auto_trader.orb_enabled,
+            "tiered_sizing_enabled": auto_trader.tiered_sizing_enabled,
+            "psych_level_partials_enabled": auto_trader.psych_level_partials_enabled,
+            "volume_climax_exit_enabled": auto_trader.volume_climax_exit_enabled,
+            "ema9_dip_enabled": auto_trader.ema9_dip_enabled  # 60
         },
         "entry_conditions": {
             "pullback_min_candles": auto_trader.pullback_min_candles,
@@ -910,7 +934,10 @@ async def update_auto_trader_settings(settings: dict):
                 "daily_max_loss_pct": auto_trader.daily_max_loss_pct * 100,
                 "no_news_scalp_enabled": auto_trader.no_news_scalp_enabled,
                 "no_news_position_size_pct": auto_trader.no_news_position_size_pct * 100,
-                "no_news_bailout_seconds": auto_trader.no_news_bailout_seconds
+                "no_news_bailout_seconds": auto_trader.no_news_bailout_seconds,
+                "bull_flag_breakout_enabled": auto_trader.bull_flag_breakout_enabled,
+                "vwap_bounce_enabled": auto_trader.vwap_bounce_enabled,
+                "orb_enabled": auto_trader.orb_enabled
             }
         }
     except Exception as e:
@@ -1143,11 +1170,11 @@ async def process_auto_trading(request: Request):
         
         # Get scanner results from most recent scan
         criteria = {
-            "min_price": 2,
+            "min_price": 0.50,
             "max_price": 20,
             "min_change": 10,
             "min_volume_ratio": 5,
-            "max_float": 45_000_000
+            "max_float": 20_000_000
         }
 
         # scan_market() (not scan_stocks() directly) so this manual trigger
@@ -1175,7 +1202,7 @@ async def run_demo_scan(
     max_price: float = 20.0,
     min_change: float = 10.0,
     min_volume_ratio: float = 5.0,
-    max_float: int = 45_000_000
+    max_float: int = 20_000_000
 ):
     """Run a demo scan with simulated market data"""
     from services.demo_scanner_service import demo_scanner
@@ -1490,11 +1517,11 @@ async def auto_trader_loop():
             # if trading_mode somehow flipped without going through that path.
             if auto_trader.active and alpaca_service.trading_mode == "paper":
                 criteria = {
-                    "min_price": 2,
+                    "min_price": 0.50,
                     "max_price": 20,
                     "min_change": 10,
                     "min_volume_ratio": 5,
-                    "max_float": 45_000_000
+                    "max_float": 20_000_000
                 }
                 # scan_market() (not scan_stocks() directly) so this 60s loop
                 # reuses the same 120s-cached scan the dashboard's own poll

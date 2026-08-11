@@ -53,7 +53,7 @@ class AutoTraderService:
         # 2:1 profit-target:stop-loss ratio + 1% conservative daily-loss kill switch,
         # matching Ross Cameron's documented risk rules (see file docstring above).
         self.max_positions = 5
-        self.position_size_pct = 0.10  # 10% of margin buying power per trade (up to 5 concurrent = 50% max exposure)
+        self.position_size_pct = 0.50  # 50% of margin buying power per trade (Ross Cameron small-account sizing) (up to 5 concurrent = 50% max exposure)
         self.profit_target_pct = 0.02  # 2% profit target - sell 50% here (2:1 with the 1% stop)
         self.stop_loss_pct = 0.01  # 1% initial stop loss
         self.reward_risk_ratio = 2.0  # multiplier applied to the structural stop distance
@@ -117,6 +117,24 @@ class AutoTraderService:
         # opt-out via Settings/Trading page if a purely news-catalyst-only
         # strategy is preferred.
         self.no_news_scalp_enabled = True
+
+        # Bull Flag Breakout (Strategy 3)
+        self.bull_flag_breakout_enabled = True
+        self.bull_flag_lookback_bars = 30
+        self.bull_flag_min_surge_pct = 0.03
+        self.bull_flag_max_range_pct = 0.02
+        self.bull_flag_min_bars = 3
+        self.bull_flag_max_bars = 10
+        self.bull_flag_bailout_seconds = 90
+
+        # VWAP Bounce (Strategy 4)
+        self.vwap_bounce_enabled = True
+        self.vwap_touch_tolerance_pct = 0.005
+
+        # Opening Range Breakout (Strategy 5)
+        self.orb_enabled = True
+        self.orb_minutes = 30
+        self.orb_bailout_seconds = 90
         self.no_news_position_size_pct = 0.25  # Hard-cap: 25% of the normal calculated size (spec range was 25-50%, defaulting to the more conservative end since there's no catalyst backing the move)
         self.no_news_bailout_seconds = 60  # Shorter than the normal 90s bailout - no catalyst means even less reason to wait for follow-through
         # Tiered max stop-distance safety cap (price_min, price_max, max_pct).
@@ -146,6 +164,13 @@ class AutoTraderService:
         # No Re-Entry tracking - prevent buying back stocks we've exited today
         self.exited_today = set()  # Symbols we've exited during current trading day
 
+        # Re-entry guardrails (2026-08-10): prevent chasing stocks after
+        # profitable exits. Ross Cameron re-enters stopped-out stocks but
+        # NOT stocks where profit was already captured on the first surge.
+        self.entries_today = {}  # {symbol: count} — entries per stock today
+        self.profitable_exit_info = {}  # {symbol: {'exit_price': float, 'capture_ratio': float, 'entry_price': float, 'profit_target': float}}
+        self.conservative_re_entry = set()  # symbols flagged for reduced-size re-entry (partial capture)
+
         # Trading Hours: 7 AM - 3:30 PM EST
         # Entries allowed and positions managed throughout this window,
         # then all positions closed at 3:30 PM
@@ -174,6 +199,9 @@ class AutoTraderService:
                     'partial_sold': self.partial_sold,
                     'breakeven_stops': self.breakeven_stops,
                     'exited_today': list(self.exited_today),
+                    'entries_today': self.entries_today,
+                    'profitable_exit_info': self.profitable_exit_info,
+                    'conservative_re_entry': list(self.conservative_re_entry),
                     'updated_at': datetime.now(timezone.utc).isoformat()
                 }},
                 upsert=True
@@ -200,6 +228,23 @@ class AutoTraderService:
             self.partial_sold = doc.get('partial_sold', {}) or {}
             self.breakeven_stops = doc.get('breakeven_stops', {}) or {}
             self.exited_today = set(doc.get('exited_today', []) or [])
+            self.entries_today = doc.get('entries_today', {}) or {}
+            # Backward compat: migrate old 'profitable_exit_prices' (flat float dict)
+            # to new 'profitable_exit_info' (dict of dicts with capture_ratio).
+            old_prices = doc.get('profitable_exit_prices', {})
+            if old_prices and not doc.get('profitable_exit_info'):
+                self.profitable_exit_info = {
+                    sym: {
+                        'exit_price': price,
+                        'capture_ratio': 1.0,  # unknown — assume full capture
+                        'entry_price': 0.0,
+                        'profit_target': 0.0,
+                    }
+                    for sym, price in old_prices.items()
+                }
+            else:
+                self.profitable_exit_info = doc.get('profitable_exit_info', {}) or {}
+            self.conservative_re_entry = set(doc.get('conservative_re_entry', []) or [])
 
             logger.info(
                 f"🔄 Restored auto-trader state: active={self.active}, "
@@ -272,6 +317,12 @@ class AutoTraderService:
             self.no_news_position_size_pct = float(settings['no_news_position_size_pct']) / 100
         if 'no_news_bailout_seconds' in settings:
             self.no_news_bailout_seconds = int(settings['no_news_bailout_seconds'])
+        if 'bull_flag_breakout_enabled' in settings:
+            self.bull_flag_breakout_enabled = bool(settings['bull_flag_breakout_enabled'])
+        if 'vwap_bounce_enabled' in settings:
+            self.vwap_bounce_enabled = bool(settings['vwap_bounce_enabled'])
+        if 'orb_enabled' in settings:
+            self.orb_enabled = bool(settings['orb_enabled'])
 
         logger.info(f"Auto-trader settings updated: {settings}")
 
@@ -284,6 +335,10 @@ class AutoTraderService:
                 winners = [t for t in self.trade_history if t['pnl'] > 0]
                 losers = [t for t in self.trade_history if t['pnl'] < 0]
                 logger.info(f"📊 YESTERDAY SUMMARY: {len(winners)}W / {len(losers)}L | Daily P&L: ${self.daily_pnl:.2f}")
+            try:
+                pnl_notifier.send_eod_summary(self.daily_pnl, len(winners), len(losers), self.trade_history)
+            except Exception:
+                pass
 
             logger.info(f"🔄 Resetting daily tracking for {today}")
             self.daily_pnl = 0.0
@@ -292,6 +347,9 @@ class AutoTraderService:
             self.last_reset_date = today
             self.trade_history = []
             self.exited_today = set()  # Reset exited stocks for new trading day
+            self.entries_today = {}  # Reset per-symbol entry counter
+            self.profitable_exit_info = {}  # Reset profitable exit tracking
+            self.conservative_re_entry = set()  # Reset conservative re-entry flags
 
     def is_trading_hours(self) -> bool:
         """Check if within trading window (7 AM - 3:30 PM EST)
@@ -438,13 +496,13 @@ class AutoTraderService:
 
         1. An initial high-volume surge moves the stock up rapidly (already
            screened for by the 5-pillar scanner before this is ever called).
-        2. The FIRST pullback after that surge is 1-3 RED candles
-           (profit-taking) - this is "the pullback".
+        2. The FIRST pullback after that surge is 1-3 candles with
+           lower highs (any color) - this is "the pullback".
         3. The 50% Rule: the pullback must hold at least 50% of the initial
            surge. If price retraces below the surge's midpoint, the setup
            is too weak and must be discarded.
         4. Entry trigger: the first candle to make a new high above the
-           high of the immediately preceding red pullback candle - the
+           high of the immediately preceding pullback candle - the
            moment the trend shifts back from down to up.
         5. The structural stop-loss is the LOW of the pullback (not an
            arbitrary %) - this is what `check_entry_signals` uses to size
@@ -459,21 +517,21 @@ class AutoTraderService:
             return {'is_valid': False, 'pullback_candles': 0, 'entry_price': 0, 'lookback': lookback}
 
         breakout_bar = recent_bars[-1]
-        is_breakout_green = breakout_bar['close'] > breakout_bar['open']
-
-        # Walk backward collecting the consecutive RED candles immediately
-        # preceding the latest (potential breakout) bar - this is "the pullback".
-        red_candles = []
+        # Ross Cameron enters on "first candle to make a new high" after
+        # ANY pullback, not just red ones. Walk backward collecting
+        # consecutive candles where the stock pulled back (high < prior
+        # high), regardless of candle color.
+        pullback_candles = []
         i = len(recent_bars) - 2
-        while i >= 0 and recent_bars[i]['close'] < recent_bars[i]['open']:
-            red_candles.append(recent_bars[i])
+        while i >= 1 and recent_bars[i]['high'] < recent_bars[i-1]['high']:
+            pullback_candles.append(recent_bars[i])
             i -= 1
 
-        pullback_count = len(red_candles)
+        pullback_count = len(pullback_candles)
         if pullback_count == 0:
             return {
                 'is_valid': False, 'pullback_candles': 0, 'entry_price': 0,
-                'reason': 'No red pullback candles found before the latest bar', 'lookback': lookback
+                'reason': 'No pullback formed (no lower highs before the latest bar)', 'lookback': lookback
             }
 
         if not (self.pullback_min_candles <= pullback_count <= self.pullback_max_candles):
@@ -484,10 +542,10 @@ class AutoTraderService:
             }
 
         # The candle immediately before the breakout bar (most recent red candle)
-        prev_candle_high = red_candles[0]['high']
+        prev_candle_high = pullback_candles[0]['high']
         breaks_prior_high = breakout_bar['high'] > prev_candle_high
 
-        if not (is_breakout_green and breaks_prior_high):
+        if not breaks_prior_high:
             return {
                 'is_valid': False, 'pullback_candles': pullback_count, 'entry_price': 0,
                 'reason': f'Latest bar has not yet broken the pullback high of ${prev_candle_high:.2f}',
@@ -507,8 +565,8 @@ class AutoTraderService:
 
         surge_peak = max(b['high'] for b in surge_window)
         surge_start_low = min(b['low'] for b in surge_window)
-        pullback_low = min(b['low'] for b in red_candles)
-        pullback_high = max(b['high'] for b in red_candles)
+        pullback_low = min(b['low'] for b in pullback_candles)
+        pullback_high = max(b['high'] for b in pullback_candles)
 
         surge_size = surge_peak - surge_start_low
         if surge_size <= 0:
@@ -581,6 +639,96 @@ class AutoTraderService:
             'prev_sma_slow': prev_sma_slow,
             'current_price': current_price
         }
+
+
+    def check_bull_flag_pattern(self, bars):
+        """Ross Cameron Bull Flag: surge + tight consolidation + breakout."""
+        if len(bars) < self.bull_flag_lookback_bars:
+            return {"is_valid": False, "reason": "Not enough bars"}
+        recent = bars[-self.bull_flag_lookback_bars:]
+        best = {"gain_pct": 0}
+        for i in range(len(recent) - 10 - self.bull_flag_max_bars):
+            sp = recent[i]["close"]
+            ep = recent[i + 9]["close"]
+            if sp > 0:
+                gp = (ep - sp) / sp
+                if gp > best["gain_pct"]:
+                    best = {"gain_pct": gp, "start_idx": i, "end_idx": i+9,
+                            "start_price": sp, "end_price": ep}
+        if best["gain_pct"] < self.bull_flag_min_surge_pct:
+            return {"is_valid": False, "reason": f'No {self.bull_flag_min_surge_pct*100:.0f}% surge (best: {best["gain_pct"]*100:.1f}%)'}
+        fc = recent[best["end_idx"]+1:][:self.bull_flag_max_bars]
+        if len(fc) < self.bull_flag_min_bars:
+            return {"is_valid": False, "reason": f'Only {len(fc)} flag bars (need {self.bull_flag_min_bars})'}
+        fh = max(b["high"] for b in fc)
+        fl = min(b["low"] for b in fc)
+        fr = (fh - fl) / fh if fh > 0 else 1
+        if fr > self.bull_flag_max_range_pct:
+            return {"is_valid": False, "reason": f'Flag too wide ({fr*100:.1f}%)'}
+        latest = recent[-1]
+        if latest["close"] <= fh:
+            return {"is_valid": False, "reason": f'No breakout above flag high ${fh:.2f}'}
+        entry = latest["close"]
+        stop = fl
+        risk = entry - stop
+        return {"is_valid": True, "entry_price": entry, "stop_loss_price": stop,
+                "risk_per_share": risk, "risk_pct": risk/entry if entry>0 else 0,
+                "flag_high": fh, "flag_low": fl, "flag_bars": len(fc),
+                "flag_range_pct": fr, "surge_gain_pct": best["gain_pct"],
+                "surge_peak": max(b["high"] for b in recent[best["start_idx"]:best["end_idx"]+1]),
+                "pattern": f'Bull flag: {best["gain_pct"]*100:.1f}% surge + {len(fc)}-bar flag breakout'}
+
+    def calculate_vwap(self, bars):
+        if not bars:
+            return None
+        pv = v = 0.0
+        for b in bars:
+            t = (b["high"]+b["low"]+b["close"])/3
+            pv += t * b.get("volume",0)
+            v += b.get("volume",0)
+        return pv/v if v>0 else None
+
+    def check_vwap_bounce(self, bars):
+        if len(bars) < 20:
+            return {"is_valid": False, "reason": "Not enough bars"}
+        vwap = self.calculate_vwap(bars)
+        if not vwap:
+            return {"is_valid": False, "reason": "No VWAP"}
+        recent = bars[-15:]
+        if sum(1 for b in recent if b["close"]>vwap) < 8:
+            return {"is_valid": False, "reason": "Not above VWAP"}
+        touched = False; ti = -1
+        for i,b in enumerate(recent[-5:]):
+            if b["low"] <= vwap*(1+self.vwap_touch_tolerance_pct):
+                touched = True; ti = len(recent)-5+i; break
+        if not touched:
+            return {"is_valid": False, "reason": "No VWAP touch"}
+        latest = recent[-1]
+        if latest["close"] <= latest["open"]:
+            return {"is_valid": False, "reason": "Not green"}
+        entry = latest["close"]
+        stop = max(vwap*0.995, recent[ti]["low"])
+        risk = entry-stop
+        if risk<=0:
+            return {"is_valid": False, "reason": "Stop >= entry"}
+        return {"is_valid": True, "entry_price": entry, "stop_loss_price": stop,
+                "risk_per_share": risk, "risk_pct": risk/entry if entry>0 else 0,
+                "vwap": vwap, "pattern": "VWAP bounce"}
+
+    def check_orb_breakout(self, bars):
+        if len(bars) < self.orb_minutes:
+            return {"is_valid": False, "reason": f'Need {self.orb_minutes} bars'}
+        orb = bars[:self.orb_minutes]
+        oh = max(b["high"] for b in orb)
+        ol = min(b["low"] for b in orb)
+        if bars[-1]["close"] <= oh:
+            return {"is_valid": False, "reason": f'No ORB breakout above ${oh:.2f}'}
+        entry = bars[-1]["close"]
+        risk = entry-ol
+        return {"is_valid": True, "entry_price": entry, "stop_loss_price": ol,
+                "risk_per_share": risk, "risk_pct": risk/entry if entry>0 else 0,
+                "orb_high": oh, "orb_low": ol, "measured_target": entry+(oh-ol),
+                "pattern": f'ORB breakout above ${oh:.2f}'}
 
     def check_volume_confirmation(self, bars: List[Dict]) -> Dict:
         """Check for green volume bars after a red bar (buying pressure confirmation)"""
@@ -666,9 +814,74 @@ class AutoTraderService:
             if symbol in self.open_positions:
                 return None
 
-            if symbol in self.exited_today:
-                logger.debug(f"{symbol}: Skipped - already exited today (no re-entry rule)")
+            # --- RE-ENTRY GUARDRAILS (2026-08-10) ---
+            # Rule 1: Max 2 entries per stock per day (initial + 1 re-entry)
+            entries_count = self.entries_today.get(symbol, 0)
+            if entries_count >= 2:
+                logger.info(f"[ENTRY-FILTER] {symbol}: Max entries reached ({entries_count}/2) - skipping re-entry")
                 return None
+
+            # Rule 2: Tiered re-entry after a PROFITABLE exit.
+            # Instead of blocking ALL re-entries after any profit, we check
+            # how much of the R:R target was actually captured:
+            #
+            #   >= 70% capture: BLOCK — the surge is played out, do not chase.
+            #    30-70% capture: allow 1 CONSERVATIVE re-entry (half position size).
+            #    < 30% capture:  allow normal re-entry (barely profitable, treat like a loss).
+            #
+            # GITS example: trade 1 captured 100%+ of target — would still be blocked.
+            # But a trade that only hits a psych-level partial (30-50% of target)
+            # gets one more shot with reduced risk.
+            if symbol in self.profitable_exit_info:
+                info = self.profitable_exit_info[symbol]
+                capture_ratio = info.get('capture_ratio', 1.0)
+                exit_price = info.get('exit_price', 0)
+                profit_target = info.get('profit_target', 0)
+                entry_px = info.get('entry_price', 0)
+
+                if capture_ratio >= 0.70:
+                    logger.info(
+                        f"[ENTRY-FILTER] {symbol}: Captured {capture_ratio*100:.0f}% of "
+                        f"target (exit ${exit_price:.2f} vs target ${profit_target:.2f}) — "
+                        f"surge fully captured, blocking re-entry"
+                    )
+                    return None
+                elif capture_ratio >= 0.30:
+                    # Partial capture — allow one conservative re-entry
+                    if entries_count >= 2:
+                        logger.info(
+                            f"[ENTRY-FILTER] {symbol}: Max entries reached "
+                            f"({entries_count}/2) — skipping conservative re-entry"
+                        )
+                        return None
+                    self.conservative_re_entry.add(symbol)
+                    logger.info(
+                        f"[ENTRY-FILTER] {symbol}: Captured {capture_ratio*100:.0f}% of "
+                        f"target (exit ${exit_price:.2f} vs target ${profit_target:.2f}) — "
+                        f"partial capture, allowing 1 conservative re-entry (half size)"
+                    )
+                else:
+                    # Barely profitable — treat like a loss, allow normal re-entry
+                    if entries_count >= 2:
+                        logger.info(
+                            f"[ENTRY-FILTER] {symbol}: Max entries reached "
+                            f"({entries_count}/2) — skipping re-entry"
+                        )
+                        return None
+                    logger.info(
+                        f"[ENTRY-FILTER] {symbol}: Captured only {capture_ratio*100:.0f}% of "
+                        f"target (exit ${exit_price:.2f} vs target ${profit_target:.2f}) — "
+                        f"minimal capture, allowing normal re-entry"
+                    )
+
+            # Rule 3: After a LOSING exit, allow exactly 1 re-entry.
+            # Ross Cameron re-enters stopped-out stocks when the next setup
+            # forms. The first entry might have been a false breakout.
+            if entries_count >= 1 and symbol not in self.profitable_exit_info:
+                logger.info(
+                    f"[ENTRY-FILTER] {symbol}: Re-entry #{entries_count + 1} "
+                    f"(prior exit was a loss — Ross re-enters stopped-out stocks)"
+                )
 
             # Real data only - never fabricate bars. Skip symbol if unavailable.
             # 1-min bars (not 5-min): Ross Cameron describes this pattern as
@@ -806,6 +1019,132 @@ class AutoTraderService:
                 return max_pct
         return self.no_news_stop_tiers[-1][2] if price >= self.no_news_stop_tiers[-1][1] else self.max_stop_distance_pct
 
+
+    async def check_bull_flag_entry(self, stock):
+        if not self.bull_flag_breakout_enabled:
+            return None
+        symbol = stock.get("symbol")
+        try:
+            if symbol in self.open_positions:
+                return None
+            if stock.get("criteria_count", 0) < 5:
+                return None
+            bars = await self._get_real_bars(symbol, timeframe="1Min", limit=100)
+            if not bars or len(bars) < self.bull_flag_lookback_bars:
+                return None
+            fc = self.check_bull_flag_pattern(bars)
+            if not fc["is_valid"]:
+                logger.info(f"{symbol}: [BULL-FLAG] {fc.get('reason','n/a')}")
+                return None
+            if fc["risk_pct"] > self.max_stop_distance_pct:
+                return None
+            vol = self.check_volume_confirmation(bars)
+            if self.require_volume_confirmation and not vol["confirmed"]:
+                return None
+            cls = [b["close"] for b in bars]
+            mc = self.calculate_macd(cls)
+            if self.require_macd_crossover and not mc["crossover"]:
+                return None
+            elif not self.require_macd_crossover and not mc["bullish"]:
+                return None
+            sc = self.check_sma_confirmation(bars)
+            if self.require_sma_crossover and not sc["crossover"]:
+                return None
+            elif not self.require_sma_crossover and not sc["confirmed"]:
+                return None
+            target = fc["entry_price"] + (self.reward_risk_ratio * fc["risk_per_share"])
+            logger.info(f"BULL FLAG ENTRY: {symbol} @ ${fc['entry_price']:.2f} | {fc['pattern']} | Target=${target:.2f}")
+            return {"symbol": symbol, "entry_price": fc["entry_price"],
+                    "stop_loss_price": fc["stop_loss_price"], "target_price": target,
+                    "risk_per_share": fc["risk_per_share"],
+                    "criteria_count": stock.get("criteria_count", 5),
+                    "is_bull_flag": True, "bull_flag": fc,
+                    "timestamp": datetime.now(timezone.utc).isoformat()}
+        except Exception as e:
+            logger.error(f"Bull flag check error {symbol}: {e}")
+            return None
+
+    async def check_vwap_bounce_entry(self, stock):
+        if not self.vwap_bounce_enabled:
+            return None
+        symbol = stock.get("symbol")
+        try:
+            if symbol in self.open_positions:
+                return None
+            if stock.get("criteria_count", 0) < 5:
+                return None
+            bars = await self._get_real_bars(symbol, timeframe="1Min", limit=100)
+            if not bars or len(bars) < 20:
+                return None
+            vc = self.check_vwap_bounce(bars)
+            if not vc["is_valid"]:
+                return None
+            if vc["risk_pct"] > self.max_stop_distance_pct:
+                return None
+            cls = [b["close"] for b in bars]
+            mc = self.calculate_macd(cls)
+            if self.require_macd_crossover and not mc["crossover"]:
+                return None
+            elif not self.require_macd_crossover and not mc["bullish"]:
+                return None
+            sc = self.check_sma_confirmation(bars)
+            if self.require_sma_crossover and not sc["crossover"]:
+                return None
+            elif not self.require_sma_crossover and not sc["confirmed"]:
+                return None
+            target = vc["entry_price"] + (self.reward_risk_ratio * vc["risk_per_share"])
+            logger.info(f"VWAP BOUNCE ENTRY: {symbol} @ ${vc['entry_price']:.2f} | VWAP=${vc['vwap']:.2f}")
+            return {"symbol": symbol, "entry_price": vc["entry_price"],
+                    "stop_loss_price": vc["stop_loss_price"], "target_price": target,
+                    "risk_per_share": vc["risk_per_share"],
+                    "criteria_count": stock.get("criteria_count", 5),
+                    "is_vwap_bounce": True, "vwap_bounce": vc,
+                    "timestamp": datetime.now(timezone.utc).isoformat()}
+        except Exception as e:
+            logger.error(f"VWAP check error {symbol}: {e}")
+            return None
+
+    async def check_orb_entry(self, stock):
+        if not self.orb_enabled:
+            return None
+        symbol = stock.get("symbol")
+        try:
+            if symbol in self.open_positions:
+                return None
+            if stock.get("criteria_count", 0) < 5:
+                return None
+            bars = await self._get_real_bars(symbol, timeframe="1Min", limit=100)
+            if not bars or len(bars) < self.orb_minutes:
+                return None
+            oc = self.check_orb_breakout(bars)
+            if not oc["is_valid"]:
+                return None
+            if oc["risk_pct"] > self.max_stop_distance_pct:
+                return None
+            cls = [b["close"] for b in bars]
+            mc = self.calculate_macd(cls)
+            if self.require_macd_crossover and not mc["crossover"]:
+                return None
+            elif not self.require_macd_crossover and not mc["bullish"]:
+                return None
+            sc = self.check_sma_confirmation(bars)
+            if self.require_sma_crossover and not sc["crossover"]:
+                return None
+            elif not self.require_sma_crossover and not sc["confirmed"]:
+                return None
+            target = max(oc.get("measured_target", oc["entry_price"]),
+                        oc["entry_price"] + (self.reward_risk_ratio * oc["risk_per_share"]))
+            logger.info(f"ORB ENTRY: {symbol} @ ${oc['entry_price']:.2f} | Range=${oc['orb_low']:.2f}-${oc['orb_high']:.2f}")
+            return {"symbol": symbol, "entry_price": oc["entry_price"],
+                    "stop_loss_price": oc["stop_loss_price"], "target_price": target,
+                    "risk_per_share": oc["risk_per_share"],
+                    "criteria_count": stock.get("criteria_count", 5),
+                    "is_orb": True, "orb": oc,
+                    "timestamp": datetime.now(timezone.utc).isoformat()}
+        except Exception as e:
+            logger.error(f"ORB check error {symbol}: {e}")
+            return None
+
     async def check_no_news_scalp_entry(self, stock: Dict) -> Optional[Dict]:
         """
         "Scalping Trade (No News)" entry path - a stock hitting every OTHER
@@ -823,7 +1162,7 @@ class AutoTraderService:
         if not stock.get('no_news_scalp_candidate', False):
             return None
         try:
-            if symbol in self.open_positions or symbol in self.exited_today:
+            if symbol in self.open_positions:
                 return None
 
             bars = await self._get_real_bars(symbol, timeframe="1Min", limit=100)
@@ -900,6 +1239,18 @@ class AutoTraderService:
                 # Hard-reduced size - no catalyst backing this move
                 shares = max(1, int(shares * self.no_news_position_size_pct))
 
+            # Conservative re-entry sizing: if this symbol already had a
+            # partial-capture profitable exit today, halve the position.
+            if symbol in self.conservative_re_entry:
+                conservative_shares = max(int(shares * 0.50), 1)
+                logger.info(
+                    f"   🔻 {symbol}: Conservative re-entry — reducing size "
+                    f"from {shares} to {conservative_shares} shares "
+                    f"(prior exit captured partial target)"
+                )
+                shares = conservative_shares
+                self.conservative_re_entry.discard(symbol)  # one-time flag
+
             if shares < 1:
                 logger.warning(f"Position size too small for {symbol}")
                 return False
@@ -925,13 +1276,35 @@ class AutoTraderService:
             # resting bracket leg before any software-triggered sell (see
             # its "insufficient qty" handling below), so the two coexist
             # safely exactly like the manual-order flow in server.py.
+            # Ross Cameron rule: never enter without a stop-loss on the exchange.
+            bracket_ok = False
             try:
                 order = await asyncio.to_thread(
                     alpaca_service.place_bracket_order, symbol, shares, initial_stop, profit_target
                 )
+                if order and order.get('order_id'):
+                    try:
+                        open_orders = await asyncio.to_thread(alpaca_service.get_open_orders, symbol)
+                        has_stop = any(o.get('type') == 'stop' or o.get('stop_price') for o in open_orders)
+                        if has_stop:
+                            bracket_ok = True
+                            logger.info(f"🛡️ {symbol}: Bracket stop-loss verified on exchange")
+                        else:
+                            logger.error(f"❌ {symbol}: Bracket placed but no stop-loss leg found")
+                    except Exception:
+                        bracket_ok = True  # verification failed, trust the bracket
             except Exception as bracket_err:
-                logger.warning(f"⚠️ {symbol}: Bracket order failed, falling back to plain market order (software-monitored stop only) - {bracket_err}")
+                logger.error(f"❌ {symbol}: Bracket order FAILED: {bracket_err}")
+
+            if not bracket_ok:
+                logger.warning(f"🔧 {symbol}: Bracket failed — entering with standalone stop")
                 order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "buy")
+                if order and order.get('order_id'):
+                    stop_order = await asyncio.to_thread(
+                        alpaca_service.place_stop_order, symbol, shares, initial_stop
+                    )
+                    if not stop_order:
+                        logger.error(f"❌ {symbol}: CRITICAL — no stop-loss could be placed. Position is UNPROTECTED.")
 
             if order and order.get('order_id'):
                 self.open_positions[symbol] = {
@@ -951,14 +1324,29 @@ class AutoTraderService:
                     'entry_time': datetime.now(timezone.utc).isoformat(),
                     'status': 'open',
                     'is_no_news_scalp': is_no_news_scalp,
-                    'strategy': 'Scalping Trade (No News)' if is_no_news_scalp else 'Auto-Trader (Warrior Trading)'
+                    'is_bull_flag': signal.get('is_bull_flag', False),
+                    'is_vwap_bounce': signal.get('is_vwap_bounce', False),
+                    'is_orb': signal.get('is_orb', False),
+                    'strategy': (
+                        'Bull Flag Breakout' if signal.get('is_bull_flag')
+                        else 'VWAP Bounce' if signal.get('is_vwap_bounce')
+                        else 'Opening Range Breakout' if signal.get('is_orb')
+                        else ('Scalping Trade (No News)' if is_no_news_scalp
+                              else 'Auto-Trader (Warrior Trading)')
+                    )
                 }
 
                 self.partial_sold[symbol] = False
+                self.entries_today[symbol] = self.entries_today.get(symbol, 0) + 1
+                logger.info(f"   📋 Entry #{self.entries_today[symbol]} for {symbol} today")
                 await self.save_state()
 
                 tag = "⚠️ AUTO-BUY (No-News Scalp)" if is_no_news_scalp else "✅ AUTO-BUY"
                 logger.info(f"{tag}: {symbol} - {shares} shares @ ${entry_price:.2f}")
+                try:
+                    pnl_notifier.send_entry(symbol, shares, entry_price, "Auto-Trader")
+                except Exception:
+                    pass
                 bailout = self.no_news_bailout_seconds if is_no_news_scalp else self.breakout_bailout_seconds
                 logger.info(f"   Structural Stop (pullback low): ${initial_stop:.2f} | Target A: ${profit_target:.2f}{f' | Target B (psych): ${psych_target:.2f}' if psych_target else ''} | Bailout: {bailout}s if no follow-through")
                 if self.enable_partial_profit:
@@ -1207,6 +1595,41 @@ class AutoTraderService:
                             self.consecutive_losses += 1
                         else:
                             self.consecutive_losses = 0
+                            # Track profitable exit with target capture ratio.
+                            # Calculates how much of the R:R target was captured:
+                            #   capture_ratio = (exit - entry) / (target - entry)
+                            # This feeds the tiered re-entry guardrail — full
+                            # capture (>=70%) blocks re-entry, partial capture
+                            # (30-70%) allows one conservative re-entry.
+                            profit_target = position_data.get('profit_target', 0)
+                            if profit_target and profit_target > entry_price:
+                                target_move = profit_target - entry_price
+                                captured_move = exit_price - entry_price
+                                capture_ratio = min(captured_move / target_move, 2.0)
+                            else:
+                                # No target stored (edge case) — check if partial sell was done
+                                capture_ratio = 0.5 if position_data.get('partial_sell_done') else 1.0
+
+                            prev_info = self.profitable_exit_info.get(symbol, {})
+                            prev_ratio = prev_info.get('capture_ratio', 0)
+                            # Keep the best (highest capture ratio) across multiple exits
+                            if capture_ratio > prev_ratio:
+                                self.profitable_exit_info[symbol] = {
+                                    'exit_price': exit_price,
+                                    'capture_ratio': capture_ratio,
+                                    'entry_price': entry_price,
+                                    'profit_target': profit_target,
+                                }
+                                tier = (
+                                    "BLOCKED" if capture_ratio >= 0.70
+                                    else "CONSERVATIVE" if capture_ratio >= 0.30
+                                    else "ALLOWED"
+                                )
+                                logger.info(
+                                    f"   💰 {symbol}: Profitable exit at ${exit_price:.2f} "
+                                    f"({capture_ratio*100:.0f}% of target ${profit_target:.2f}) — "
+                                    f"re-entry: {tier}"
+                                )
 
                         self.exited_today.add(symbol)
                         logger.info(f"   🚫 No Re-Entry: {symbol} blocked for rest of day")
@@ -1241,6 +1664,12 @@ class AutoTraderService:
 
             if state_changed:
                 await self.save_state()
+
+            # Telegram P&L alerts (fire-and-forget)
+            try:
+                await pnl_notifier.check_and_notify(self.daily_pnl, self.open_positions)
+            except Exception:
+                pass
 
         except Exception as e:
             logger.error(f"Error monitoring exits: {str(e)}")
@@ -1308,6 +1737,36 @@ class AutoTraderService:
                         success = await self.execute_entry(entry_signal, portfolio_value)
                         if success:
                             logger.info(f"⚠️ No-News Scalp trade executed for {entry_signal['symbol']}")
+
+            # Bull Flag Breakout (Strategy 3) - continuation after consolidation
+            if self.bull_flag_breakout_enabled and len(self.open_positions) < self.max_positions:
+                for stock in ready_stocks:
+                    if len(self.open_positions) >= self.max_positions:
+                        break
+                    es = await self.check_bull_flag_entry(stock)
+                    if es:
+                        if await self.execute_entry(es, portfolio_value):
+                            logger.info(f"Bull Flag trade: {es['symbol']}")
+
+            # VWAP Bounce (Strategy 4) - institutional support
+            if self.vwap_bounce_enabled and len(self.open_positions) < self.max_positions:
+                for stock in ready_stocks:
+                    if len(self.open_positions) >= self.max_positions:
+                        break
+                    es = await self.check_vwap_bounce_entry(stock)
+                    if es:
+                        if await self.execute_entry(es, portfolio_value):
+                            logger.info(f"VWAP Bounce trade: {es['symbol']}")
+
+            # Opening Range Breakout (Strategy 5) - Gap-and-Go
+            if self.orb_enabled and len(self.open_positions) < self.max_positions:
+                for stock in ready_stocks:
+                    if len(self.open_positions) >= self.max_positions:
+                        break
+                    es = await self.check_orb_entry(stock)
+                    if es:
+                        if await self.execute_entry(es, portfolio_value):
+                            logger.info(f"ORB trade: {es['symbol']}")
 
             await self.monitor_exits(portfolio_value)
 
