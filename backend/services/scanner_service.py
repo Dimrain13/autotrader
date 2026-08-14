@@ -399,6 +399,32 @@ class ScannerService:
                 r['criteria_count'] = sum(1 for v in r['criteria_met'].values() if v)
                 r['meets_all_criteria'] = r['criteria_count'] == 5
                 r['ready_to_trade'] = r['meets_all_criteria']
+                # Ross Cameron alignment (2026-08-14): a stock with criteria_count==4
+                # missing only positive_news, but trading at extreme volume, infers its
+                # own catalyst. Ross trades the volume/price action, not the news
+                # headline. Without this, stocks whose catalyst is an SEC filing,
+                # reverse split, or foreign press release (not indexed by Google News)
+                # get locked out of the 5/5 ready pool and therefore strategies 1-5.
+                # Threshold: 10x normal volume = the move IS the catalyst.
+                if not r['meets_all_criteria'] and r['criteria_count'] == 4:
+                    cm_pre = r['criteria_met']
+                    only_news_missing = (
+                        not cm_pre.get('positive_news', True)
+                        and cm_pre.get('price_range', False)
+                        and cm_pre.get('pct_change', False)
+                        and cm_pre.get('volume_ratio', False)
+                        and cm_pre.get('float', False)
+                    )
+                    if only_news_missing and r.get('volume_ratio', 0) >= 10:
+                        r['criteria_met']['positive_news'] = True
+                        r['criteria_count'] = 5
+                        r['meets_all_criteria'] = True
+                        r['ready_to_trade'] = True
+                        logger.info(
+                            f"\U0001f4e1 {r['symbol']}: Catalyst inferred from volume "
+                            f"({r['pct_change']:.0f}% move, {r['volume_ratio']:.0f}x vol)"
+                            f" \u2014 promoting to 5/5 ready"
+                        )
                 # "No-Catalyst / Scalping Trade (No News)" candidate: every
                 # pillar EXCEPT news is verified-true (price/change/volume/
                 # float all real, not estimates) - a pure technical momentum
