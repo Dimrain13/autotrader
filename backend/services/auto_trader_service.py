@@ -71,9 +71,9 @@ class AutoTraderService:
         # 1-min candle's high-low range that must be rejected upper wick
         # (high - close) while in profit to count as a selling-pressure signal.
         self.daily_max_loss_pct = 0.01  # overridden below  # 1% max daily loss (Ross Cameron's conservative starting rule) - hard kill switch
-        self.max_consecutive_losses = 3  # "Three strikes" rule - done for the day
+        self.max_consecutive_losses = 3  # LEGACY (2026-08-14): consecutive-loss halt REMOVED - Ross has no such rule. Kept for state/status compat only.
         self.consecutive_loss_pnl = 0.0  # running $ P&L of the current losing streak
-        self.min_streak_loss_pct = 0.005  # streak must lose >=0.5% of portfolio before 3-strike halt fires (avoid halting on small losses / green days)
+        self.min_streak_loss_pct = 0.005  # LEGACY (2026-08-14): unused now that the 3-strike halt is removed.
 
         # Entry condition settings (adjustable)
         self.pullback_min_candles = 1  # Minimum red pullback candles
@@ -493,23 +493,12 @@ class AutoTraderService:
                 'consecutive_losses': self.consecutive_losses
             }
 
-        if self.consecutive_losses >= self.max_consecutive_losses:
-            streak_loss_pct = (self.consecutive_loss_pnl / self.starting_portfolio_value * 100) if self.starting_portfolio_value > 0 else 0.0
-            if streak_loss_pct <= -(self.min_streak_loss_pct * 100):
-                return {
-                    'can_trade': False,
-                    'reason': f'{self.consecutive_losses} consecutive losses (-{abs(streak_loss_pct):.2f}% streak) - done for the day',
-                    'daily_pnl': self.daily_pnl,
-                    'daily_pnl_pct': daily_pnl_pct,
-                    'consecutive_losses': self.consecutive_losses
-                }
-            else:
-                logger.info(
-                    f"ℹ️ {self.consecutive_losses} consecutive losses but streak is only "
-                    f"-{abs(streak_loss_pct):.2f}% (below {self.min_streak_loss_pct*100:.1f}% threshold) "
-                    f"— NOT halting (small losses, leaving room for green upside)"
-                )
-
+        # Ross Cameron alignment (2026-08-14): Ross does NOT stop trading after
+        # a fixed number of consecutive losses. His only "done for the day" trigger
+        # is the DAILY LOSS LIMIT (checked above). He takes many small losses in a
+        # row and keeps trading - the winners pay for the scratches.
+        # consecutive_losses / consecutive_loss_pnl are still tracked (see the exit
+        # path) for the daily audit report, but they no longer halt entries.
         return {
             'can_trade': True,
             'reason': 'Risk limits OK',
