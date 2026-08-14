@@ -1216,7 +1216,7 @@ async def process_auto_trading(request: Request):
         # instead of running a duplicate full 128-batch snapshot scan.
         scanner_results = await asyncio.to_thread(scanner_service.scan_market, criteria)
         account = await asyncio.to_thread(alpaca_service.get_account)
-        portfolio_value = account.get('portfolio_value', 0)
+        portfolio_value = account.get('margin_buying_power') or account.get('portfolio_value', 0)
         
         await auto_trader.process_scanner_results(scanner_results, portfolio_value)
         
