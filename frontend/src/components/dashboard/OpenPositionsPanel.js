@@ -11,7 +11,12 @@ const API = process.env.REACT_APP_BACKEND_URL + "/api";
 // scanner table (no longer matches scan criteria) becomes impossible to
 // sell from the Dashboard at all, since the chart's QuickTradePanel only
 // shows sell controls for the currently-selected symbol.
-export function OpenPositionsPanel({ positions, onOrderPlaced }) {
+//
+// Clicking a position row now ALSO selects that symbol (pulls up the 4-chart
+// grid) even when the symbol is NOT on the scanner list - so a held trade
+// that dropped off the scanner table is still fully chartable, not just
+// sellable.
+export function OpenPositionsPanel({ positions, onOrderPlaced, onSelect, selectedSymbol }) {
   const [placingSymbol, setPlacingSymbol] = useState(null);
   const [sellingAll, setSellingAll] = useState(false);
 
@@ -74,11 +79,16 @@ export function OpenPositionsPanel({ positions, onOrderPlaced }) {
       {positions.map((position) => {
         const plPositive = (position.unrealized_pl || 0) >= 0;
         const placing = placingSymbol === position.symbol;
+        const isSelected = selectedSymbol === position.symbol;
         return (
           <div
             key={position.symbol}
-            className="flex items-center gap-1.5 bg-[#0A0A0A] border border-neutral-800 rounded-md px-2 py-1 shrink-0"
+            onClick={() => onSelect?.(position.symbol)}
+            className={`flex items-center gap-1.5 bg-[#0A0A0A] border rounded-md px-2 py-1 shrink-0 cursor-pointer transition-colors ${
+              isSelected ? "border-[#00E599] bg-[#00E599]/10" : "border-neutral-800 hover:border-neutral-600"
+            }`}
             data-testid={`open-position-row-${position.symbol}`}
+            title={`View ${position.symbol} charts`}
           >
             <div className="flex flex-col leading-tight mr-1">
               <span className="font-mono text-xs font-bold text-neutral-200">{position.symbol}</span>
@@ -87,7 +97,7 @@ export function OpenPositionsPanel({ positions, onOrderPlaced }) {
               </span>
             </div>
             <button
-              onClick={() => sellPosition(position, 0.5)}
+              onClick={(e) => { e.stopPropagation(); sellPosition(position, 0.5); }}
               disabled={placing || sellingAll || position.qty < 2}
               data-testid={`open-position-sell-half-${position.symbol}`}
               title={position.qty < 2 ? "Position too small to split" : `Sell ~half (${Math.max(1, Math.round(position.qty * 0.5))} sh)`}
@@ -96,7 +106,7 @@ export function OpenPositionsPanel({ positions, onOrderPlaced }) {
               {placing ? "..." : "1/2"}
             </button>
             <button
-              onClick={() => sellPosition(position, 1)}
+              onClick={(e) => { e.stopPropagation(); sellPosition(position, 1); }}
               disabled={placing || sellingAll}
               data-testid={`open-position-sell-all-${position.symbol}`}
               className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#FF1A40] text-white hover:bg-[#FF1A40]/90 disabled:opacity-40 transition-colors"

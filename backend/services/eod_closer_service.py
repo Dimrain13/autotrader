@@ -83,7 +83,16 @@ class EODCloserService:
                 current_price = position['current_price']
                 unrealized_pl = position['unrealized_pl']
 
-                entry_time = await asyncio.to_thread(alpaca_service.get_position_entry_time, symbol)
+                # Prefer auto_trader state for accurate entry_time (Alpaca order history has limited lookback)
+                entry_time = None
+                try:
+                    from services.auto_trader_service import auto_trader
+                    at_pos = auto_trader.open_positions.get(symbol, {})
+                    entry_time = at_pos.get("entry_time")
+                except Exception:
+                    pass
+                if not entry_time:
+                    entry_time = await asyncio.to_thread(alpaca_service.get_position_entry_time, symbol)
 
                 try:
                     order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, qty, "sell")

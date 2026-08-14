@@ -87,7 +87,14 @@ export default function Trading({ account }) {
     daily_max_loss_pct: 5.0,
     no_news_scalp_enabled: true,
     no_news_position_size_pct: 25.0,
-    no_news_bailout_seconds: 60
+    no_news_bailout_seconds: 60,
+    bull_flag_breakout_enabled: true,
+    vwap_bounce_enabled: true,
+    orb_enabled: true,
+    tiered_sizing_enabled: true,
+    psych_level_partials_enabled: true,
+    volume_climax_exit_enabled: true,
+    ema9_dip_enabled: true
   });
   
   const [dollarAmountPerStock, setDollarAmountPerStock] = useState(() => {
@@ -308,7 +315,14 @@ export default function Trading({ account }) {
           daily_max_loss_pct: response.data.strategy?.daily_max_loss_pct || 5.0,
           no_news_scalp_enabled: response.data.strategy?.no_news_scalp_enabled ?? true,
           no_news_position_size_pct: response.data.strategy?.no_news_position_size_pct || 25.0,
-          no_news_bailout_seconds: response.data.strategy?.no_news_bailout_seconds || 60
+          no_news_bailout_seconds: response.data.strategy?.no_news_bailout_seconds || 60,
+          bull_flag_breakout_enabled: response.data.strategy?.bull_flag_breakout_enabled ?? true,
+          vwap_bounce_enabled: response.data.strategy?.vwap_bounce_enabled ?? true,
+          orb_enabled: response.data.strategy?.orb_enabled ?? true,
+          tiered_sizing_enabled: response.data.strategy?.tiered_sizing_enabled ?? true,
+          psych_level_partials_enabled: response.data.strategy?.psych_level_partials_enabled ?? true,
+          volume_climax_exit_enabled: response.data.strategy?.volume_climax_exit_enabled ?? true,
+          ema9_dip_enabled: response.data.strategy?.ema9_dip_enabled ?? true
         };
         setAutoTraderSettings(settings);
         // Keep the backend auto-trader's own reward:risk target calc in sync
@@ -602,74 +616,66 @@ export default function Trading({ account }) {
 
   const updateStockData = async (symbol, stock) => {
     try {
-      // Fetch only new bars (last 10 bars) for smooth updates
+      // Use the "since" parameter to only fetch bars newer than what we
+      // already have (backend supports it). Fall back to last 10 bars if
+      // we have no existing data yet.
+      const existingData = stockData[symbol];
+      const last1Min = existingData?.bars1Min?.length > 0
+        ? existingData.bars1Min[existingData.bars1Min.length - 1].timestamp : null;
+      const last5Min = existingData?.bars5Min?.length > 0
+        ? existingData.bars5Min[existingData.bars5Min.length - 1].timestamp : null;
+
+      const params1Min = last1Min
+        ? `timeframe=1Min&limit=100&since=${encodeURIComponent(last1Min)}`
+        : 'timeframe=1Min&limit=10';
+      const params5Min = last5Min
+        ? `timeframe=5Min&limit=100&since=${encodeURIComponent(last5Min)}`
+        : 'timeframe=5Min&limit=10';
+
       const [bars1MinResponse, bars5MinResponse, quoteResponse] = await Promise.all([
-        axios.get(`${API}/market/bars/${symbol}?timeframe=1Min&limit=10`),
-        axios.get(`${API}/market/bars/${symbol}?timeframe=5Min&limit=10`),
+        axios.get(`${API}/market/bars/${symbol}?${params1Min}`),
+        axios.get(`${API}/market/bars/${symbol}?${params5Min}`),
         axios.get(`${API}/market/quote/${symbol}`)
       ]);
-      
-      // Handle both old format (array) and new format ({bars: [], source: ''})
-      const newBars1Min = Array.isArray(bars1MinResponse.data) 
-        ? bars1MinResponse.data 
+
+      const newBars1Min = Array.isArray(bars1MinResponse.data)
+        ? bars1MinResponse.data
         : (bars1MinResponse.data.bars || []);
-      const newBars5Min = Array.isArray(bars5MinResponse.data) 
-        ? bars5MinResponse.data 
+      const newBars5Min = Array.isArray(bars5MinResponse.data)
+        ? bars5MinResponse.data
         : (bars5MinResponse.data.bars || []);
       const newQuote = quoteResponse.data;
-      
-      // Update existing data by appending new bars
+
+      if (newBars1Min.length === 0 && newBars5Min.length === 0) return;
+
       setStockData(prev => {
-        if (!prev[symbol]) return prev; // Stock not loaded yet
-        
-        const existingData = prev[symbol];
-        
-        // Merge new bars with existing (update existing timestamps, add new ones)
-        const updated1Min = [...existingData.bars1Min];
-        const updated5Min = [...existingData.bars5Min];
-        
-        // Add or update bars
-        newBars1Min.forEach(bar => {
-          const existingIdx = updated1Min.findIndex(b => b.timestamp === bar.timestamp);
-          if (existingIdx >= 0) {
-            // Update existing bar (price may have changed)
-            updated1Min[existingIdx] = bar;
-          } else {
-            updated1Min.push(bar);
-          }
-        });
-        
-        newBars5Min.forEach(bar => {
-          const existingIdx = updated5Min.findIndex(b => b.timestamp === bar.timestamp);
-          if (existingIdx >= 0) {
-            // Update existing bar (price may have changed)
-            updated5Min[existingIdx] = bar;
-          } else {
-            updated5Min.push(bar);
-          }
-        });
-        
-        // Sort by timestamp and keep only last N bars
+        if (!prev[symbol]) return prev;
+        const prevData = prev[symbol];
+
+        // With "since", new bars are strictly newer — just concat and sort
+        let updated1Min = [...prevData.bars1Min, ...newBars1Min];
+        let updated5Min = [...prevData.bars5Min, ...newBars5Min];
+
         updated1Min.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         updated5Min.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-        
-        const trimmed1Min = updated1Min.slice(-780); // keep the full 2-day window (see fetchStockData)
-        const trimmed5Min = updated5Min.slice(-156); // keep the full 2-day window (see fetchStockData)
-        
-        // Recalculate indicators with new data
-        let sma20 = existingData.sma20, sma50 = existingData.sma50, rsi = existingData.rsi, vwap = existingData.vwap;
-        
+
+        // Deduplicate (in case of overlap)
+        updated1Min = updated1Min.filter((b, i, arr) =>
+          i === 0 || b.timestamp !== arr[i - 1].timestamp);
+        updated5Min = updated5Min.filter((b, i, arr) =>
+          i === 0 || b.timestamp !== arr[i - 1].timestamp);
+
+        const trimmed1Min = updated1Min.slice(-390);
+        const trimmed5Min = updated5Min.slice(-78);
+
+        // Quick SMA20/SMA50
+        let sma20 = prevData.sma20, sma50 = prevData.sma50, vwap = prevData.vwap;
         if (trimmed5Min.length >= 20) {
-          const closes = trimmed5Min.slice(-20).map(b => b.close);
-          sma20 = closes.reduce((a, b) => a + b, 0) / closes.length;
+          sma20 = trimmed5Min.slice(-20).reduce((s, b) => s + b.close, 0) / 20;
         }
-        
         if (trimmed5Min.length >= 50) {
-          const closes = trimmed5Min.slice(-50).map(b => b.close);
-          sma50 = closes.reduce((a, b) => a + b, 0) / closes.length;
+          sma50 = trimmed5Min.slice(-50).reduce((s, b) => s + b.close, 0) / 50;
         }
-        
-        // Update VWAP
         if (trimmed1Min.length > 0) {
           let totalPV = 0, totalVolume = 0;
           trimmed1Min.forEach(bar => {
@@ -679,22 +685,22 @@ export default function Trading({ account }) {
           });
           vwap = totalVolume > 0 ? totalPV / totalVolume : vwap;
         }
-        
+
         return {
           ...prev,
           [symbol]: {
-            ...existingData, // Preserve existing properties like 'stock' and 'barsDaily'
+            ...prevData,
             bars1Min: trimmed1Min,
             bars5Min: trimmed5Min,
             quote: newQuote,
             sma20,
             sma50,
-            rsi: existingData.rsi, // Keep existing RSI for now
+            rsi: prevData.rsi,
             vwap
           }
         };
       });
-      
+
     } catch (error) {
       console.error(`Failed to update data for ${symbol}:`, error);
     }
@@ -707,8 +713,8 @@ export default function Trading({ account }) {
       // 5-min bars: 2 days * 78 bars/day = 156 bars
       // Daily bars: 30 days for longer-term trend (unrelated to the intraday window)
       const [bars1MinResponse, bars5MinResponse, barsDailyResponse, quoteResponse] = await Promise.all([
-        axios.get(`${API}/market/bars/${stock.symbol}?timeframe=1Min&limit=780`), // 2 days of 1-min bars
-        axios.get(`${API}/market/bars/${stock.symbol}?timeframe=5Min&limit=156`), // 2 days of 5-min bars
+        axios.get(`${API}/market/bars/${stock.symbol}?timeframe=1Min&limit=390`), // 2 days of 1-min bars
+        axios.get(`${API}/market/bars/${stock.symbol}?timeframe=5Min&limit=78`), // 2 days of 5-min bars
         axios.get(`${API}/market/bars/${stock.symbol}?timeframe=1Day&limit=30&use_fallback=false`), // 30 days of daily bars
         axios.get(`${API}/market/quote/${stock.symbol}`)
       ]);
@@ -1985,6 +1991,108 @@ export default function Trading({ account }) {
                     Auto-trade 4/5 no-catalyst gappers at {autoTraderSettings.no_news_position_size_pct || 25}% size, tiered stop, {autoTraderSettings.no_news_bailout_seconds || 60}s bailout - high T12 halt risk
                   </span>
                 </div>
+                <div className="h-px w-full bg-[#FF1A40]/20 my-2" />
+
+                {/* Bull Flag Breakout (Strategy 3) */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="bull-flag-enabled"
+                      checked={autoTraderSettings.bull_flag_breakout_enabled || false}
+                      onChange={(e) => updateAutoTraderSettings({ bull_flag_breakout_enabled: e.target.checked })}
+                      className="w-4 h-4 rounded border-[#FF1A40]/30 bg-[#121212] text-[#FF1A40]"
+                    />
+                    <label htmlFor="bull-flag-enabled" className="text-xs text-[#00E599] font-bold cursor-pointer uppercase">
+                      Bull Flag Breakout
+                    </label>
+                  </div>
+                  <span className="text-[10px] text-neutral-500">
+                    Enter on breakout from tight consolidation after surge
+                  </span>
+                </div>
+
+                {/* VWAP Bounce (Strategy 4) */}
+                <div className="flex flex-wrap items-center gap-3 mt-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="vwap-bounce-enabled"
+                      checked={autoTraderSettings.vwap_bounce_enabled || false}
+                      onChange={(e) => updateAutoTraderSettings({ vwap_bounce_enabled: e.target.checked })}
+                      className="w-4 h-4 rounded border-[#FF1A40]/30 bg-[#121212] text-[#FF1A40]"
+                    />
+                    <label htmlFor="vwap-bounce-enabled" className="text-xs text-[#00E599] font-bold cursor-pointer uppercase">
+                      VWAP Bounce
+                    </label>
+                  </div>
+                  <span className="text-[10px] text-neutral-500">
+                    Enter when stock bounces off VWAP (institutional support)
+                  </span>
+                </div>
+
+                {/* Opening Range Breakout (Strategy 5) */}
+                <div className="flex flex-wrap items-center gap-3 mt-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="orb-enabled"
+                      checked={autoTraderSettings.orb_enabled || false}
+                      onChange={(e) => updateAutoTraderSettings({ orb_enabled: e.target.checked })}
+                      className="w-4 h-4 rounded border-[#FF1A40]/30 bg-[#121212] text-[#FF1A40]"
+                    />
+                    <label htmlFor="orb-enabled" className="text-xs text-[#00E599] font-bold cursor-pointer uppercase">
+                      Opening Range Breakout
+                    </label>
+                  </div>
+                  <span className="text-[10px] text-neutral-500">
+                    Enter on breakout above first 30-min range (Gap-and-Go)
+                  </span>
+                </div>
+                <div className="h-px w-full bg-[#FF1A40]/20 my-2" />
+
+                {/* 9 EMA Dip Buy (Strategy 6) */}
+                <div className="flex flex-wrap items-center gap-3 mt-2">
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" id="ema9-dip-enabled"
+                      checked={autoTraderSettings.ema9_dip_enabled || false}
+                      onChange={(e) => updateAutoTraderSettings({ ema9_dip_enabled: e.target.checked })}
+                      className="w-4 h-4 rounded border-[#FF1A40]/30 bg-[#121212] text-[#FF1A40]" />
+                    <label htmlFor="ema9-dip-enabled" className="text-xs text-[#00E599] font-bold cursor-pointer uppercase">9 EMA Dip Buy</label>
+                  </div>
+                  <span className="text-[10px] text-neutral-500">Enter when stock dips to 9 EMA and bounces in uptrend</span>
+                </div>
+
+                {/* Exit Improvements */}
+                <div className="mt-3 p-2 bg-[#FF1A40]/5 rounded border border-[#FF1A40]/10">
+                  <div className="text-[10px] text-[#FF1A40] font-bold uppercase mb-2">Exit Improvements</div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" id="tiered-sizing"
+                        checked={autoTraderSettings.tiered_sizing_enabled || false}
+                        onChange={(e) => updateAutoTraderSettings({ tiered_sizing_enabled: e.target.checked })}
+                        className="w-3 h-3 rounded border-[#FF1A40]/30 bg-[#121212] text-[#FF1A40]" />
+                      <label htmlFor="tiered-sizing" className="text-[10px] text-neutral-300 cursor-pointer">Tiered Sizing (A+ 1.5x, B 0.6x)</label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" id="psych-partials"
+                        checked={autoTraderSettings.psych_level_partials_enabled || false}
+                        onChange={(e) => updateAutoTraderSettings({ psych_level_partials_enabled: e.target.checked })}
+                        className="w-3 h-3 rounded border-[#FF1A40]/30 bg-[#121212] text-[#FF1A40]" />
+                      <label htmlFor="psych-partials" className="text-[10px] text-neutral-300 cursor-pointer">Psych-Level Partials</label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" id="volume-climax"
+                        checked={autoTraderSettings.volume_climax_exit_enabled || false}
+                        onChange={(e) => updateAutoTraderSettings({ volume_climax_exit_enabled: e.target.checked })}
+                        className="w-3 h-3 rounded border-[#FF1A40]/30 bg-[#121212] text-[#FF1A40]" />
+                      <label htmlFor="volume-climax" className="text-[10px] text-neutral-300 cursor-pointer">Volume Climax Exit</label>
+                    </div>
+                  </div>
+                </div>
+
+
+
               </div>
             </div>
             )}
@@ -2394,16 +2502,28 @@ export default function Trading({ account }) {
             const roundedPrice = Math.round(currentPrice * 100) / 100;
             const roundedPctChange = Math.round(pctChange * 100) / 100;
             
-            // Calculate stop loss and profit target using user's settings
-            // If position exists, use actual entry price; otherwise use current price
-            const entryPrice = position ? position.avg_entry_price : roundedPrice;
-            const calculatedStopLoss = Math.round(entryPrice * (1 - stopLossPct / 100) * 100) / 100;
-            const calculatedProfitTarget = Math.round(entryPrice * (1 + takeProfitPct / 100) * 100) / 100;
-            
-            // Calculate trailing stop based on current price (trails from high)
-            const trailingStopPrice = stopType === 'trailing' 
-              ? Math.round(roundedPrice * (1 - trailingStopPct / 100) * 100) / 100
-              : null;
+            // Use the bot's REAL per-position levels when this is an open
+            // auto-trader position (enriched on the /positions response as
+            // `bot_levels`), so the chart draws the exact structural stop,
+            // target, psych target and live trailing stop the bot is trading
+            // against - NOT a flat % recomputed from localStorage. Fall back
+            // to the user's flat settings only when there's no bot level.
+            const botLevels = position?.bot_levels || null;
+            const entryPrice = botLevels?.entry_price
+              ?? (position ? position.avg_entry_price : roundedPrice);
+            const calculatedStopLoss = botLevels?.stop_loss
+              ?? Math.round(entryPrice * (1 - stopLossPct / 100) * 100) / 100;
+            const calculatedProfitTarget = botLevels?.profit_target
+              ?? Math.round(entryPrice * (1 + takeProfitPct / 100) * 100) / 100;
+            const psychTarget = botLevels?.psych_target || null;
+            const partialSold = !!botLevels?.partial_sell_done;
+
+            // Trailing stop: use the bot's live trailing/breakeven level if
+            // present; otherwise fall back to the flat trailing calculation.
+            const trailingStopPrice = botLevels?.trailing_stop
+              ?? (stopType === 'trailing'
+                ? Math.round(roundedPrice * (1 - trailingStopPct / 100) * 100) / 100
+                : null);
             
             return (
               <StockChartCard
@@ -2418,6 +2538,8 @@ export default function Trading({ account }) {
                 stopLoss={calculatedStopLoss}
                 profitTarget={calculatedProfitTarget}
                 trailingStop={trailingStopPrice}
+                psychTarget={psychTarget}
+                partialSold={partialSold}
                 stopLossPct={stopLossPct}
                 takeProfitPct={takeProfitPct}
                 trailingStopPct={trailingStopPct}

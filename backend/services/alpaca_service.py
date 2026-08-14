@@ -1,6 +1,6 @@
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, GetOrdersRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus, OrderClass, QueryOrderStatus
+from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, StopOrderRequest, GetOrdersRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus, OrderClass, QueryOrderStatus, OrderType
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import StockBarsRequest, StockQuotesRequest, StockLatestQuoteRequest
@@ -411,13 +411,63 @@ class AlpacaService:
             )
         
             order = self.trading_client.submit_order(order_data=order_data)
+            order_id = str(order.id)
+            
+            # Poll for fill — low-float stocks often fill partially.
+            # We need the actual filled quantity before placing a stop.
+            import time
+            max_wait = 5.0  # seconds
+            poll_interval = 0.25
+            elapsed = 0
+            filled_qty = 0
+            filled_avg = None
+            final_status = order.status.value
+            
+            while elapsed < max_wait:
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+                try:
+                    upd = self.trading_client.get_order_by_id(order_id)
+                    final_status = upd.status.value
+                    filled_qty = float(upd.filled_qty or 0)
+                    filled_avg = float(upd.filled_avg_price) if upd.filled_avg_price else None
+                    if upd.status.value in ('filled', 'partially_filled'):
+                        if upd.status.value == 'filled':
+                            break
+                        # Partially filled — keep waiting unless this is
+                        # a sell order (sell partial fills are fine)
+                    elif upd.status.value in ('canceled', 'rejected', 'expired'):
+                        break
+                except Exception:
+                    pass
+            
+            # If still not filled after timeout, cancel the remainder
+            # and work with whatever filled (if any).
+            if final_status in ('new', 'accepted', 'pending_new', 'partially_filled'):
+                try:
+                    self.trading_client.cancel_order_by_id(order_id)
+                    final_status = 'canceled'
+                    # Re-read to get final fill before cancel
+                    try:
+                        upd = self.trading_client.get_order_by_id(order_id)
+                        filled_qty = float(upd.filled_qty or 0)
+                        filled_avg = float(upd.filled_avg_price) if upd.filled_avg_price else None
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            
+            if filled_avg is None:
+                filled_avg = float(order.filled_avg_price) if order.filled_avg_price else None
+            
             return {
-                "order_id": str(order.id),
+                "order_id": order_id,
                 "symbol": order.symbol,
                 "qty": float(order.qty) if order.qty else None,
+                "filled_qty": filled_qty,
                 "side": order.side.value,
-                "status": order.status.value,
-                "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None,
+                "status": final_status,
+                "filled_avg_price": filled_avg,
                 "created_at": order.created_at.isoformat() if order.created_at else None
             }
     
@@ -625,11 +675,33 @@ class AlpacaService:
                 "filled_qty": float(order.filled_qty) if order.filled_qty else 0,
                 "side": order.side.value,
                 "status": order.status.value,
+                "type": order.type.value if order.type else None,
+                "stop_price": float(order.stop_price) if order.stop_price else None,
                 "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None,
                 "created_at": order.created_at.isoformat() if order.created_at else None
             }
             for order in orders
         ]
+
+    def place_stop_order(self, symbol, qty, stop_price, side="sell"):
+        """Standalone stop-loss — used when bracket order fails."""
+        if not self.trading_client:
+            return None
+        try:
+            stop_price = round(stop_price, 2)
+            tif = TimeInForce.GTC if self._is_extended_hours() else TimeInForce.DAY
+            order_data = StopOrderRequest(
+                symbol=symbol, qty=qty,
+                side=OrderSide.SELL if side.lower() == "sell" else OrderSide.BUY,
+                time_in_force=tif, type=OrderType.STOP, stop_price=stop_price,
+            )
+            order = self.trading_client.submit_order(order_data=order_data)
+            logger.info(f"Standalone stop: {symbol} @ ")
+            return {"order_id": str(order.id), "stop_price": stop_price}
+        except Exception as e:
+            logger.error(f"Standalone stop failed for {symbol}: {e}")
+            return None
+
 
     def get_open_orders(self, symbol: Optional[str] = None):
         """

@@ -65,11 +65,14 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
     return [...results, { ...pinnedRow, _stale: true }];
   })());
 
-  const currentPrice = selectedSymbol
-    ? trades[selectedSymbol]?.price || displayResults.find((r) => r.symbol === selectedSymbol)?.current_price || null
-    : null;
   const selectedPosition = selectedSymbol
     ? (positions || []).find((p) => p.symbol === selectedSymbol) || null
+    : null;
+  const currentPrice = selectedSymbol
+    ? trades[selectedSymbol]?.price
+      || displayResults.find((r) => r.symbol === selectedSymbol)?.current_price
+      || selectedPosition?.current_price
+      || null
     : null;
 
   // Stop-loss / take-profit / trailing-stop lines drawn on every chart tile
@@ -78,14 +81,25 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
   // the same trade's levels look identical everywhere in the app. Once a
   // position is open, the lines anchor to the REAL fill price instead of
   // the current price so they reflect the actual trade, not a moving target.
-  const entryPrice = selectedPosition?.avg_entry_price || currentPrice;
+  // Use the bot's REAL per-position levels (enriched as `bot_levels` on the
+  // /positions response) when the selected symbol is an open auto-trader
+  // position, so the dashboard charts draw the exact same structural stop /
+  // target / psych target / live trail the bot is trading against - matching
+  // the Trading page. Fall back to flat % settings only when no bot level.
+  const botLevels = selectedPosition?.bot_levels || null;
+  const entryPrice = botLevels?.entry_price ?? (selectedPosition?.avg_entry_price || currentPrice);
   const levels = entryPrice ? {
     entry: entryPrice,
-    stopLoss: Math.round(entryPrice * (1 - getDashboardSetting("stopLossPct", 1.0) / 100) * 100) / 100,
-    profitTarget: Math.round(entryPrice * (1 + getDashboardSetting("takeProfitPct", 2.0) / 100) * 100) / 100,
-    trailingStop: (localStorage.getItem("stopType") || "trailing") === "trailing" && currentPrice
-      ? Math.round(currentPrice * (1 - getDashboardSetting("trailingStopPct", 1.0) / 100) * 100) / 100
-      : null,
+    stopLoss: botLevels?.stop_loss
+      ?? Math.round(entryPrice * (1 - getDashboardSetting("stopLossPct", 1.0) / 100) * 100) / 100,
+    profitTarget: botLevels?.profit_target
+      ?? Math.round(entryPrice * (1 + getDashboardSetting("takeProfitPct", 2.0) / 100) * 100) / 100,
+    trailingStop: botLevels?.trailing_stop
+      ?? ((localStorage.getItem("stopType") || "trailing") === "trailing" && currentPrice
+        ? Math.round(currentPrice * (1 - getDashboardSetting("trailingStopPct", 1.0) / 100) * 100) / 100
+        : null),
+    psychTarget: botLevels?.psych_target ?? null,
+    partialSold: !!botLevels?.partial_sell_done,
   } : null;
 
   useEffect(() => {
@@ -102,7 +116,7 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
   return (
     <div className="flex flex-col h-[calc(100vh-64px)]" data-testid="dashboard-page">
       <AccountStrip account={account} positions={positions} streamConnected={streamConnected} scanner={scanner} />
-      <OpenPositionsPanel positions={positions} onOrderPlaced={onOrderPlaced} />
+      <OpenPositionsPanel positions={positions} onOrderPlaced={onOrderPlaced} onSelect={setSelectedSymbol} selectedSymbol={selectedSymbol} />
 
       <div className="flex-1 p-2 min-h-0">
         <ResizablePanelGroup direction="horizontal" autoSaveId="dashboard-main-columns" id="dashboard-main-columns-group">
@@ -134,8 +148,15 @@ export default function Dashboard({ account, positions, scanner, onOrderPlaced }
           <ResizablePanel id="dashboard-panel-charts" order={2} defaultSize={68} minSize={40} className="min-h-0 flex flex-col pl-2">
             {selectedSymbol && (
               <div className="flex items-center justify-between mb-1 px-1 shrink-0">
-                <div className="text-sm font-bold text-neutral-200" data-testid="selected-symbol-header">
-                  {selectedSymbol}
+                <div className="flex items-center gap-2">
+                  <div className="text-sm font-bold text-neutral-200" data-testid="selected-symbol-header">
+                    {selectedSymbol}
+                  </div>
+                  {levels?.partialSold && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#FFB800]/20 text-[#FFB800] border border-[#FFB800]/40 shrink-0" title="1st target hit — holding runner to final target">
+                      RUNNER
+                    </span>
+                  )}
                 </div>
                 <QuickTradePanel
                   symbol={selectedSymbol}

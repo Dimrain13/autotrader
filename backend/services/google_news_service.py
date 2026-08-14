@@ -339,6 +339,52 @@ class GoogleNewsService:
                     if not is_relevant:
                         # Skip irrelevant news (e.g., "RIOT" about actual riots, not Riot Platforms stock)
                         continue
+
+                    # EXCHANGE-COLLISION GUARD (fixed 2026-08-13): the same
+                    # ticker can exist on multiple exchanges (e.g. JWEL =
+                    # NASDAQ "Jowell Global Ltd." vs JWEL.TO TSX "Jamieson
+                    # Wellness Inc."). Alpaca only trades US equities
+                    # (NASDAQ/NYSE/AMEX), so ANY headline carrying a
+                    # foreign-exchange suffix on our symbol is guaranteed to
+                    # be about a different company - reject it outright
+                    # regardless of the generic ticker/company-name match
+                    # above.
+                    foreign_suffix_pattern = re.compile(
+                        r'\b' + re.escape(symbol) + r'\.(TO|V|CN|AX|L|HK|SI|SS|SZ|PA|DE|MI)\b',
+                        re.IGNORECASE
+                    )
+                    if foreign_suffix_pattern.search(title):
+                        logger.debug(f"{symbol}: rejecting foreign-exchange collision headline: {title[:80]}")
+                        continue
+
+                    # COMPANY-NAME CORROBORATION: when we know the correct
+                    # company name from Alpaca (the authoritative exchange
+                    # source), require the headline to reference it too -
+                    # not just the bare ticker - whenever the match so far
+                    # came from a generic ticker/keyword hit rather than an
+                    # explicit NASDAQ/NYSE mention. This catches collisions
+                    # that don't carry an obvious ".TO"-style suffix in the
+                    # headline text.
+                    if company_name and 'nasdaq' not in title_lower and 'nyse' not in title_lower:
+                        # Strip common corporate suffixes to get a
+                        # significant, comparable word from the company name.
+                        stopwords = {
+                            'inc', 'inc.', 'ltd', 'ltd.', 'corp', 'corp.',
+                            'corporation', 'company', 'co', 'co.', 'plc',
+                            'group', 'holdings', 'holding', 'limited',
+                            'the', 'ordinary', 'shares', 'class', 'a', 'b'
+                        }
+                        name_words = [
+                            w.strip('().,').lower()
+                            for w in company_name.split()
+                            if w.strip('().,').lower() not in stopwords and len(w.strip('().,')) > 2
+                        ]
+                        if name_words and not any(w in title_lower for w in name_words):
+                            logger.debug(
+                                f"{symbol}: rejecting headline with no corroborating company-name match "
+                                f"(expected one of {name_words[:3]}): {title[:80]}"
+                            )
+                            continue
                     
                     # ENHANCED SENTIMENT SCORING - shared helper (same catalyst
                     # bar used for the Alpaca/Benzinga news check, so both

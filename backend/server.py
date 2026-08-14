@@ -263,6 +263,27 @@ async def get_account():
 async def get_positions():
     try:
         positions = await asyncio.to_thread(alpaca_service.get_positions)
+        # Enrich each position with the auto-trader's REAL per-position levels
+        # (structural stop, trailing stop, profit target, psych target, runner
+        # state) so the frontend charts draw the exact same levels the bot is
+        # trading against, instead of recomputing flat % lines from localStorage.
+        bot_levels = getattr(auto_trader, 'open_positions', {}) or {}
+        for pos in positions:
+            symbol = pos.get('symbol')
+            bp = bot_levels.get(symbol)
+            if not bp:
+                continue
+            pos['bot_levels'] = {
+                'entry_price': bp.get('entry_price'),
+                'stop_loss': bp.get('stop_loss'),
+                'trailing_stop': bp.get('trailing_stop'),
+                'profit_target': bp.get('profit_target'),
+                'psych_target': bp.get('psych_target'),
+                'partial_sell_done': bp.get('partial_sell_done', False),
+                'breakeven_stop_active': bp.get('breakeven_stop_active', False),
+                'highest_price': bp.get('highest_price'),
+                'strategy': bp.get('strategy'),
+            }
         return positions
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -862,14 +883,22 @@ async def get_auto_trader_status():
                 "tiered_sizing_enabled": auto_trader.tiered_sizing_enabled,
                 "psych_level_partials_enabled": auto_trader.psych_level_partials_enabled,
                 "volume_climax_exit_enabled": auto_trader.volume_climax_exit_enabled,
-                "ema9_dip_enabled": auto_trader.ema9_dip_enabled,  # 60
+                "ema9_dip_enabled": auto_trader.ema9_dip_enabled,
+                "red_candle_exit_enabled": auto_trader.red_candle_exit_enabled,
+                "extension_bar_spike_exit_enabled": auto_trader.extension_bar_spike_exit_enabled,
+                "flat_top_breakout_enabled": auto_trader.flat_top_breakout_enabled,
+                "afternoon_5min_only": auto_trader.afternoon_5min_only,  # 60
             "bull_flag_breakout_enabled": auto_trader.bull_flag_breakout_enabled,
             "vwap_bounce_enabled": auto_trader.vwap_bounce_enabled,
             "orb_enabled": auto_trader.orb_enabled,
             "tiered_sizing_enabled": auto_trader.tiered_sizing_enabled,
             "psych_level_partials_enabled": auto_trader.psych_level_partials_enabled,
             "volume_climax_exit_enabled": auto_trader.volume_climax_exit_enabled,
-            "ema9_dip_enabled": auto_trader.ema9_dip_enabled  # 60
+            "ema9_dip_enabled": auto_trader.ema9_dip_enabled,
+                "red_candle_exit_enabled": auto_trader.red_candle_exit_enabled,
+                "extension_bar_spike_exit_enabled": auto_trader.extension_bar_spike_exit_enabled,
+                "flat_top_breakout_enabled": auto_trader.flat_top_breakout_enabled,
+                "afternoon_5min_only": auto_trader.afternoon_5min_only  # 60
         },
         "entry_conditions": {
             "pullback_min_candles": auto_trader.pullback_min_candles,
@@ -937,7 +966,12 @@ async def update_auto_trader_settings(settings: dict):
                 "no_news_bailout_seconds": auto_trader.no_news_bailout_seconds,
                 "bull_flag_breakout_enabled": auto_trader.bull_flag_breakout_enabled,
                 "vwap_bounce_enabled": auto_trader.vwap_bounce_enabled,
-                "orb_enabled": auto_trader.orb_enabled
+                "orb_enabled": auto_trader.orb_enabled,
+                "ema9_dip_enabled": auto_trader.ema9_dip_enabled,
+                "red_candle_exit_enabled": auto_trader.red_candle_exit_enabled,
+                "extension_bar_spike_exit_enabled": auto_trader.extension_bar_spike_exit_enabled,
+                "flat_top_breakout_enabled": auto_trader.flat_top_breakout_enabled,
+                "afternoon_5min_only": auto_trader.afternoon_5min_only
             }
         }
     except Exception as e:
@@ -1501,6 +1535,30 @@ async def get_news(symbol: str, limit: int = 5):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+async def exit_monitor_loop():
+    """Dedicated exit engine - the SINGLE owner of position exits.
+
+    Runs reconcile_open_positions() (adopt any Alpaca position not tracked,
+    cover accidental shorts) + monitor_exits() (structural stops, psych
+    targets, partial-profit runners, trailing/breakeven, extension-spike and
+    red-candle exits) on a tight 5s cadence, independent of auto_trader.active
+    and of the 60s entry loop. This replaces the old split-brain where
+    auto_trader.monitor_exits() and position_monitor.monitor_positions() both
+    sold the same positions and stepped on each other (stale share counts,
+    insufficient-qty cascades, over-sells into shorts, orphaned positions).
+    """
+    logger.info("🔁 Exit Monitor loop started (5s interval)")
+    while True:
+        try:
+            await auto_trader.reconcile_open_positions()
+            account = await asyncio.to_thread(alpaca_service.get_account)
+            portfolio_value = account.get('margin_buying_power') or account.get('portfolio_value', 0)
+            await auto_trader.monitor_exits(portfolio_value)
+        except Exception as e:
+            logger.error(f"Exit monitor loop error: {str(e)}")
+        await asyncio.sleep(5)
+
+
 async def auto_trader_loop():
     """
     Real background loop for the auto-trader (Phase 3 #9). Runs unattended
@@ -1602,14 +1660,17 @@ async def startup_services():
         logger.warning("⛔ Auto-trader force-disabled on startup - trading mode is LIVE")
 
 
-    position_monitor.start()
-    # Start monitoring loop in background
-    asyncio.create_task(position_monitor.monitor_positions())
+    # Exit engine: single owner. position_monitor is intentionally NOT
+    # started - its monitor_positions() loop was the second half of the
+    # split-brain that over-sold positions (AMPY short) and left others
+    # orphaned. Its _sell_with_dedup() helper is still used for manual
+    # sells via the /orders endpoint, but it no longer auto-sells.
+    asyncio.create_task(exit_monitor_loop())
     
     # Start end-of-day closer service
     eod_closer.start()
     asyncio.create_task(eod_closer.monitor_eod())
-    logger.info("🚀 Position Monitor Service started")
+    logger.info("🚀 Exit Monitor (single-owner) started")
 
     # Start the real auto-trader background loop (Phase 3 #9) - runs
     # unattended on the VPS, independent of the frontend/browser being open.
@@ -1621,39 +1682,22 @@ async def startup_services():
     # paper/live trading-mode toggle (see market_data_stream_service.py).
     market_data_stream.start()
 
-    # IMPORTANT: Auto-sync all existing positions to monitoring on startup
-    # This ensures stop-loss and take-profit are active for ALL positions
+    # IMPORTANT: Reconcile all existing Alpaca positions into the single
+    # exit engine on startup. The dedicated exit loop's first tick would do
+    # this anyway, but doing it here (before the loop starts) means a held
+    # position is adopted within seconds of boot, not up to 5s later, and
+    # any accidental short is covered immediately.
     try:
+        await auto_trader.reconcile_open_positions()
         existing_positions = await asyncio.to_thread(alpaca_service.get_positions)
         if existing_positions:
-            synced_count = 0
-            for pos in existing_positions:
-                symbol = pos['symbol']
-                if symbol not in position_monitor.monitored_positions:
-                    config = {
-                        'entry_price': pos['avg_entry_price'],
-                        'shares': pos['qty'],
-                        'stop_type': 'trailing',
-                        'stop_loss_pct': 1.0,
-                        'trailing_stop_pct': 1.0,
-                        'take_profit_pct': 2.0,
-                        'partial_sell_pct': 50.0,
-                        'partial_sell_trigger_pct': 2.0,
-                        'move_to_breakeven': True
-                    }
-                    position_monitor.add_position(symbol, config)
-                    synced_count += 1
-            if synced_count > 0:
-                logger.info(f"📊 Auto-synced {synced_count} existing position(s) to monitoring")
-
-        # Immediately start streaming live data for any open positions -
-        # no need to wait for the auto-trader loop's next scan cycle.
-        # priority=True: open positions must never lose their trade/quote
-        # slot to a scanner-only candidate.
-        if existing_positions:
+            # Immediately start streaming live data for any open positions -
+            # no need to wait for the auto-trader loop's next scan cycle.
+            # priority=True: open positions must never lose their trade/quote
+            # slot to a scanner-only candidate.
             await market_data_stream.subscribe([p['symbol'] for p in existing_positions], priority=True)
     except Exception as e:
-        logger.error(f"Failed to auto-sync positions on startup: {e}")
+        logger.error(f"Failed to reconcile positions on startup: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

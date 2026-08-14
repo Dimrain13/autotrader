@@ -70,8 +70,10 @@ class AutoTraderService:
         self.topping_tail_wick_ratio = 0.5  # Ross Cameron "topping tail": fraction of a
         # 1-min candle's high-low range that must be rejected upper wick
         # (high - close) while in profit to count as a selling-pressure signal.
-        self.daily_max_loss_pct = 0.01  # 1% max daily loss (Ross Cameron's conservative starting rule) - hard kill switch
+        self.daily_max_loss_pct = 0.01  # overridden below  # 1% max daily loss (Ross Cameron's conservative starting rule) - hard kill switch
         self.max_consecutive_losses = 3  # "Three strikes" rule - done for the day
+        self.consecutive_loss_pnl = 0.0  # running $ P&L of the current losing streak
+        self.min_streak_loss_pct = 0.005  # streak must lose >=0.5% of portfolio before 3-strike halt fires (avoid halting on small losses / green days)
 
         # Entry condition settings (adjustable)
         self.pullback_min_candles = 1  # Minimum red pullback candles
@@ -116,7 +118,7 @@ class AutoTraderService:
         # shorter bailout. ON by default (2026-02, user request) - still
         # opt-out via Settings/Trading page if a purely news-catalyst-only
         # strategy is preferred.
-        self.no_news_scalp_enabled = True
+        self.no_news_scalp_enabled = False  # Ross requires a catalyst - no-news scalps disabled (2026-08-14)
 
         # Bull Flag Breakout (Strategy 3)
         self.bull_flag_breakout_enabled = True
@@ -135,6 +137,50 @@ class AutoTraderService:
         self.orb_enabled = True
         self.orb_minutes = 30
         self.orb_bailout_seconds = 90
+
+        # 9 EMA Dip Buy (Strategy 6) — Ross Cameron's dip-and-rip
+        # Stock in uptrend pulls back to 9 EMA, bounces green → enter
+        self.ema9_dip_enabled = True
+        self.ema9_dip_period = 9
+        self.ema9_dip_tolerance_pct = 0.015  # within 1.5% of 9 EMA counts as "dip"
+        self.ema9_dip_bailout_seconds = 90
+
+        # Ross Cameron exit rules
+        self.red_candle_exit_enabled = True
+        self.extension_bar_spike_exit_enabled = True
+        self.extension_bar_spike_multiplier = 3.0
+
+        # Front-Side Momentum / Squeeze Breakout (Strategy 8)
+        # Ross Cameron enters on breakout STRENGTH without waiting for a pullback.
+        # Three sub-patterns: whole-dollar ($1.00) breakout, blue-sky ATH breakout,
+        # and MA-wall (SMA200/50) breakout. Gated on 4+/5 scanner score.
+        # Smaller position (25% BP vs 50%) — Ross sizes smaller on front-side entries
+        # because there's no structural pullback retest for stop placement.
+        self.front_side_breakout_enabled = True
+        self.front_side_breakout_position_pct = 0.25  # 25% of margin BP (Ross: smaller size on front-side)
+        self.front_side_breakout_bailout_seconds = 90
+        self.front_side_dollar_breakout_threshold = 0.10  # within 10% of $1.00 counts
+        self.front_side_max_stop_distance_pct = 0.12  # wide structural stops (whole-dollar/ATH/MA-wall), compensated by 25% sizing
+
+        # Flat Top Breakout (Ross Cameron pattern #2)
+        self.flat_top_breakout_enabled = True
+        self.flat_top_lookback_bars = 30
+        self.flat_top_max_range_pct = 0.03
+        self.flat_top_min_tests = 2
+
+        # After 11:30 AM ET -> 5-min chart only
+        self.afternoon_5min_only = True
+
+        # Feature flags referenced by the /auto-trader/status endpoint and the
+        # frontend toggles but whose underlying logic is not yet implemented.
+        # Defined here (default False) so the status endpoint doesn't 500 with
+        # AttributeError and so a future toggle flip is a no-op rather than a
+        # crash. See SKILL notes: tiered A+/A/B sizing, multi-tier round-number
+        # partials, and volume-climax exit are documented-but-unbuilt.
+        self.tiered_sizing_enabled = False
+        self.psych_level_partials_enabled = False
+        self.volume_climax_exit_enabled = False
+
         self.no_news_position_size_pct = 0.25  # Hard-cap: 25% of the normal calculated size (spec range was 25-50%, defaulting to the more conservative end since there's no catalyst backing the move)
         self.no_news_bailout_seconds = 60  # Shorter than the normal 90s bailout - no catalyst means even less reason to wait for follow-through
         # Tiered max stop-distance safety cap (price_min, price_max, max_pct).
@@ -171,12 +217,14 @@ class AutoTraderService:
         self.profitable_exit_info = {}  # {symbol: {'exit_price': float, 'capture_ratio': float, 'entry_price': float, 'profit_target': float}}
         self.conservative_re_entry = set()  # symbols flagged for reduced-size re-entry (partial capture)
 
-        # Trading Hours: 7 AM - 3:30 PM EST
-        # Entries allowed and positions managed throughout this window,
-        # then all positions closed at 3:30 PM
+        # Trading Hours (Ross Cameron alignment): 7 AM - 1 PM EST.
+        # Ross is a morning trader - flat by ~1 PM. Entries stop at 11:30 AM
+        # (he switches to 5-min and winds down); all positions closed by 1 PM.
         self.trading_start_hour = 7
-        self.trading_end_hour = 15  # 3 PM (will check minutes too)
-        self.trading_end_minute = 30  # 3:30 PM - auto-sell all positions
+        self.trading_end_hour = 13  # 1 PM (will check minutes too)
+        self.trading_end_minute = 0   # 1:00 PM - wind down, close all positions
+        self.entry_cutoff_hour = 11   # no new entries after 11:30 AM ET
+        self.entry_cutoff_minute = 30
 
         self._state_collection = db.auto_trader_state
 
@@ -192,7 +240,9 @@ class AutoTraderService:
                     'active': self.active,
                     'open_positions': self.open_positions,
                     'daily_pnl': self.daily_pnl,
+                    'daily_max_loss_pct': self.daily_max_loss_pct,
                     'consecutive_losses': self.consecutive_losses,
+                    'consecutive_loss_pnl': self.consecutive_loss_pnl,
                     'starting_portfolio_value': self.starting_portfolio_value,
                     'last_reset_date': self.last_reset_date.isoformat() if self.last_reset_date else None,
                     'trade_history': self.trade_history,
@@ -221,6 +271,7 @@ class AutoTraderService:
             self.open_positions = doc.get('open_positions', {}) or {}
             self.daily_pnl = doc.get('daily_pnl', 0.0)
             self.consecutive_losses = doc.get('consecutive_losses', 0)
+            self.consecutive_loss_pnl = doc.get('consecutive_loss_pnl', 0.0)
             self.starting_portfolio_value = doc.get('starting_portfolio_value', 0.0)
             last_reset = doc.get('last_reset_date')
             self.last_reset_date = date_cls.fromisoformat(last_reset) if last_reset else None
@@ -246,6 +297,14 @@ class AutoTraderService:
                 self.profitable_exit_info = doc.get('profitable_exit_info', {}) or {}
             self.conservative_re_entry = set(doc.get('conservative_re_entry', []) or [])
 
+            saved_max_loss = doc.get("daily_max_loss_pct")
+            if saved_max_loss is not None:
+                saved_ml = float(saved_max_loss)
+                if saved_ml > 100:  # absurd sentinel (e.g. 99900) - reset to default 1%
+                    logger.warning(f"⚠️ daily_max_loss_pct in state was {saved_ml}% (disabled sentinel) - resetting to 1%")
+                    self.daily_max_loss_pct = 0.01
+                else:
+                    self.daily_max_loss_pct = saved_ml / 100 if saved_ml > 1 else saved_ml
             logger.info(
                 f"🔄 Restored auto-trader state: active={self.active}, "
                 f"{len(self.open_positions)} open position(s), daily P&L ${self.daily_pnl:.2f}, "
@@ -323,6 +382,24 @@ class AutoTraderService:
             self.vwap_bounce_enabled = bool(settings['vwap_bounce_enabled'])
         if 'orb_enabled' in settings:
             self.orb_enabled = bool(settings['orb_enabled'])
+        if 'ema9_dip_enabled' in settings:
+            self.ema9_dip_enabled = bool(settings['ema9_dip_enabled'])
+        if 'red_candle_exit_enabled' in settings:
+            self.red_candle_exit_enabled = bool(settings['red_candle_exit_enabled'])
+        if 'extension_bar_spike_exit_enabled' in settings:
+            self.extension_bar_spike_exit_enabled = bool(settings['extension_bar_spike_exit_enabled'])
+        if 'flat_top_breakout_enabled' in settings:
+            self.flat_top_breakout_enabled = bool(settings['flat_top_breakout_enabled'])
+        if 'front_side_breakout_enabled' in settings:
+            self.front_side_breakout_enabled = bool(settings['front_side_breakout_enabled'])
+        if 'afternoon_5min_only' in settings:
+            self.afternoon_5min_only = bool(settings['afternoon_5min_only'])
+        if 'tiered_sizing_enabled' in settings:
+            self.tiered_sizing_enabled = bool(settings['tiered_sizing_enabled'])
+        if 'psych_level_partials_enabled' in settings:
+            self.psych_level_partials_enabled = bool(settings['psych_level_partials_enabled'])
+        if 'volume_climax_exit_enabled' in settings:
+            self.volume_climax_exit_enabled = bool(settings['volume_climax_exit_enabled'])
 
         logger.info(f"Auto-trader settings updated: {settings}")
 
@@ -343,6 +420,7 @@ class AutoTraderService:
             logger.info(f"🔄 Resetting daily tracking for {today}")
             self.daily_pnl = 0.0
             self.consecutive_losses = 0
+            self.consecutive_loss_pnl = 0.0
             self.starting_portfolio_value = portfolio_value
             self.last_reset_date = today
             self.trade_history = []
@@ -376,6 +454,22 @@ class AutoTraderService:
 
         return True
 
+    def is_past_entry_cutoff(self) -> bool:
+        """True at/after the entry cutoff (11:30 AM ET).
+
+        Ross Cameron winds down after 11:30 AM - the 1-min chart gets too
+        choppy and the high-volume opening window is over. No new entries
+        after this point; existing positions are still managed by the exit
+        loop and wound down by the trading-window end (1 PM).
+        """
+        eastern = pytz.timezone('US/Eastern')
+        now_et = datetime.now(eastern)
+        if now_et.hour > self.entry_cutoff_hour:
+            return True
+        if now_et.hour == self.entry_cutoff_hour and now_et.minute >= self.entry_cutoff_minute:
+            return True
+        return False
+
     def check_risk_limits(self, portfolio_value: float) -> Dict:
         """
         Check if risk limits are breached (server-side hard kill switch).
@@ -400,13 +494,21 @@ class AutoTraderService:
             }
 
         if self.consecutive_losses >= self.max_consecutive_losses:
-            return {
-                'can_trade': False,
-                'reason': f'{self.consecutive_losses} consecutive losses - done for the day',
-                'daily_pnl': self.daily_pnl,
-                'daily_pnl_pct': daily_pnl_pct,
-                'consecutive_losses': self.consecutive_losses
-            }
+            streak_loss_pct = (self.consecutive_loss_pnl / self.starting_portfolio_value * 100) if self.starting_portfolio_value > 0 else 0.0
+            if streak_loss_pct <= -(self.min_streak_loss_pct * 100):
+                return {
+                    'can_trade': False,
+                    'reason': f'{self.consecutive_losses} consecutive losses (-{abs(streak_loss_pct):.2f}% streak) - done for the day',
+                    'daily_pnl': self.daily_pnl,
+                    'daily_pnl_pct': daily_pnl_pct,
+                    'consecutive_losses': self.consecutive_losses
+                }
+            else:
+                logger.info(
+                    f"ℹ️ {self.consecutive_losses} consecutive losses but streak is only "
+                    f"-{abs(streak_loss_pct):.2f}% (below {self.min_streak_loss_pct*100:.1f}% threshold) "
+                    f"— NOT halting (small losses, leaving room for green upside)"
+                )
 
         return {
             'can_trade': True,
@@ -477,6 +579,18 @@ class AutoTraderService:
             'prev_macd': prev_macd,
             'prev_signal': prev_signal
         }
+
+    def _calculate_ema(self, closes, period):
+        """Calculate EMA series. Returns list same length as closes with None padding at start."""
+        if len(closes) < period:
+            return None
+        mult = 2.0 / (period + 1)
+        ema = [None] * (period - 1)
+        sma = sum(closes[:period]) / period
+        ema.append(sma)
+        for i in range(period, len(closes)):
+            ema.append((closes[i] - ema[-1]) * mult + ema[-1])
+        return ema
 
     def _nearest_psych_level(self, price: float, buffer: float = 0.02) -> float:
         """
@@ -893,18 +1007,18 @@ class AutoTraderService:
             # scalping frequency.
             bars = await self._get_real_bars(symbol, timeframe="1Min", limit=100)
             if not bars or len(bars) < 50:
-                logger.debug(f"{symbol}: Skipped - insufficient real market data")
+                logger.info(f"[ENTRY-REJECT] {symbol}: Skipped - insufficient real market data")
                 return None
 
             criteria_count = stock.get('criteria_count', 0)
             if criteria_count < 5:
-                logger.debug(f"{symbol}: Only {criteria_count}/5 criteria met - need 5/5")
+                logger.info(f"[ENTRY-REJECT] {symbol}: Only {criteria_count}/5 criteria met - need 5/5")
                 return None
 
             pullback_check = self.check_first_pullback(bars)
             if self.require_micro_pullback:
                 if not pullback_check['is_valid']:
-                    logger.debug(f"{symbol}: No valid first-pullback pattern - {pullback_check.get('reason', 'n/a')}")
+                    logger.info(f"[ENTRY-REJECT] {symbol}: No valid first-pullback pattern - {pullback_check.get('reason', 'n/a')}")
                     return None
                 entry_price = pullback_check['entry_price']
                 stop_loss_price = pullback_check['stop_loss_price']
@@ -914,45 +1028,45 @@ class AutoTraderService:
 
             risk_per_share = entry_price - stop_loss_price
             if risk_per_share <= 0:
-                logger.debug(f"{symbol}: Invalid structural stop (>= entry price) - skipping")
+                logger.info(f"[ENTRY-REJECT] {symbol}: Invalid structural stop (>= entry price) - skipping")
                 return None
 
             risk_pct = risk_per_share / entry_price
             if risk_pct > self.max_stop_distance_pct:
-                logger.debug(f"{symbol}: Structural stop too far ({risk_pct*100:.1f}% > {self.max_stop_distance_pct*100:.0f}% max) - too risky, skipping")
+                logger.info(f"[ENTRY-REJECT] {symbol}: Structural stop too far ({risk_pct*100:.1f}% > {self.max_stop_distance_pct*100:.0f}% max) - too risky, skipping")
                 return None
 
             volume_check = self.check_volume_confirmation(bars)
             if self.require_volume_confirmation and not volume_check['confirmed']:
-                logger.debug(f"{symbol}: No volume confirmation (green after red)")
+                logger.info(f"[ENTRY-REJECT] {symbol}: No volume confirmation (green after red)")
                 return None
 
             closes = [b['close'] for b in bars]
             macd_check = self.calculate_macd(closes)
             if self.require_macd_crossover:
                 if not macd_check['crossover']:
-                    logger.debug(f"{symbol}: No MACD crossover - no entry")
+                    logger.info(f"[ENTRY-REJECT] {symbol}: No MACD crossover - no entry")
                     return None
             else:
                 if not macd_check['bullish']:
-                    logger.debug(f"{symbol}: MACD bearish - no entry")
+                    logger.info(f"[ENTRY-REJECT] {symbol}: MACD bearish - no entry")
                     return None
 
             sma_check = self.check_sma_confirmation(bars)
             if self.require_sma_crossover:
                 if not sma_check['crossover']:
-                    logger.debug(f"{symbol}: No SMA{self.sma_period}/50 crossover - no entry")
+                    logger.info(f"[ENTRY-REJECT] {symbol}: No SMA{self.sma_period}/50 crossover - no entry")
                     return None
             else:
                 if not sma_check['confirmed']:
-                    logger.debug(f"{symbol}: SMA{self.sma_period} below SMA50 - no entry")
+                    logger.info(f"[ENTRY-REJECT] {symbol}: SMA{self.sma_period} below SMA50 - no entry")
                     return None
 
             if self.require_bull_flag:
                 from services.scanner_service import scanner_service
                 has_bull_flag = scanner_service.check_bull_flag_pattern(bars)
                 if not has_bull_flag:
-                    logger.debug(f"{symbol}: No bull flag pattern - no entry")
+                    logger.info(f"[ENTRY-REJECT] {symbol}: No bull flag pattern - no entry")
                     return None
 
             # --- Take-Profit logic (Ross Cameron HOD-retest method) ---
@@ -967,7 +1081,7 @@ class AutoTraderService:
             min_required_target = entry_price + (self.reward_risk_ratio * risk_per_share)
             if hod_target is not None:
                 if hod_target < min_required_target:
-                    logger.debug(f"{symbol}: HOD retest (${hod_target:.2f}) closer than {self.reward_risk_ratio}:1 minimum (${min_required_target:.2f}) - setup not high quality enough, skipping")
+                    logger.info(f"[ENTRY-REJECT] {symbol}: HOD retest (${hod_target:.2f}) closer than {self.reward_risk_ratio}:1 minimum (${min_required_target:.2f}) - setup not high quality enough, skipping")
                     return None
                 target_price = hod_target
             else:
@@ -1145,6 +1259,378 @@ class AutoTraderService:
             logger.error(f"ORB check error {symbol}: {e}")
             return None
 
+    async def check_9_ema_dip_entry(self, stock: Dict) -> Optional[Dict]:
+        """
+        Strategy 6: 9 EMA Dip Buy (Ross Cameron's dip-and-rip).
+
+        Rules:
+        - Stock must be in an uptrend with a clear 9 EMA
+        - Price pulls back to within tolerance of the 9 EMA
+        - Bounces off 9 EMA with a green candle
+        - Volume expansion on the bounce candle vs prior 5 candles
+        - Enter on the bounce, stop at 9 EMA -1%, target 2:1 R:R
+        """
+        if not self.ema9_dip_enabled:
+            return None
+        symbol = stock.get('symbol')
+        try:
+            if symbol in self.open_positions:
+                return None
+
+            if stock.get("criteria_count", 0) < 4:
+                logger.info(f"[9EMA-DIP-REJECT] {symbol}: Only {stock.get("criteria_count", 0)}/5 criteria met - need 4+")
+                return None
+
+            bars = await self._get_real_bars(symbol, timeframe="1Min", limit=100)
+            if not bars or len(bars) < (self.ema9_dip_period + 5):
+                return None
+
+            closes = [b['close'] for b in bars]
+            highs = [b['high'] for b in bars]
+            lows = [b['low'] for b in bars]
+
+            # Calculate 9 EMA on closes
+            ema9 = self._calculate_ema(closes, self.ema9_dip_period)
+            if ema9 is None or len(ema9) < 5:
+                return None
+            current_ema9 = ema9[-1]
+
+            # Must be in uptrend: close > EMA9 and EMA9 sloping up
+            last_close = closes[-1]
+            if last_close < current_ema9:
+                # Not above EMA — could be a breakdown, skip
+                return None
+            if len(ema9) < 10:
+                return None
+            ema9_slope = (ema9[-1] - ema9[-10]) / ema9[-10]
+            if ema9_slope < 0.001:  # EMA9 must be rising (0.1% over 10 bars)
+                return None
+
+            # Check: did price recently dip TO the 9 EMA?
+            # Look at last 5 bars for a low that touched within tolerance
+            dip_found = False
+            dip_bar_idx = -1
+            for i in range(len(bars) - 1, max(0, len(bars) - 6), -1):
+                bar_low = lows[i]
+                dist_pct = abs(bar_low - current_ema9) / current_ema9
+                if dist_pct <= self.ema9_dip_tolerance_pct:
+                    dip_found = True
+                    dip_bar_idx = i
+                    break
+
+            if not dip_found:
+                return None
+
+            # Bounce confirmation: the latest bar must be green (close > open)
+            latest_bar = bars[-1]
+            if latest_bar['close'] <= latest_bar['open']:
+                return None
+
+            # Volume expansion on bounce: current bar volume > 1.3x avg of last 5 bars
+            volumes = [b['volume'] for b in bars]
+            recent_vol = volumes[-6:-1]
+            avg_vol = sum(recent_vol) / len(recent_vol) if recent_vol else 0
+            if avg_vol > 0 and latest_bar['volume'] < avg_vol * 1.3:
+                return None
+
+            # Entry: at current price (the bounce candle's close or current)
+            entry_price = last_close
+            # Stop: 9 EMA -1% for wiggle room
+            stop_loss_price = round(current_ema9 * 0.99, 2)
+            risk_per_share = entry_price - stop_loss_price
+            if risk_per_share <= 0:
+                return None
+
+            risk_pct = risk_per_share / entry_price
+            if risk_pct > self.max_stop_distance_pct:
+                return None
+
+            # MACD / SMA confirmation
+            mc = self.calculate_macd(closes)
+            if self.require_macd_crossover and not mc['crossover']:
+                return None
+            elif not self.require_macd_crossover and not mc['bullish']:
+                return None
+
+            sc = self.check_sma_confirmation(bars)
+            if self.require_sma_crossover and not sc['crossover']:
+                return None
+            elif not self.require_sma_crossover and not sc['confirmed']:
+                return None
+
+            # Target: 2:1 R:R
+            target = entry_price + (self.reward_risk_ratio * risk_per_share)
+
+            logger.info(
+                f"9-EMA DIP ENTRY: {symbol} @ ${entry_price:.2f} | "
+                f"EMA9=${current_ema9:.2f} | Stop=${stop_loss_price:.2f} | "
+                f"Risk={risk_pct*100:.1f}% | Target=${target:.2f}"
+            )
+            return {
+                "symbol": symbol,
+                "entry_price": entry_price,
+                "stop_loss_price": stop_loss_price,
+                "target_price": target,
+                "risk_per_share": risk_per_share,
+                "criteria_count": stock.get("criteria_count", 5),
+                "is_9_ema_dip": True,
+                "ema9_dip": {"ema9": current_ema9, "dip_bar": dip_bar_idx},
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        except Exception as e:
+            logger.error(f"9 EMA Dip check error {symbol}: {e}")
+            return None
+
+    async def check_front_side_breakout(self, stock):
+        """
+        Strategy 8: Front-Side Momentum / Squeeze Breakout.
+        Ross Cameron enters on breakout STRENGTH without waiting for a pullback.
+
+        Three sub-patterns (modeled on Ross's Aug 10-12 trades):
+          1. WHOLE-DOLLAR BREAKOUT (SCKT): sub-$1 stock squeezing through $1.00.
+             Entry on break of $1.10, stop below $1.00. Ross: "once these are
+             holding over a dollar, they can get interesting."
+          2. BLUE SKY / ATH BREAKOUT (FRTT): break above all-time high or multi-
+             month resistance with volume expansion. Ross: "blue sky setup over
+             $4.09, all-time highs, which I like." Entry on breakout candle,
+             stop below prior resistance.
+          3. MA-WALL BREAKOUT (RMCF): stock pushing through SMA200/50 with
+             visible bid support. Ross: "I noticed big bidders at $1.66-1.68."
+             Our approximation: price crossing above SMA on 1-min candle with
+             volume > 1.5x avg. Entry on cross, stop below the MA.
+
+        Gate: scanner score 4+/5 (needs momentum already confirmed).
+        NO pullback required — entry on the breakout candle.
+        Position: 25% of margin BP (smaller than First Pullback's 50%).
+        """
+        if not self.front_side_breakout_enabled:
+            return None
+
+        symbol = stock.get("symbol")
+        try:
+            if symbol in self.open_positions:
+                return None
+
+            criteria_count = stock.get("criteria_count", 0)
+            if criteria_count < 4:
+                return None
+
+            # 250 bars (not 100) so SMA200 is actually computable — the MA-wall
+            # breakout sub-pattern checks SMA200 first, but with limit=100 the
+            # `len(closes) >= 200` guard made sma200 permanently None.
+            bars = await self._get_real_bars(symbol, timeframe="1Min", limit=250)
+            if not bars or len(bars) < 30:
+                return None
+
+            closes = [b["close"] for b in bars]
+            highs = [b["high"] for b in bars]
+            lows = [b["low"] for b in bars]
+            volumes = [b.get("volume", 0) for b in bars]
+
+            last_close = closes[-1]
+            last_high = highs[-1]
+            last_low = lows[-1]
+            last_volume = volumes[-1]
+            prev_close = closes[-2] if len(closes) >= 2 else last_close
+
+            # Average volume over last 20 bars
+            avg_vol = sum(volumes[-21:-1]) / max(1, len(volumes[-21:-1]))
+            if avg_vol <= 0:
+                avg_vol = 1
+            vol_expansion = last_volume / avg_vol if avg_vol > 0 else 0
+
+            # Compute SMAs
+            def _sma(data, period):
+                if len(data) < period:
+                    return None
+                return sum(data[-period:]) / period
+
+            sma20 = _sma(closes, 20)
+            sma50 = _sma(closes, 50)
+            sma200 = _sma(closes, 200) if len(closes) >= 200 else None
+
+            entry_price = None
+            stop_loss_price = None
+            pattern_name = None
+            pattern_detail = {}
+
+            # --- SUB-PATTERN 1: Whole-Dollar Breakout ---
+            # Stock trading below $1, now breaking through. Ross SCKT: 50c→$1.00→$4.00
+            if (prev_close < 1.00 and last_close >= 1.00 and
+                    last_close <= 1.10 and vol_expansion >= 1.2):
+                entry_price = last_close
+                stop_loss_price = 0.98  # tight stop below the dollar barrier
+                pattern_name = "Whole-Dollar Breakout"
+                pattern_detail = {
+                    "type": "dollar_breakout",
+                    "prev_close": prev_close,
+                    "vol_expansion": round(vol_expansion, 2),
+                }
+                logger.info(
+                    f"[FRONT-SIDE] {symbol}: Whole-dollar breakout! "
+                    f"${prev_close:.2f} → ${last_close:.2f} (vol {vol_expansion:.1f}x)"
+                )
+
+            # --- SUB-PATTERN 2: Blue Sky / ATH Breakout ---
+            # Price breaking above multi-month high or all-time high.
+            # Ross FRTT: $4.09 ATH, "I punched it right about there"
+            if entry_price is None:
+                lookback = min(390, len(bars))  # one day of 1-min bars
+                period_high = max(highs[-lookback:-1]) if lookback > 1 else last_high
+                if (last_close > period_high and
+                        last_high > period_high and
+                        vol_expansion >= 1.3):
+                    entry_price = last_close
+                    stop_loss_price = period_high * 0.995  # tight stop below prior resistance
+                    pattern_name = "Blue Sky / ATH Breakout"
+                    pattern_detail = {
+                        "type": "blue_sky",
+                        "prior_high": round(period_high, 4),
+                        "vol_expansion": round(vol_expansion, 2),
+                    }
+                    logger.info(
+                        f"[FRONT-SIDE] {symbol}: Blue-sky ATH breakout! "
+                        f"${last_close:.2f} > prior high ${period_high:.2f} (vol {vol_expansion:.1f}x)"
+                    )
+
+            # --- SUB-PATTERN 3: MA-Wall Breakout ---
+            # Price pushing through SMA200/50 with volume. Ross RMCF: SMA200 at $1.70
+            if entry_price is None:
+                for ma_name, ma_val in [("SMA200", sma200), ("SMA50", sma50)]:
+                    if ma_val is None:
+                        continue
+                    # Price must have been BELOW the MA, then broke above on this candle
+                    if (prev_close < ma_val and last_close > ma_val and
+                            vol_expansion >= 1.5):
+                        entry_price = last_close
+                        stop_loss_price = ma_val * 0.995  # tight stop below the MA
+                        pattern_name = f"{ma_name}-Wall Breakout"
+                        pattern_detail = {
+                            "type": "ma_wall",
+                            "ma": ma_name,
+                            "ma_value": round(ma_val, 4),
+                            "vol_expansion": round(vol_expansion, 2),
+                        }
+                        logger.info(
+                            f"[FRONT-SIDE] {symbol}: {ma_name}-wall breakout! "
+                            f"${last_close:.2f} crossing above {ma_name} ${ma_val:.2f} (vol {vol_expansion:.1f}x)"
+                        )
+                        break
+
+            if entry_price is None:
+                return None
+
+            # Risk sanity check
+            risk_per_share = entry_price - stop_loss_price
+            if risk_per_share <= 0:
+                logger.info(f"[FRONT-SIDE-REJECT] {symbol}: Invalid stop (>= entry) for {pattern_name}")
+                return None
+
+            risk_pct = risk_per_share / entry_price
+            # Front-side breakouts (whole-dollar / ATH / MA-wall) use WIDE
+            # structural stops anchored to the breakout level — Ross's own rule
+            # is "stop below $1.00" on a $1.10 entry (~11% risk). The tight 3%
+            # cap is for pullback-based strategies with a nearby structural low;
+            # applying it here made the whole-dollar breakout dead above $1.01.
+            # Risk is compensated by the smaller 25% position size. A generous
+            # 12% sanity cap still rejects absurd stops.
+            max_front_side_stop = getattr(self, 'front_side_max_stop_distance_pct', 0.12)
+            if risk_pct > max_front_side_stop:
+                logger.info(
+                    f"[FRONT-SIDE-REJECT] {symbol}: Stop too far ({risk_pct*100:.1f}% > "
+                    f"{max_front_side_stop*100:.0f}%) for {pattern_name}"
+                )
+                return None
+
+            # MACD filter (lighter than First Pullback — just need bullish, not crossover)
+            mc = self.calculate_macd(closes)
+            if not mc["bullish"]:
+                logger.info(f"[FRONT-SIDE-REJECT] {symbol}: MACD not bullish for {pattern_name}")
+                return None
+
+            # Price above SMA20 (trend filter)
+            if sma20 and last_close < sma20:
+                logger.info(f"[FRONT-SIDE-REJECT] {symbol}: Price below SMA20 for {pattern_name}")
+                return None
+
+            target = entry_price + (self.reward_risk_ratio * risk_per_share)
+            logger.info(
+                f"⚡ FRONT-SIDE ENTRY: {symbol} @ ${entry_price:.2f} "
+                f"[{pattern_name}] | Stop=${stop_loss_price:.2f} | Target=${target:.2f}"
+            )
+
+            return {
+                "symbol": symbol,
+                "entry_price": entry_price,
+                "stop_loss_price": stop_loss_price,
+                "target_price": target,
+                "risk_per_share": risk_per_share,
+                "criteria_count": criteria_count,
+                "is_front_side_breakout": True,
+                "front_side": pattern_detail,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"Front-side breakout check error {symbol}: {e}")
+            return None
+
+    async def check_flat_top_breakout(self, stock):
+        if not self.flat_top_breakout_enabled:
+            return None
+        symbol = stock.get("symbol")
+        try:
+            if symbol in self.open_positions:
+                return None
+            if stock.get("criteria_count", 0) < 4:
+                return None
+            bars = await self._get_real_bars(symbol, timeframe="1Min", limit=self.flat_top_lookback_bars)
+            if not bars or len(bars) < 10:
+                return None
+            highs = [b["high"] for b in bars]
+            closes = [b["close"] for b in bars]
+            volumes = [b["volume"] for b in bars]
+            recent = highs[-self.flat_top_lookback_bars:]
+            max_h = max(recent)
+            tol = max_h * self.flat_top_max_range_pct
+            tests = sum(1 for h in recent if h >= max_h - tol)
+            if tests < self.flat_top_min_tests:
+                return None
+            latest = bars[-1]
+            if latest["high"] <= max_h:
+                return None
+            avg_vol = sum(volumes[-6:-1]) / 5 if len(volumes) >= 6 else volumes[-2]
+            if avg_vol > 0 and latest["volume"] < avg_vol * 1.5:
+                return None
+            entry_price = round(max_h + 0.01, 2)
+            # Structural stop = the BASE of the flat-top consolidation (the
+            # low of the bars that tested resistance), NOT a flat 3% under the
+            # high. A flat 3%-under-the-high stop made risk always exceed
+            # max_stop_distance_pct, so this strategy could never fire.
+            flat_top_bars = [b for b in bars if b["high"] >= max_h - tol]
+            base = min(b["low"] for b in flat_top_bars) if flat_top_bars else max_h * (1 - self.flat_top_max_range_pct)
+            stop_loss_price = round(base, 2)
+            risk_per_share = entry_price - stop_loss_price
+            if risk_per_share <= 0:
+                return None
+            if (risk_per_share / entry_price) > self.max_stop_distance_pct:
+                return None
+            mc = self.calculate_macd(closes)
+            if self.require_macd_crossover and not mc["crossover"]:
+                return None
+            elif not self.require_macd_crossover and not mc["bullish"]:
+                return None
+            sc = self.check_sma_confirmation(bars)
+            if self.require_sma_crossover and not sc["crossover"]:
+                return None
+            elif not self.require_sma_crossover and not sc["confirmed"]:
+                return None
+            target = entry_price + (self.reward_risk_ratio * risk_per_share)
+            logger.info("FLAT TOP BREAKOUT: %s @ $%.2f | Res=$%.2f (%d tests) | Target=$%.2f", symbol, entry_price, max_h, tests, target)
+            return {"symbol": symbol, "entry_price": entry_price, "stop_loss_price": stop_loss_price, "target_price": target, "risk_per_share": risk_per_share, "criteria_count": stock.get("criteria_count", 5), "is_flat_top_breakout": True, "flat_top": {"resistance": max_h, "tests": tests}, "timestamp": datetime.now(timezone.utc).isoformat()}
+        except Exception as e:
+            logger.error("Flat Top Breakout check error %s: %s", symbol, e)
+            return None
+
     async def check_no_news_scalp_entry(self, stock: Dict) -> Optional[Dict]:
         """
         "Scalping Trade (No News)" entry path - a stock hitting every OTHER
@@ -1238,6 +1724,10 @@ class AutoTraderService:
             if is_no_news_scalp:
                 # Hard-reduced size - no catalyst backing this move
                 shares = max(1, int(shares * self.no_news_position_size_pct))
+            if signal.get('is_front_side_breakout'):
+                # Smaller size - Ross sizes smaller on front-side entries
+                # because there's no structural pullback retest for stop placement
+                shares = max(1, int(shares * self.front_side_breakout_position_pct))
 
             # Conservative re-entry sizing: if this symbol already had a
             # partial-capture profitable exit today, halve the position.
@@ -1251,6 +1741,19 @@ class AutoTraderService:
                 shares = conservative_shares
                 self.conservative_re_entry.discard(symbol)  # one-time flag
 
+            # Minimum position value: skip trades below $500 or 0.5% of
+            # portfolio. Prevents entering with scraps when buying power
+            # is depleted by other positions.
+            position_value = shares * entry_price
+            min_position_value = max(500.0, portfolio_value * 0.005)
+            if position_value < min_position_value:
+                logger.info(
+                    f"   ⏭ {symbol}: Position value ${position_value:,.2f} "
+                    f"below minimum ${min_position_value:,.0f} — skipping "
+                    f"(buying power likely depleted by other positions)"
+                )
+                return False
+
             if shares < 1:
                 logger.warning(f"Position size too small for {symbol}")
                 return False
@@ -1259,60 +1762,126 @@ class AutoTraderService:
             profit_target = signal['target_price']
             psych_target = signal.get('psych_target_price')
 
-            # ALWAYS place a REAL bracket order (resting stop-loss + take-
-            # profit legs on the exchange) immediately at entry, not just a
-            # plain market buy watched later by the software monitor loop
-            # below (user feedback, 2026-07: "there should have been a stop
-            # loss put in place at the time of buying, same with take
-            # profit" - found after two manually-placed positions sat with
-            # ZERO resting protective order for their first tick(s) while
-            # only a software poll watched, during which a wide bid/ask
-            # spread had already baked in a large loss). The structural
-            # stop/2:1 target computed above become the bracket's legs;
-            # `monitor_exits()` below still fully manages the smarter
-            # dynamic behavior (breakout-bailout timer, psych/partial
-            # targets, trailing-to-breakeven) on top - the bracket is just
-            # the immediate hard floor. `sell_with_retry` force-cancels this
-            # resting bracket leg before any software-triggered sell (see
-            # its "insufficient qty" handling below), so the two coexist
-            # safely exactly like the manual-order flow in server.py.
+            # --- ENTRY FLOW: market buy → short delay → standalone stop ---
+            # Bracket orders were brittle: stop legs invisible to Alpaca queries,
+            # standalone stops rejected as "wash trades" when bracket legs existed,
+            # and the verification/fallback branches caused unprotected positions
+            # (BWEN: -$3,710, 2026-08-11).
+            #
+            # Single-path replacement:
+            # 1. Plain market buy
+            # 2. Short delay (~200ms) to let Alpaca settle the fill — placing
+            #    orders back-to-back can trigger "wash trade" rejections
+            # 3. Place standalone stop-loss order immediately
+            # 4. If stop fails, emergency sell — NEVER hold unprotected
+            #
+            # Profit targets are handled dynamically by monitor_exits()
+            # (psych levels, topping tails, trailing stops) — no static
+            # take-profit limit order needed or wanted.
             # Ross Cameron rule: never enter without a stop-loss on the exchange.
-            bracket_ok = False
-            try:
-                order = await asyncio.to_thread(
-                    alpaca_service.place_bracket_order, symbol, shares, initial_stop, profit_target
-                )
-                if order and order.get('order_id'):
-                    try:
-                        open_orders = await asyncio.to_thread(alpaca_service.get_open_orders, symbol)
-                        has_stop = any(o.get('type') == 'stop' or o.get('stop_price') for o in open_orders)
-                        if has_stop:
-                            bracket_ok = True
-                            logger.info(f"🛡️ {symbol}: Bracket stop-loss verified on exchange")
-                        else:
-                            logger.error(f"❌ {symbol}: Bracket placed but no stop-loss leg found")
-                    except Exception:
-                        bracket_ok = True  # verification failed, trust the bracket
-            except Exception as bracket_err:
-                logger.error(f"❌ {symbol}: Bracket order FAILED: {bracket_err}")
 
-            if not bracket_ok:
-                logger.warning(f"🔧 {symbol}: Bracket failed — entering with standalone stop")
-                order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "buy")
-                if order and order.get('order_id'):
+            # Step 1: Market buy (now polls for fill — returns filled_qty)
+            order = await asyncio.to_thread(
+                alpaca_service.place_market_order, symbol, shares, "buy"
+            )
+            if not order or not order.get('order_id'):
+                logger.error(f"❌ {symbol}: Market buy FAILED — aborting entry")
+                return False
+
+            filled_qty = order.get('filled_qty', 0)
+            if filled_qty <= 0:
+                logger.error(
+                    f"❌ {symbol}: Market buy filled 0 shares — "
+                    f"order {order.get('status', '?')} — aborting entry"
+                )
+                return False
+
+            # Step 2: Use ACTUAL filled quantity, not requested. Low-float
+            # stocks often partially fill. Using requested shares for the
+            # stop order would be rejected (more shares than held).
+            actual_shares = int(filled_qty)
+            logger.info(
+                f"   📊 {symbol}: Filled {actual_shares}/{shares} shares "
+                f"@ avg ${order.get('filled_avg_price', entry_price)}"
+            )
+
+            # Step 3: Place standalone stop-loss for the ACTUAL filled shares
+            stop_order = await asyncio.to_thread(
+                alpaca_service.place_stop_order, symbol, actual_shares, initial_stop
+            )
+            if not stop_order:
+                # Log the stop failure reason — helps diagnose why stops aren't placing
+                logger.warning(
+                    f"   ⚠️  {symbol}: Standalone stop placement FAILED — "
+                    f"checking for existing orders"
+                )
+                # Check if the stop rejection was a "wash trade" —
+                # meaning Alpaca says an opposite-side sell order already
+                # exists. That IS the stop — the order was placed but
+                # rejected as duplicate. The position IS protected.
+                try:
+                    open_orders = await asyncio.to_thread(
+                        alpaca_service.get_open_orders, symbol
+                    ) or []
+                    existing_stop = next(
+                        (o for o in open_orders
+                         if str(o.get('side', '')).lower() == 'sell'
+                         and str(o.get('type', '')).lower() == 'stop'),
+                        None
+                    )
+                except Exception:
+                    existing_stop = None
+
+                if existing_stop:
+                    logger.info(
+                        f"   ✅ {symbol}: Wash-trade response — stop IS live "
+                        f"(order {str(existing_stop.get('order_id', ''))[:12]} @ "
+                        f"${existing_stop.get('stop_price') or 0:.2f})"
+                    )
+                else:
+                    # No existing stop found, but also no confirmed placement.
+                    # Give it one more try with a short delay.
+                    import asyncio as _asyncio
+                    await _asyncio.sleep(0.5)
                     stop_order = await asyncio.to_thread(
-                        alpaca_service.place_stop_order, symbol, shares, initial_stop
+                        alpaca_service.place_stop_order,
+                        symbol, actual_shares, initial_stop
                     )
                     if not stop_order:
-                        logger.error(f"❌ {symbol}: CRITICAL — no stop-loss could be placed. Position is UNPROTECTED.")
+                        # CRITICAL: truly unprotected — emergency sell
+                        logger.critical(
+                            f"🚨 {symbol}: Stop-loss FAILED after retry — "
+                            f"selling {actual_shares} shares immediately (UNPROTECTED)"
+                        )
+                        emergency_sell = await asyncio.to_thread(
+                            alpaca_service.place_market_order,
+                            symbol, actual_shares, "sell"
+                        )
+                        if emergency_sell and emergency_sell.get('order_id'):
+                            logger.critical(
+                                f"🚨 {symbol}: Emergency sell placed — "
+                                f"order {emergency_sell['order_id']}"
+                            )
+                            self.exited_today.add(symbol)
+                            self.entries_today[symbol] = self.entries_today.get(symbol, 0) + 1
+                            await self.save_state()
+                            return False
+                        else:
+                            logger.critical(
+                                f"🚨 {symbol}: EMERGENCY SELL FAILED — "
+                                f"position may still be open UNPROTECTED"
+                            )
+                return False
+
+            logger.info(f"🛡️ {symbol}: Stop-loss placed at ${initial_stop:.2f} (structural: pullback low)")
 
             if order and order.get('order_id'):
                 self.open_positions[symbol] = {
                     'order_id': order['order_id'],
                     'symbol': symbol,
                     'entry_price': entry_price,
-                    'shares': shares,
-                    'original_shares': shares,
+                    'shares': actual_shares,
+                    'original_shares': actual_shares,
                     'stop_loss': initial_stop,
                     'trailing_stop': initial_stop,
                     'highest_price': entry_price,
@@ -1327,8 +1896,14 @@ class AutoTraderService:
                     'is_bull_flag': signal.get('is_bull_flag', False),
                     'is_vwap_bounce': signal.get('is_vwap_bounce', False),
                     'is_orb': signal.get('is_orb', False),
+                    'is_flat_top_breakout': signal.get('is_flat_top_breakout', False),
+                    'is_9_ema_dip': signal.get('is_9_ema_dip', False),
+                    'is_front_side_breakout': signal.get('is_front_side_breakout', False),
                     'strategy': (
                         'Bull Flag Breakout' if signal.get('is_bull_flag')
+                        else 'Front-Side Breakout' if signal.get('is_front_side_breakout')
+                        else 'Flat Top Breakout' if signal.get('is_flat_top_breakout')
+                        else '9 EMA Dip Buy' if signal.get('is_9_ema_dip')
                         else 'VWAP Bounce' if signal.get('is_vwap_bounce')
                         else 'Opening Range Breakout' if signal.get('is_orb')
                         else ('Scalping Trade (No News)' if is_no_news_scalp
@@ -1342,7 +1917,7 @@ class AutoTraderService:
                 await self.save_state()
 
                 tag = "⚠️ AUTO-BUY (No-News Scalp)" if is_no_news_scalp else "✅ AUTO-BUY"
-                logger.info(f"{tag}: {symbol} - {shares} shares @ ${entry_price:.2f}")
+                logger.info(f"{tag}: {symbol} - {actual_shares} shares @ ${entry_price:.2f}")
                 try:
                     pnl_notifier.send_entry(symbol, shares, entry_price, "Auto-Trader")
                 except Exception:
@@ -1362,16 +1937,30 @@ class AutoTraderService:
             logger.error(f"Error executing entry for {signal.get('symbol')}: {str(e)}")
             return False
 
+    async def _actual_position_qty(self, symbol: str) -> int:
+        """Read the ACTUAL current position quantity from Alpaca (0 if flat)."""
+        try:
+            positions = await asyncio.to_thread(alpaca_service.get_positions)
+            for pos in positions:
+                if pos['symbol'] == symbol:
+                    qty = float(pos.get('qty', 0))
+                    return int(abs(qty)) if qty != 0 else 0
+            return 0
+        except Exception as e:
+            logger.error(f"{symbol}: could not read actual position qty: {e}")
+            return 0
+
     async def sell_with_retry(self, symbol: str, shares: int, reason: str, max_retries: int = 3) -> bool:
         """Robust sell with retry logic for slippage handling.
 
-        Also force-cancels any resting order for this symbol (e.g. the
-        bracket-order stop-loss/take-profit legs placed at entry by
-        `execute_entry`) on an "insufficient qty" rejection, then retries
-        immediately in the same attempt - same proven pattern as
-        `position_monitor_service._sell_with_dedup`, needed now that entries
-        always place a real resting bracket order rather than just a plain
-        market buy.
+        On an "insufficient qty" rejection, re-read the ACTUAL position
+        quantity from Alpaca and sell min(requested, actual) - instead of
+        blindly force-cancelling the protective stop and retrying the stale
+        in-memory share count. This is the fix for the split-brain over-sell
+        (AMPY went short because a stale `shares` was retried) and for the
+        "profit left on the table" case (a stale too-large `shares` kept
+        getting rejected, so the position never sold while its stop was
+        force-cancelled, leaving it unprotected).
         """
         for attempt in range(max_retries):
             try:
@@ -1383,8 +1972,19 @@ class AutoTraderService:
                     logger.warning(f"⚠️ Sell attempt {attempt+1} for {symbol} returned no order_id")
             except Exception as e:
                 if 'insufficient qty' in str(e).lower():
-                    logger.warning(f"🔁 {symbol}: Sell rejected (insufficient qty) - force-cancelling resting order(s) (likely the entry bracket's stop/target legs) and retrying immediately")
+                    # Re-read the REAL position quantity instead of trusting
+                    # the stale in-memory count.
+                    actual = await self._actual_position_qty(symbol)
+                    if actual <= 0:
+                        logger.info(f"✅ {symbol}: position already flat (actual qty {actual}) - treating sell as done")
+                        return True
+                    sell_qty = min(shares, actual)
+                    logger.warning(f"🔁 {symbol}: Sell rejected (insufficient qty) - actual position is {actual}, selling {sell_qty} (requested {shares})")
                     try:
+                        # Force-cancel the resting stop-loss order (it holds
+                        # the shares) THEN sell the real quantity. The stop
+                        # will be re-asserted by the monitor on the next tick
+                        # if the position remains.
                         blocking_orders = await asyncio.to_thread(alpaca_service.get_open_orders, symbol)
                         for o in blocking_orders:
                             if o.get('side') == 'sell':
@@ -1392,9 +1992,9 @@ class AutoTraderService:
                                     await asyncio.to_thread(alpaca_service.cancel_order, o['order_id'])
                                 except Exception as cancel_err:
                                     logger.error(f"{symbol}: Failed to force-cancel blocking order {o['order_id']}: {cancel_err}")
-                        order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, shares, "sell")
+                        order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, sell_qty, "sell")
                         if order and order.get('order_id'):
-                            logger.info(f"✅ SELL: {symbol} - {shares} shares ({reason}) [attempt {attempt+1}, after force-cancel]")
+                            logger.info(f"✅ SELL: {symbol} - {sell_qty} shares ({reason}) [attempt {attempt+1}, actual qty]")
                             return True
                     except Exception as e2:
                         logger.warning(f"⚠️ Sell attempt {attempt+1} for {symbol} failed even after force-cancel: {str(e2)}")
@@ -1417,6 +2017,157 @@ class AutoTraderService:
             return True
         except Exception as e:
             logger.error(f"Error verifying position for {symbol}: {str(e)}")
+            return False
+
+    async def reconcile_open_positions(self):
+        """Adopt every Alpaca position not already tracked in open_positions.
+
+        Single-owner exit consolidation: after a restart the in-memory
+        open_positions is empty even though Alpaca still holds positions.
+        Without reconciliation those positions are orphaned - no structural
+        stop/target logic applies and they ride until EOD-close (the
+        EGG/GMM/FVN -22..-29% losses). Reconstruct a structural stop (recent
+        pullback low capped at max_stop_distance_pct, else flat stop_loss_pct)
+        and an R:R target. Also covers any accidental short (long-only bot).
+        """
+        try:
+            alpaca_positions = await asyncio.to_thread(alpaca_service.get_positions)
+        except Exception as e:
+            logger.error(f"reconcile: could not fetch Alpaca positions: {e}")
+            return
+
+        changed = False
+
+        # Close accidental shorts (a long-only bot should never be short).
+        for pos in alpaca_positions:
+            symbol = pos.get('symbol')
+            qty = float(pos.get('qty', 0))
+            if qty < 0:
+                cover = int(abs(qty))
+                logger.critical(f"🚨 reconcile: {symbol} is SHORT ({qty}) - buying {cover} to close (long-only bot)")
+                try:
+                    order = await asyncio.to_thread(alpaca_service.place_market_order, symbol, cover, "buy")
+                    logger.critical(f"🚨 reconcile: short {symbol} close order {order.get('order_id') if order else 'FAILED'}")
+                except Exception as e:
+                    logger.critical(f"🚨 reconcile: failed to close short {symbol}: {e}")
+                changed = True
+
+        for pos in alpaca_positions:
+            symbol = pos.get('symbol')
+            qty = float(pos.get('qty', 0))
+            if qty <= 0:
+                continue  # shorts handled above, or already flat
+            if symbol in self.open_positions:
+                continue  # already tracked
+
+            entry_price = float(pos.get('avg_entry_price', 0))
+            if entry_price <= 0:
+                continue
+
+            # Reconstruct a structural stop: recent 1-min pullback low, capped
+            # at max_stop_distance_pct; fall back to flat stop_loss_pct.
+            stop = None
+            try:
+                bars = await self._get_real_bars(symbol, "1Min", 30)
+                if bars:
+                    lows = [b.get('low') for b in bars if b.get('low')]
+                    if lows:
+                        recent_low = min(lows)
+                        dist = (entry_price - recent_low) / entry_price
+                        if 0 < dist <= self.max_stop_distance_pct:
+                            stop = round(recent_low, 2)
+            except Exception as e:
+                logger.debug(f"reconcile: {symbol} structural stop reconstruction failed: {e}")
+
+            if stop is None:
+                stop = round(entry_price * (1 - self.stop_loss_pct), 2)
+
+            risk = entry_price - stop
+            if risk <= 0:
+                risk = entry_price * self.stop_loss_pct
+                stop = round(entry_price - risk, 2)
+            target = round(entry_price + (self.reward_risk_ratio * risk), 2)
+
+            self.open_positions[symbol] = {
+                'order_id': None,
+                'symbol': symbol,
+                'entry_price': entry_price,
+                'shares': int(qty),
+                'original_shares': int(qty),
+                'stop_loss': stop,
+                'trailing_stop': stop,
+                'highest_price': entry_price,
+                'profit_target': target,
+                'psych_target': None,
+                'risk_per_share': risk,
+                'partial_sell_done': False,
+                'breakeven_stop_active': False,
+                'entry_time': datetime.now(timezone.utc).isoformat(),
+                'status': 'open',
+                'is_no_news_scalp': False,
+                'is_bull_flag': False,
+                'is_vwap_bounce': False,
+                'is_orb': False,
+                'is_flat_top_breakout': False,
+                'is_9_ema_dip': False,
+                'is_front_side_breakout': False,
+                'strategy': 'Reconciled (adopted)',
+            }
+            self.partial_sold[symbol] = False
+            logger.info(f"🔁 reconcile: adopted {symbol} @ ${entry_price:.2f} ({int(qty)} sh) - stop ${stop:.2f}, target ${target:.2f}")
+            # Place a real exchange stop for the adopted position - without it
+            # the reconciled position is only protected by the 5s software poll.
+            await self.ensure_stop_order(symbol, self.open_positions[symbol])
+            changed = True
+
+        if changed:
+            await self.save_state()
+
+    async def ensure_stop_order(self, symbol: str, position_data: dict) -> bool:
+        """Ensure a protective exchange stop order is resting for `symbol`.
+
+        Exchange-level backstop to the software trailing stop in monitor_exits.
+        Re-places the stop when (a) none is resting, (b) its quantity no longer
+        matches the position (e.g. after a partial sell), or (c) its level is
+        stale. Without this, a runner after a partial sell - or a position
+        adopted by reconcile_open_positions after a restart - is protected only
+        by the 5s software poll, which is seconds late in a fast crash.
+        """
+        try:
+            shares = int(float(position_data.get('shares', 0)))
+            if shares <= 0:
+                return False
+            stop_level = round(float(position_data.get('trailing_stop') or position_data.get('stop_loss', 0)), 2)
+            if stop_level <= 0:
+                return False
+
+            open_orders = await asyncio.to_thread(alpaca_service.get_open_orders, symbol) or []
+            existing = next(
+                (o for o in open_orders
+                 if str(o.get('side', '')).lower() == 'sell'
+                 and str(o.get('type', '')).lower() == 'stop'),
+                None
+            )
+
+            if existing is not None:
+                o_qty = int(float(existing.get('qty') or 0))
+                o_stop = round(float(existing.get('stop_price') or 0), 2)
+                if o_qty == shares and o_stop == stop_level:
+                    return True
+                try:
+                    await asyncio.to_thread(alpaca_service.cancel_order, existing['order_id'])
+                    logger.info(f"cancelled stale stop ({o_qty} sh @ ${o_stop:.2f}) -> re-place {shares} sh @ ${stop_level:.2f}")
+                except Exception as e:
+                    logger.warning(f"{symbol}: failed to cancel stale stop {existing.get('order_id')}: {e}")
+
+            stop_order = await asyncio.to_thread(alpaca_service.place_stop_order, symbol, shares, stop_level)
+            if stop_order:
+                logger.info(f"protective stop resting - {shares} sh @ ${stop_level:.2f}")
+                return True
+            logger.warning(f"failed to place protective stop ({shares} sh @ ${stop_level:.2f})")
+            return False
+        except Exception as e:
+            logger.error(f"ensure_stop_order {symbol}: {e}")
             return False
 
     async def monitor_exits(self, portfolio_value: float):
@@ -1448,6 +2199,28 @@ class AutoTraderService:
             for symbol, position_data in list(self.open_positions.items()):
                 if symbol not in alpaca_symbols:
                     logger.info(f"Position {symbol} closed by broker - removing from tracking")
+                    # Treat broker-closed positions as exits for re-entry guardrails.
+                    # Without this, the bot can re-enter a stock that was force-closed
+                    # by the broker (e.g. bracket-order chaos), bypassing the max-entries-
+                    # per-stock limit and tiered re-entry rules.
+                    self.exited_today.add(symbol)
+                    self.entries_today[symbol] = self.entries_today.get(symbol, 0) + 1
+                    # If the position was profitable at time of broker-close, track it
+                    # with a conservative (100%) capture ratio to block further re-entries
+                    # — a broker close usually means something went wrong.
+                    entry_px = position_data.get('entry_price', 0)
+                    current_px = position_data.get('highest_price', entry_px)
+                    if current_px > entry_px and symbol not in self.profitable_exit_info:
+                        self.profitable_exit_info[symbol] = {
+                            'exit_price': current_px,
+                            'capture_ratio': 1.0,  # conservative: treat as full capture
+                            'entry_price': entry_px,
+                            'profit_target': position_data.get('profit_target', entry_px * 1.04),
+                        }
+                        logger.info(
+                            f"   💰 {symbol}: Broker-closed at ~${current_px:.2f} "
+                            f"(profitable — blocking re-entry)"
+                        )
                     del self.open_positions[symbol]
                     state_changed = True
                     continue
@@ -1488,6 +2261,35 @@ class AutoTraderService:
                     except Exception as e:
                         logger.debug(f"{symbol}: topping-tail check skipped: {e}")
 
+                # --- FIRST RED CANDLE EXIT ---
+                red_candle_exit = False
+                if (self.red_candle_exit_enabled
+                        and not position_data.get("partial_sell_done", False)
+                        and current_price > entry_price):
+                    try:
+                        rc_bars = await self._get_real_bars(symbol, timeframe="1Min", limit=3)
+                        if rc_bars and len(rc_bars) >= 2:
+                            prev = rc_bars[-2]
+                            if prev["close"] < prev["open"]:
+                                red_candle_exit = True
+                    except Exception:
+                        pass
+
+                # --- EXTENSION BAR SPIKE EXIT ---
+                spike_exit = False
+                if (self.extension_bar_spike_exit_enabled
+                        and current_price > entry_price):
+                    try:
+                        sp_bars = await self._get_real_bars(symbol, timeframe="1Min", limit=10)
+                        if sp_bars and len(sp_bars) >= 6:
+                            ranges = [abs(b["high"] - b["low"]) for b in sp_bars[-6:-1]]
+                            avg_range = sum(ranges) / len(ranges) if ranges else 0.01
+                            cur_range = abs(sp_bars[-1]["high"] - sp_bars[-1]["low"])
+                            if avg_range > 0 and cur_range >= avg_range * self.extension_bar_spike_multiplier:
+                                spike_exit = True
+                    except Exception:
+                        pass
+
                 should_exit = False
                 exit_reason = ""
                 shares_to_sell = int(float(current_position['qty']))
@@ -1517,6 +2319,7 @@ class AutoTraderService:
                                 position_data['trailing_stop'] = max(position_data.get('trailing_stop', 0), breakeven_price)
                                 position_data['breakeven_stop_active'] = True
                                 logger.info(f"   ✓ Sold {partial_shares} shares, stop moved to ${breakeven_price:.2f} (above break-even)")
+                                await self.ensure_stop_order(symbol, position_data)
                                 self.partial_sold[symbol] = True
                                 state_changed = True
                                 continue
@@ -1548,6 +2351,44 @@ class AutoTraderService:
                             bailout_triggered = seconds_since_entry >= bailout_seconds
                         except Exception:
                             bailout_triggered = False
+
+                # Red candle exit: partial if enabled, else full close
+                if not should_exit and red_candle_exit:
+                    if self.enable_partial_profit and not position_data.get("partial_sell_done", False):
+                        p = int(shares * self.partial_sell_pct)
+                        if p >= 1:
+                            logger.info(f"RED CANDLE PARTIAL: {symbol}")
+                            if await self.sell_with_retry(symbol, p, "RED CANDLE PARTIAL"):
+                                position_data["shares"] = shares - p
+                                position_data["partial_sell_done"] = True
+                                bp = round(entry_price * (1 + self.breakeven_buffer_pct), 2)
+                                position_data["trailing_stop"] = max(position_data.get("trailing_stop", 0), bp)
+                                position_data["breakeven_stop_active"] = True
+                                await self.ensure_stop_order(symbol, position_data)
+                                state_changed = True
+                                continue
+                    else:
+                        should_exit = True
+                        exit_reason = "FIRST RED CANDLE CLOSE"
+
+                # Extension spike exit
+                if not should_exit and spike_exit:
+                    if self.enable_partial_profit and not position_data.get("partial_sell_done", False):
+                        p = int(shares * self.partial_sell_pct)
+                        if p >= 1:
+                            logger.info(f"EXTENSION SPIKE PARTIAL: {symbol}")
+                            if await self.sell_with_retry(symbol, p, "EXTENSION SPIKE PARTIAL"):
+                                position_data["shares"] = shares - p
+                                position_data["partial_sell_done"] = True
+                                bp = round(entry_price * (1 + self.breakeven_buffer_pct), 2)
+                                position_data["trailing_stop"] = max(position_data.get("trailing_stop", 0), bp)
+                                position_data["breakeven_stop_active"] = True
+                                await self.ensure_stop_order(symbol, position_data)
+                                state_changed = True
+                                continue
+                    else:
+                        should_exit = True
+                        exit_reason = "EXTENSION BAR SPIKE"
 
                 if not should_exit and current_price <= trailing_stop:
                     should_exit = True
@@ -1593,8 +2434,10 @@ class AutoTraderService:
 
                         if pnl < 0:
                             self.consecutive_losses += 1
+                            self.consecutive_loss_pnl += pnl
                         else:
                             self.consecutive_losses = 0
+                            self.consecutive_loss_pnl = 0.0
                             # Track profitable exit with target capture ratio.
                             # Calculates how much of the R:R target was captured:
                             #   capture_ratio = (exit - entry) / (target - entry)
@@ -1638,7 +2481,7 @@ class AutoTraderService:
                             'symbol': symbol,
                             'entry_price': entry_price,
                             'exit_price': exit_price,
-                            'shares': original_shares,
+                            'shares': shares,
                             'pnl': pnl,
                             'pnl_pct': pnl_pct,
                             'exit_reason': exit_reason,
@@ -1650,7 +2493,7 @@ class AutoTraderService:
                             'symbol': symbol,
                             'entry_price': entry_price,
                             'exit_price': exit_price,
-                            'shares': original_shares,
+                            'shares': shares,
                             'pnl': pnl,
                             'pnl_pct': pnl_pct,
                             'exit_reason': exit_reason,
@@ -1684,8 +2527,10 @@ class AutoTraderService:
 
             if not self.is_trading_hours():
                 logger.info(f"Outside trading hours ({self.trading_start_hour} AM - {self.trading_end_hour - 12 if self.trading_end_hour > 12 else self.trading_end_hour}:{self.trading_end_minute:02d} PM EST)")
-                if self.open_positions:
-                    await self.monitor_exits(portfolio_value)
+                return
+
+            if self.is_past_entry_cutoff():
+                logger.info(f"Past entry cutoff ({self.entry_cutoff_hour}:{self.entry_cutoff_minute:02d} AM ET) - no new entries (Ross winds down after 11:30 AM)")
                 return
 
             # Hard kill switch: risk limits are checked before ANY new entry
@@ -1694,14 +2539,11 @@ class AutoTraderService:
                 logger.warning(f"⛔ TRADING HALTED: {risk_check['reason']}")
                 logger.info(f"   Daily P&L: ${risk_check['daily_pnl']:.2f} ({risk_check['daily_pnl_pct']:.2f}%)")
                 logger.info(f"   Consecutive Losses: {risk_check['consecutive_losses']}")
-                # Still manage existing positions/exits even when new entries are halted
-                if self.open_positions:
-                    await self.monitor_exits(portfolio_value)
+                # (existing positions are managed by the dedicated exit loop)
                 return
 
             if len(self.open_positions) >= self.max_positions:
                 logger.info(f"Max positions reached ({self.max_positions})")
-                await self.monitor_exits(portfolio_value)
                 return
 
             ready_stocks = [s for s in scanner_results if s.get('ready_to_trade', False)]
@@ -1748,6 +2590,23 @@ class AutoTraderService:
                         if await self.execute_entry(es, portfolio_value):
                             logger.info(f"Bull Flag trade: {es['symbol']}")
 
+            # Front-Side Momentum / Squeeze Breakout (Strategy 8)
+            # Ross Cameron: enters on breakout strength without waiting for pullback.
+            # Three sub-patterns: whole-dollar ($1.00), blue-sky ATH, MA-wall.
+            # Gated on 4+/5 scanner score, 25% position sizing.
+            if self.front_side_breakout_enabled and len(self.open_positions) < self.max_positions:
+                fs_stocks = ready_stocks + [
+                    s for s in scanner_results
+                    if s.get("criteria_count", 0) >= 4 and s not in ready_stocks
+                ]
+                for stock in fs_stocks:
+                    if len(self.open_positions) >= self.max_positions:
+                        break
+                    es = await self.check_front_side_breakout(stock)
+                    if es:
+                        if await self.execute_entry(es, portfolio_value):
+                            logger.info(f"Front-Side Breakout trade: {es['symbol']}")
+
             # VWAP Bounce (Strategy 4) - institutional support
             if self.vwap_bounce_enabled and len(self.open_positions) < self.max_positions:
                 for stock in ready_stocks:
@@ -1768,7 +2627,32 @@ class AutoTraderService:
                         if await self.execute_entry(es, portfolio_value):
                             logger.info(f"ORB trade: {es['symbol']}")
 
-            await self.monitor_exits(portfolio_value)
+            # Flat Top Breakout (Strategy 7)
+            if self.flat_top_breakout_enabled and len(self.open_positions) < self.max_positions:
+                ft_stocks = ready_stocks + [s for s in scanner_results if s.get("criteria_count", 0) >= 4 and s not in ready_stocks]
+                for stock in ft_stocks:
+                    if len(self.open_positions) >= self.max_positions:
+                        break
+                    es = await self.check_flat_top_breakout(stock)
+                    if es:
+                        if await self.execute_entry(es, portfolio_value):
+                            logger.info(f"Flat Top Breakout trade: {es['symbol']}")
+
+            # 9 EMA Dip Buy (Strategy 6) — Ross Cameron dip-and-rip
+            if self.ema9_dip_enabled and len(self.open_positions) < self.max_positions:
+                scanner_stocks = ready_stocks + [
+                    s for s in scanner_results
+                    if s.get('criteria_count', 0) >= 4 and s not in ready_stocks
+                ]
+                for stock in scanner_stocks:
+                    if len(self.open_positions) >= self.max_positions:
+                        break
+                    es = await self.check_9_ema_dip_entry(stock)
+                    if es:
+                        if await self.execute_entry(es, portfolio_value):
+                            logger.info(f"9 EMA Dip trade: {es['symbol']}")
+
+            # (exits are handled by the dedicated exit loop in server.py)
 
         except Exception as e:
             logger.error(f"Error processing scanner results: {str(e)}")

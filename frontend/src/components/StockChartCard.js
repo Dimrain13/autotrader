@@ -7,9 +7,9 @@ import axios from "axios";
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
-export default function StockChartCard({ stock, symbol, currentPrice, pctChange, data, position, entry, stopLoss, profitTarget, trailingStop, stopLossPct, takeProfitPct, trailingStopPct, stopType, onRemove, onTrade }) {
+export default function StockChartCard({ stock, symbol, currentPrice, pctChange, data, position, entry, stopLoss, profitTarget, trailingStop, psychTarget, partialSold, stopLossPct, takeProfitPct, trailingStopPct, stopType, onRemove, onTrade }) {
   // Create levels object from individual props for backward compatibility
-  const levels = entry ? { entry, stopLoss, profitTarget, trailingStop } : null;
+  const levels = entry ? { entry, stopLoss, profitTarget, trailingStop, psychTarget } : null;
   
   // Use override prices if provided, otherwise fall back to stock props
   const displayPrice = currentPrice !== undefined ? currentPrice : stock.current_price;
@@ -83,8 +83,8 @@ export default function StockChartCard({ stock, symbol, currentPrice, pctChange,
               </button>
             </div>
             {position && (
-              <span className="text-[10px] px-2 py-0.5 bg-[#00E599]/20 text-[#00E599] border border-[#00E599]/30 rounded-full">
-                OPEN
+              <span className={`text-[10px] px-2 py-0.5 rounded-full border ${partialSold ? 'bg-[#FFB800]/20 text-[#FFB800] border-[#FFB800]/40' : 'bg-[#00E599]/20 text-[#00E599] border-[#00E599]/30'}`}>
+                {partialSold ? 'RUNNER' : 'OPEN'}
               </span>
             )}
           </CardTitle>
@@ -212,19 +212,31 @@ export default function StockChartCard({ stock, symbol, currentPrice, pctChange,
               </div>
               <div>
                 <div className="text-[#FF1A40]">
-                  {stopType === 'trailing' ? `Trail (-${trailingStopPct || 1}%)` : `Stop (-${stopLossPct || 1}%)`}
+                  {levels.trailingStop && levels.trailingStop !== levels.stopLoss ? 'Stop (live trail)' : 'Stop (structural)'}
                 </div>
                 <div className="font-mono text-[#FF1A40]">
-                  ${(stopType === 'trailing' && levels.trailingStop ? levels.trailingStop : levels.stopLoss).toFixed(2)}
+                  ${(levels.trailingStop || levels.stopLoss).toFixed(2)}
                 </div>
               </div>
               <div>
-                <div className="text-[#00E599]">Target (+{takeProfitPct || 2}%)</div>
+                <div className="text-[#00E599]">Target</div>
                 <div className="font-mono text-[#00E599]">${levels.profitTarget.toFixed(2)}</div>
               </div>
-              </div>
             </div>
-          )}
+            {levels.psychTarget && !partialSold && (
+              <div className="mt-2 pt-2 border-t border-white/5 flex items-center justify-between">
+                <span className="text-neutral-500">1st Target (partial)</span>
+                <span className="font-mono text-[#00E599]">${levels.psychTarget.toFixed(2)}</span>
+              </div>
+            )}
+            {partialSold && (
+              <div className="mt-2 pt-2 border-t border-white/5 flex items-center gap-2">
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#FFB800]/20 text-[#FFB800] border border-[#FFB800]/40 shrink-0">RUNNER</span>
+                <span className="text-neutral-400">1st target hit — holding to final target @ ${levels.profitTarget.toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+        )}
             
             {/* Quick Trade Button */}
             {!position && (

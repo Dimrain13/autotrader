@@ -462,7 +462,7 @@ class ScannerService:
             criteria_count = 0
             
             # 1. Price range check
-            in_price_range = criteria.get('min_price', 2) <= current_price <= criteria.get('max_price', 20)
+            in_price_range = criteria.get('min_price', 0.50) <= current_price <= criteria.get('max_price', 20)
             criteria_met['price_range'] = in_price_range
             if in_price_range:
                 criteria_count += 1
@@ -818,6 +818,7 @@ class ScannerService:
                 logger.error(f"Error checking news for {symbol}: {str(e)}")
                 result['has_positive_news'] = False
                 result['news_headline'] = "Error checking news"
+                result['criteria_met']['positive_news'] = False
                 result['news_freshness'] = 'unknown'
                 result['news_temperature'] = None
                 result['news_articles'] = []
@@ -905,7 +906,7 @@ class ScannerService:
         """
         if criteria is None:
             criteria = {
-                'min_price': 2,
+                'min_price': 0.50,
                 'max_price': 20,
                 'min_volume_ratio': 5,
                 'max_float': 45_000_000,

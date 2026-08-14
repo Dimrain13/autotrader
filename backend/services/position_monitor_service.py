@@ -15,6 +15,7 @@ from typing import Dict
 import asyncio
 from datetime import datetime, timedelta
 from services.alpaca_service import alpaca_service
+from services.auto_trader_service import auto_trader as _at_svc
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -435,6 +436,11 @@ class PositionMonitorService:
             except Exception as log_error:
                 logger.error(f"Failed to log trade for {symbol}: {log_error}")
 
+            # Sync to auto_trader to block re-entry for the rest of the day
+            try:
+                _at_svc.exited_today.add(symbol)
+            except Exception:
+                pass
             self.remove_position(symbol)
 
         except Exception as e:
