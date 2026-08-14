@@ -2210,6 +2210,44 @@ class AutoTraderService:
                             f"   💰 {symbol}: Broker-closed at ~${current_px:.2f} "
                             f"(profitable — blocking re-entry)"
                         )
+                    # Log broker-closes to trade_history (2026-08-14). Without this,
+                    # days where every exit was broker-closed leave trade_history empty
+                    # and the Ross audit reports '0 MomentumX trades' despite heavy
+                    # activity. Use the real Alpaca fill price when available, falling
+                    # back to the last known price.
+                    broker_shares = int(float(position_data.get('shares', position_data.get('original_shares', 0))))
+                    if broker_shares > 0:
+                        exit_price = current_px
+                        try:
+                            closed_orders = await asyncio.to_thread(
+                                alpaca_service.get_orders, "closed", 10, [symbol]
+                            )
+                            for o in (closed_orders or []):
+                                if (str(o.get('side', '')).lower() == 'sell'
+                                        and float(o.get('filled_qty') or 0) > 0
+                                        and o.get('filled_avg_price')):
+                                    exit_price = float(o['filled_avg_price'])
+                                    break
+                        except Exception:
+                            pass
+                        pnl = (exit_price - entry_px) * broker_shares
+                        pnl_pct = ((exit_price - entry_px) / entry_px * 100) if entry_px else 0.0
+                        try:
+                            from services.trade_history_service import trade_history as _th
+                            await _th.log_trade({
+                                'symbol': symbol,
+                                'entry_price': entry_px,
+                                'exit_price': exit_price,
+                                'shares': broker_shares,
+                                'entry_time': position_data.get('entry_time'),
+                                'exit_time': datetime.now(timezone.utc).isoformat(),
+                                'pnl': pnl,
+                                'pnl_pct': pnl_pct,
+                                'exit_reason': 'CLOSED BY BROKER',
+                                'strategy': position_data.get('strategy', 'Unknown'),
+                            })
+                        except Exception as _log_err:
+                            logger.error(f"Failed to log broker-closed trade {symbol}: {_log_err}")
                     del self.open_positions[symbol]
                     state_changed = True
                     continue
