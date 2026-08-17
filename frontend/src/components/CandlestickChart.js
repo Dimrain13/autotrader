@@ -1,13 +1,7 @@
-import { useEffect, useRef, memo } from 'react';
+import { useEffect, useRef, memo, useState, useCallback } from 'react';
 import { createChart } from 'lightweight-charts';
 
-/**
- * Optimized CandlestickChart — keeps indicator series alive across updates
- * instead of tearing them down and recreating every render. Uses setData()
- * for incremental updates, sliding-window SMA, and only recreates lines when
- * the underlying value changes (e.g. VWAP, levels).
- */
-function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, blockTrades, livePrice }) {
+function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, blockTrades, livePrice, symbol }) {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRefs = useRef({});
@@ -16,76 +10,112 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
   const rangeChangeDebounceRef = useRef(null);
   const isFirstLoadRef = useRef(true);
   const lastBarRef = useRef(null);
-  // Track previous values to avoid rebuilding series unnecessarily
   const prevRef = useRef({ vwap: null, levels: null, blockTradeCount: 0 });
+  const [crosshair, setCrosshair] = useState(null);
 
-  // Effect 1: Create chart once on mount
+  const handleCrosshairMove = useCallback((param) => {
+    if (!param.time || !param.point || param.seriesData.size === 0) {
+      setCrosshair(null);
+      return;
+    }
+    const candle = param.seriesData.get(seriesRefs.current.candlestick);
+    if (!candle) { setCrosshair(null); return; }
+    setCrosshair({
+      x: param.point.x,
+      y: param.point.y,
+      time: param.time,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+    });
+  }, []);
+
   useEffect(() => {
     if (!chartContainerRef.current) return;
+    const container = chartContainerRef.current;
 
-    const chart = createChart(chartContainerRef.current, {
-      width: chartContainerRef.current.clientWidth,
+    const chart = createChart(container, {
+      width: container.clientWidth,
       height: height,
       layout: {
-        backgroundColor: '#0A0A0A',
-        textColor: '#999999',
+        background: { type: 'solid', color: '#0D1117' },
+        textColor: '#8b949e',
       },
       grid: {
-        vertLines: { color: '#333333' },
-        horzLines: { color: '#333333' },
+        vertLines: { color: '#21262d', style: 1 },
+        horzLines: { color: '#21262d', style: 1 },
       },
       crosshair: { mode: 1 },
       localization: {
         locale: 'en',
         timeFormatter: (time) => {
-          const date = new Date(time * 1000);
-          const hours = date.getUTCHours().toString().padStart(2, '0');
-          const mins = date.getUTCMinutes().toString().padStart(2, '0');
-          return `${hours}:${mins}`;
+          const d = new Date(time * 1000);
+          return new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          }).format(d);
         },
       },
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
-        borderColor: '#444444',
+        tickMarkFormatter: (time, tickMarkType) => {
+          const d = new Date(time * 1000);
+          if (tickMarkType === 3 || tickMarkType === 4) {
+            return new Intl.DateTimeFormat('en-US', {
+              timeZone: 'America/New_York',
+              hour: '2-digit', minute: '2-digit', hour12: false,
+            }).format(d);
+          }
+          return new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            month: 'short', day: 'numeric',
+          }).format(d);
+        },
+        borderColor: '#30363d',
         barSpacing: 8,
         minBarSpacing: 4,
-        rightOffset: 5,
+        rightOffset: 6,
       },
       rightPriceScale: {
-        borderColor: '#444444',
-        visible: true,
+        borderColor: '#30363d',
+        autoScale: true,
+        scaleMargins: { top: 0.05, bottom: 0.25 },
       },
       leftPriceScale: {
-        borderColor: '#444444',
-        visible: true,
+        borderColor: '#30363d',
+        autoScale: true,
       },
     });
 
     const candlestickSeries = chart.addCandlestickSeries({
-      upColor: '#00E599',
-      downColor: '#FF1A40',
-      borderVisible: false,
-      wickUpColor: '#00E599',
-      wickDownColor: '#FF1A40',
+      upColor: '#26a69a',
+      downColor: '#ef5350',
+      borderUpColor: '#26a69a',
+      borderDownColor: '#ef5350',
+      wickUpColor: '#26a69a',
+      wickDownColor: '#ef5350',
+      priceScaleId: 'right',
     });
 
     const volumeSeries = chart.addHistogramSeries({
-      color: '#2E5CFF',
       priceFormat: { type: 'volume' },
       priceScaleId: '',
-      scaleMargins: { top: 0.8, bottom: 0 },
+      scaleMargins: { top: 0.82, bottom: 0 },
     });
 
     chartRef.current = chart;
     seriesRefs.current.candlestick = candlestickSeries;
     seriesRefs.current.volume = volumeSeries;
 
+    chart.subscribeCrosshairMove(handleCrosshairMove);
+
     const handleResize = () => {
-      if (chartContainerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({
-          width: chartContainerRef.current.clientWidth,
-        });
+      if (container && chartRef.current) {
+        chartRef.current.applyOptions({ width: container.clientWidth });
       }
     };
     window.addEventListener('resize', handleResize);
@@ -97,7 +127,7 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
         if (suppressRangeEventRef.current) return;
         let pos = 0;
         try { pos = chart.timeScale().scrollPosition(); } catch (e) {}
-        if (pos < -1.5) {
+        if (pos < -0.5) {
           isFollowingRef.current = false;
         } else {
           isFollowingRef.current = true;
@@ -105,7 +135,7 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
           try { chart.timeScale().scrollToRealTime(); } catch (e) {}
           requestAnimationFrame(() => { suppressRangeEventRef.current = false; });
         }
-      }, 200);
+      }, 150);
     });
 
     return () => {
@@ -117,49 +147,39 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
         seriesRefs.current = {};
       }
     };
-  }, [height]);
+  }, [height, handleCrosshairMove]);
 
-  // Helper: prepare candle/volume arrays (sorted, deduplicated)
   const prepareData = (rawData) => {
     if (!rawData || rawData.length === 0) return { candleData: [], volumeData: [] };
-
     const parsed = rawData
       .map(bar => {
-        const timestamp = new Date(bar.timestamp);
-        if (isNaN(timestamp.getTime())) return null;
+        const ts = new Date(bar.timestamp);
+        if (isNaN(ts.getTime())) return null;
         return {
-          time: Math.floor(timestamp.getTime() / 1000),
-          open: parseFloat(bar.open),
-          high: parseFloat(bar.high),
-          low: parseFloat(bar.low),
-          close: parseFloat(bar.close),
-          volume: parseFloat(bar.volume),
-          up: bar.close >= bar.open,
+          time: Math.floor(ts.getTime() / 1000),
+          open: +bar.open, high: +bar.high, low: +bar.low, close: +bar.close,
+          volume: +bar.volume, up: bar.close >= bar.open,
         };
       })
       .filter(Boolean)
       .sort((a, b) => a.time - b.time);
 
-    // Deduplicate
     const candleData = [];
-    for (const bar of parsed) {
-      if (candleData.length === 0 || candleData[candleData.length - 1].time < bar.time) {
-        candleData.push(bar);
-      } else if (candleData[candleData.length - 1].time === bar.time) {
-        candleData[candleData.length - 1] = bar;
-      }
+    for (const b of parsed) {
+      const last = candleData[candleData.length - 1];
+      if (!last || last.time < b.time) candleData.push(b);
+      else if (last.time === b.time) candleData[candleData.length - 1] = b;
     }
 
     const volumeData = candleData.map(b => ({
       time: b.time,
       value: b.volume,
-      color: b.up ? '#00E59966' : '#FF1A4066',
+      color: b.up ? 'rgba(38,166,154,0.45)' : 'rgba(239,83,80,0.45)',
     }));
 
     return { candleData, volumeData };
   };
 
-  // Helper: sliding-window SMA (O(n) instead of O(n*k))
   const computeSMA = (candleData, period) => {
     if (candleData.length < period) return [];
     const result = [];
@@ -173,114 +193,124 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
     return result;
   };
 
-  // Effect 2: Update data (candles, volume, indicators)
+  const formatPrice = (price) => {
+    if (price == null) return '';
+    if (price < 1) return price.toFixed(4);
+    if (price < 10) return price.toFixed(3);
+    if (price < 100) return price.toFixed(2);
+    return price.toFixed(2);
+  };
+
   useEffect(() => {
     if (!chartRef.current || !data || data.length === 0) return;
-
     const chart = chartRef.current;
-    const { candlestick: candlestickSeries, volume: volumeSeries } = seriesRefs.current;
-    if (!candlestickSeries || !volumeSeries) return;
+    const { candlestick: cs, volume: vs } = seriesRefs.current;
+    if (!cs || !vs) return;
 
     const { candleData, volumeData } = prepareData(data);
     if (candleData.length === 0) return;
 
-    // Update main series (setData is incremental if series exists)
-    candlestickSeries.setData(candleData);
-    volumeSeries.setData(volumeData);
-    lastBarRef.current = { ...candleData[candleData.length - 1] };
+    cs.setData(candleData);
+    vs.setData(volumeData);
+    const lastCandle = candleData[candleData.length - 1];
+    lastBarRef.current = { ...lastCandle };
 
-    // --- SMA20: create once, update with setData ---
+    // --- Last-price dotted line ---
+    const lastPrice = lastCandle.close;
+    if (lastPrice) {
+      const priceLineData = [
+        { time: candleData[0].time, value: lastPrice },
+        { time: lastCandle.time, value: lastPrice },
+      ];
+      if (!seriesRefs.current.lastPriceLine) {
+        seriesRefs.current.lastPriceLine = chart.addLineSeries({
+          color: '#8b949e',
+          lineWidth: 1,
+          lineStyle: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          priceScaleId: 'right',
+        });
+      }
+      seriesRefs.current.lastPriceLine.setData(priceLineData);
+      seriesRefs.current.lastPriceLine.applyOptions({
+        priceFormat: { type: 'price', precision: lastPrice < 1 ? 4 : 2, minMove: lastPrice < 1 ? 0.0001 : 0.01 },
+      });
+    }
+
+    // --- SMA20 ---
     if (candleData.length >= 20) {
       if (!seriesRefs.current.sma20) {
         seriesRefs.current.sma20 = chart.addLineSeries({
-          color: '#2E5CFF', lineWidth: 2, priceLineVisible: false,
-          lastValueVisible: true, title: 'SMA20', priceScaleId: 'left',
+          color: '#58a6ff', lineWidth: 2, priceLineVisible: false,
+          lastValueVisible: true, title: 'SMA20', priceScaleId: 'right',
+          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
         });
       }
       seriesRefs.current.sma20.setData(computeSMA(candleData, 20));
     } else {
-      if (seriesRefs.current.sma20) {
-        try { chart.removeSeries(seriesRefs.current.sma20); } catch (e) {}
-        seriesRefs.current.sma20 = null;
-      }
+      if (seriesRefs.current.sma20) { try { chart.removeSeries(seriesRefs.current.sma20); } catch (e) {} seriesRefs.current.sma20 = null; }
     }
 
-    // --- SMA50: create once, update with setData ---
+    // --- SMA50 ---
     if (candleData.length >= 50) {
       if (!seriesRefs.current.sma50) {
         seriesRefs.current.sma50 = chart.addLineSeries({
-          color: '#FFB800', lineWidth: 2, priceLineVisible: false,
-          lastValueVisible: true, title: 'SMA50', priceScaleId: 'left',
+          color: '#d2a8ff', lineWidth: 2, priceLineVisible: false,
+          lastValueVisible: true, title: 'SMA50', priceScaleId: 'right',
+          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
         });
       }
       seriesRefs.current.sma50.setData(computeSMA(candleData, 50));
     } else {
-      if (seriesRefs.current.sma50) {
-        try { chart.removeSeries(seriesRefs.current.sma50); } catch (e) {}
-        seriesRefs.current.sma50 = null;
-      }
+      if (seriesRefs.current.sma50) { try { chart.removeSeries(seriesRefs.current.sma50); } catch (e) {} seriesRefs.current.sma50 = null; }
     }
 
-    // --- VWAP: only rebuild series if value changed ---
+    // --- VWAP ---
     if (vwap && candleData.length > 0) {
       const vwapData = candleData.map(c => ({ time: c.time, value: vwap }));
       if (prevRef.current.vwap !== vwap || !seriesRefs.current.vwap) {
-        // VWAP value changed — recreate series
-        if (seriesRefs.current.vwap) {
-          try { chart.removeSeries(seriesRefs.current.vwap); } catch (e) {}
-        }
+        if (seriesRefs.current.vwap) { try { chart.removeSeries(seriesRefs.current.vwap); } catch (e) {} }
         seriesRefs.current.vwap = chart.addLineSeries({
-          color: '#9333EA', lineWidth: 2, priceLineVisible: false,
-          lastValueVisible: true, title: 'VWAP', priceScaleId: 'left',
+          color: '#f0883e', lineWidth: 2, lineStyle: 3, priceLineVisible: false,
+          lastValueVisible: true, title: 'VWAP', priceScaleId: 'right',
+          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
         });
         prevRef.current.vwap = vwap;
       }
       seriesRefs.current.vwap.setData(vwapData);
     } else {
-      if (seriesRefs.current.vwap) {
-        try { chart.removeSeries(seriesRefs.current.vwap); } catch (e) {}
-        seriesRefs.current.vwap = null;
-        prevRef.current.vwap = null;
-      }
+      if (seriesRefs.current.vwap) { try { chart.removeSeries(seriesRefs.current.vwap); } catch (e) {} seriesRefs.current.vwap = null; prevRef.current.vwap = null; }
     }
 
-    // --- Trade levels (entry, stop, target, trail) ---
+    // --- Trade levels ---
     const levelsChanged = JSON.stringify(levels) !== JSON.stringify(prevRef.current.levels);
-
     const levelDefs = [];
     if (levels) {
-      levelDefs.push({ key: 'entryLine', color: '#FFFFFF', width: 2, title: 'ENTRY', value: levels.entry });
-      levelDefs.push({ key: 'stopLine', color: '#FF1A40', width: 3, lineStyle: 2, title: 'STOP', value: levels.stopLoss });
-      levelDefs.push({ key: 'targetLine', color: '#00E599', width: 3, lineStyle: 2, title: 'TARGET', value: levels.profitTarget });
-      if (levels.psychTarget) {
-        levelDefs.push({ key: 'psychLine', color: '#00E599', width: 2, lineStyle: 3, title: '1ST TARGET', value: levels.psychTarget });
-      }
-      if (levels.trailingStop) {
-        levelDefs.push({ key: 'trailLine', color: '#FF9500', width: 3, lineStyle: 2, title: 'TRAIL', value: levels.trailingStop });
-      }
+      if (levels.entry)   levelDefs.push({ key: 'entryLine',  color: '#e6edf3', w: 2, s: 0, title: 'ENTRY',  value: levels.entry });
+      if (levels.stopLoss) levelDefs.push({ key: 'stopLine',   color: '#ef5350', w: 3, s: 2, title: 'STOP',   value: levels.stopLoss });
+      if (levels.profitTarget) levelDefs.push({ key: 'targetLine', color: '#26a69a', w: 3, s: 2, title: 'TARGET', value: levels.profitTarget });
+      if (levels.psychTarget) levelDefs.push({ key: 'psychLine',  color: '#26a69a', w: 2, s: 3, title: '1ST TARGET', value: levels.psychTarget });
+      if (levels.trailingStop) levelDefs.push({ key: 'trailLine', color: '#f0883e', w: 3, s: 2, title: 'TRAIL', value: levels.trailingStop });
     }
 
-    // Remove level lines that no longer exist
-    for (const key of ['entryLine', 'stopLine', 'targetLine', 'trailLine', 'psychLine']) {
+    for (const key of ['entryLine','stopLine','targetLine','trailLine','psychLine']) {
       if (!levelDefs.find(d => d.key === key) && seriesRefs.current[key]) {
         try { chart.removeSeries(seriesRefs.current[key]); } catch (e) {}
         seriesRefs.current[key] = null;
       }
     }
 
-    // Create or update level lines
     for (const def of levelDefs) {
       const lineData = candleData.map(c => ({ time: c.time, value: def.value }));
       if (!seriesRefs.current[def.key] || levelsChanged) {
-        if (seriesRefs.current[def.key]) {
-          try { chart.removeSeries(seriesRefs.current[def.key]); } catch (e) {}
-        }
+        if (seriesRefs.current[def.key]) { try { chart.removeSeries(seriesRefs.current[def.key]); } catch (e) {} }
         seriesRefs.current[def.key] = chart.addLineSeries({
-          color: def.color, lineWidth: def.width,
-          lineStyle: def.lineStyle || 0,
+          color: def.color, lineWidth: def.w, lineStyle: def.s,
           priceLineVisible: true, lastValueVisible: true,
-          title: def.title, crosshairMarkerVisible: true,
-          priceScaleId: 'left',
+          title: def.title, priceScaleId: 'right',
+          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
         });
       }
       seriesRefs.current[def.key].setData(lineData);
@@ -290,21 +320,17 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
     // --- Block trade lines ---
     const btCount = blockTrades ? blockTrades.length : 0;
     if (btCount !== prevRef.current.blockTradeCount) {
-      // Count changed — rebuild
-      (seriesRefs.current.blockTradeLines || []).forEach(line => {
-        try { chart.removeSeries(line); } catch (e) {}
-      });
+      (seriesRefs.current.blockTradeLines || []).forEach(line => { try { chart.removeSeries(line); } catch (e) {} });
       seriesRefs.current.blockTradeLines = [];
-
       if (blockTrades && blockTrades.length > 0 && candleData.length > 0) {
         blockTrades.slice(0, 8).forEach(bt => {
           const line = chart.addLineSeries({
-            color: bt.side === 'buy' ? '#00E59988' : bt.side === 'sell' ? '#FF1A4088' : '#A3A3A388',
+            color: bt.side === 'buy' ? 'rgba(38,166,154,0.6)' : bt.side === 'sell' ? 'rgba(239,83,80,0.6)' : 'rgba(139,148,158,0.6)',
             lineWidth: 1, lineStyle: 3,
             priceLineVisible: false, lastValueVisible: false,
             crosshairMarkerVisible: false,
-            title: `${bt.side === 'buy' ? 'Buy' : bt.side === 'sell' ? 'Sell' : ''} block ${bt.size.toLocaleString()}sh`,
-            priceScaleId: 'left',
+            title: `${bt.side || ''} block ${bt.size?.toLocaleString() || 0}sh`,
+            priceScaleId: 'right',
           });
           line.setData(candleData.map(c => ({ time: c.time, value: bt.price })));
           seriesRefs.current.blockTradeLines.push(line);
@@ -313,7 +339,7 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
       prevRef.current.blockTradeCount = btCount;
     }
 
-    // Scroll handling
+    // Auto-follow & first load
     if (isFirstLoadRef.current) {
       chart.timeScale().fitContent();
       isFirstLoadRef.current = false;
@@ -322,28 +348,57 @@ function CandlestickChart({ data, height = 300, sma20, sma50, vwap, levels, bloc
       try { chart.timeScale().scrollToRealTime(); } catch (e) {}
       requestAnimationFrame(() => { suppressRangeEventRef.current = false; });
     }
-
   }, [data, vwap, levels, blockTrades]);
 
-  // Effect 3: live tick updates
+  // Live tick overlay
   useEffect(() => {
-    if (!livePrice || !livePrice.price || !seriesRefs.current.candlestick || !lastBarRef.current) return;
+    if (!livePrice?.price || !seriesRefs.current.candlestick || !lastBarRef.current) return;
     const bar = lastBarRef.current;
-    const newClose = livePrice.price;
-    const updated = {
-      time: bar.time,
-      open: bar.open,
-      high: Math.max(bar.high, newClose),
-      low: Math.min(bar.low, newClose),
-      close: newClose,
-    };
-    lastBarRef.current = updated;
-    try {
-      seriesRefs.current.candlestick.update(updated);
-    } catch (e) {}
+    const c = livePrice.price;
+    seriesRefs.current.candlestick.update({
+      time: bar.time, open: bar.open,
+      high: Math.max(bar.high, c), low: Math.min(bar.low, c), close: c,
+    });
+    lastBarRef.current = { time: bar.time, open: bar.open, high: Math.max(bar.high, c), low: Math.min(bar.low, c), close: c };
   }, [livePrice]);
 
-  return <div ref={chartContainerRef} style={{ position: 'relative', width: '100%' }} />;
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      <div ref={chartContainerRef} style={{ width: '100%' }} />
+      {/* Watermark */}
+      {symbol && (
+        <div style={{
+          position: 'absolute', top: 8, left: 12,
+          fontSize: 14, fontWeight: 700, fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+          color: 'rgba(255,255,255,0.12)', letterSpacing: 1,
+          pointerEvents: 'none', userSelect: 'none',
+        }}>
+          {symbol}
+        </div>
+      )}
+      {/* Crosshair tooltip */}
+      {crosshair && (
+        <div style={{
+          position: 'absolute',
+          left: Math.min(crosshair.x + 12, (chartContainerRef.current?.clientWidth || 400) - 150),
+          top: Math.max(crosshair.y - 60, 4),
+          background: '#161b22',
+          border: '1px solid #30363d',
+          borderRadius: 6,
+          padding: '5px 8px',
+          fontSize: 11,
+          fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+          color: '#e6edf3',
+          pointerEvents: 'none',
+          zIndex: 10,
+          lineHeight: '1.5',
+        }}>
+          <div>O {formatPrice(crosshair.open)}  H {formatPrice(crosshair.high)}</div>
+          <div>L {formatPrice(crosshair.low)}  C <span style={{ color: crosshair.close >= crosshair.open ? '#26a69a' : '#ef5350' }}>{formatPrice(crosshair.close)}</span></div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default memo(CandlestickChart);

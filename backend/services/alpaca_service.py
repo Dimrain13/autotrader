@@ -12,7 +12,7 @@ import time
 import threading
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, List, Dict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -144,6 +144,9 @@ class AlpacaService:
         # guessing a number.
         self._float_cache = {}
         self._float_cache_lock = threading.Lock()
+        self._fee_cache = None
+        self._fee_cache_ts = 0.0
+        self.FEE_CACHE_TTL_SECONDS = 15 * 60  # fees settle once daily, cache 15 min
         self._sec_ticker_to_cik = None
         self._sec_ticker_map_fetched_at = 0
         self._sec_headers = {'User-Agent': 'MomentumX-Trading-App (contact: admin@momentumx.local)'}
@@ -276,8 +279,59 @@ class AlpacaService:
             # deploys the account's full margin capacity rather than just
             # its cash/equity value.
             "margin_buying_power": max(buying_power, day_trading_buying_power),
+            # Fixed 4x day-trading max — equity * 4, unlike Alpaca's dynamic
+            # buying_power which drifts as margin is consumed by open positions.
+            # Display this as the user-facing "Buying Power" and use it for
+            # position sizing so sizing stays consistent regardless of how
+            # many positions are already held.
+            "max_buying_power": round(float(account.portfolio_value) * 4, 2),
         }
-    
+
+    def get_fee_activities(self) -> List[Dict]:
+        """Fetch regulatory fee activity (CAT / TAF / REG) from Alpaca.
+
+        These settle DAILY as aggregates per trading date (not per-order), so
+        they come back as one entry per fee-type per day. alpaca-py 0.30.1 has
+        no get_account_activities() helper, so we hit the raw /v2/account/
+        activities REST endpoint through the trading client's own get().
+
+        Returns a list of dicts:
+            {date (YYYY-MM-DD), sub_type (CAT/TAF/REG),
+             net_amount (float, <= 0), description}
+        Cached for 15 min - fees settle once daily after close, so refetching
+        faster than that yields nothing new and just burns rate limit.
+        """
+        if not self.trading_client:
+            raise Exception("Alpaca API not configured")
+        now = time.time()
+        if self._fee_cache is not None and (now - self._fee_cache_ts) < self.FEE_CACHE_TTL_SECONDS:
+            return self._fee_cache
+        try:
+            resp = self.trading_client.get('/account/activities', {
+                'activity_types': 'FEE',
+                'status': 'executed',
+                'direction': 'desc',
+                'page_size': 100,
+            })
+            fees = []
+            if isinstance(resp, list):
+                for r in resp:
+                    try:
+                        fees.append({
+                            'date': r.get('date'),
+                            'sub_type': r.get('activity_sub_type'),
+                            'net_amount': float(r.get('net_amount', 0) or 0),
+                            'description': r.get('description'),
+                        })
+                    except Exception:
+                        continue
+            self._fee_cache = fees
+            self._fee_cache_ts = time.time()
+            return fees
+        except Exception as e:
+            logger.warning(f"Could not fetch fee activities from Alpaca: {e}")
+            return self._fee_cache or []
+
     def _is_extended_hours(self):
         """Check if we're in extended trading hours (pre-market or after-hours)"""
         import pytz

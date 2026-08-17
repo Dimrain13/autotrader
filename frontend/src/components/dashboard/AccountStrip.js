@@ -14,7 +14,7 @@ export function AccountStrip({ account, positions, streamConnected, scanner }) {
   return (
     <div className="flex items-center gap-6 px-4 py-2 bg-[#111111] border-b border-neutral-800" data-testid="account-strip">
       {stat("Portfolio", `$${account?.portfolio_value?.toFixed(2) || "0.00"}`, "text-neutral-100", "strip-portfolio-value")}
-      {stat("Buying Power", `$${account?.buying_power?.toFixed(2) || "0.00"}`, "text-neutral-100", "strip-buying-power")}
+      {stat("Buying Power", `$${account?.max_buying_power?.toFixed(2) || "0.00"}`, "text-neutral-100", "strip-buying-power")}
       {stat(
         "Open P&L",
         `${plPositive ? "+" : ""}$${totalUnrealizedPl.toFixed(2)}`,

@@ -31,7 +31,7 @@ export function QuickTradePanel({ symbol, currentPrice, position, account, onOrd
   let dollarAmount = getSetting("dollarAmountPerStock", 2000);
   // Margin trading, always at the max - size off buying power (includes
   // margin), never unlevered portfolio_value/equity.
-  const buyingPower = account?.margin_buying_power || account?.buying_power || account?.portfolio_value;
+  const buyingPower = account?.max_buying_power || account?.margin_buying_power || account?.buying_power || account?.portfolio_value;
   const safePct = Math.min(100, Math.max(1, getSetting("positionSizePct", 10)));
   if (sizeMode === "percent" && buyingPower > 0) {
     // Clamp defensively (1-100%) - a stray/corrupted stored value should

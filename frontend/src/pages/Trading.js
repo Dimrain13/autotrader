@@ -93,7 +93,7 @@ export default function Trading({ account }) {
     orb_enabled: true,
     tiered_sizing_enabled: true,
     psych_level_partials_enabled: true,
-    volume_climax_exit_enabled: true,
+    volume_climax_stop_enabled: true,
     ema9_dip_enabled: true
   });
   
@@ -215,7 +215,7 @@ export default function Trading({ account }) {
       // Margin trading, always at the max - size off buying power (which
       // includes margin), never unlevered portfolio_value/equity. Falls
       // back to portfolio_value only if buying_power itself is missing.
-      const buyingPower = account?.margin_buying_power || account?.buying_power || account?.portfolio_value;
+      const buyingPower = account?.max_buying_power || account?.margin_buying_power || account?.buying_power || account?.portfolio_value;
       // Clamp defensively (1-100%) even though the input itself is now
       // clamped too - a stray/corrupted stored value should never be able
       // to size an order at multiples of the whole account.
@@ -321,7 +321,7 @@ export default function Trading({ account }) {
           orb_enabled: response.data.strategy?.orb_enabled ?? true,
           tiered_sizing_enabled: response.data.strategy?.tiered_sizing_enabled ?? true,
           psych_level_partials_enabled: response.data.strategy?.psych_level_partials_enabled ?? true,
-          volume_climax_exit_enabled: response.data.strategy?.volume_climax_exit_enabled ?? true,
+          volume_climax_stop_enabled: response.data.strategy?.volume_climax_stop_enabled ?? true,
           ema9_dip_enabled: response.data.strategy?.ema9_dip_enabled ?? true
         };
         setAutoTraderSettings(settings);
@@ -345,12 +345,8 @@ export default function Trading({ account }) {
       await axios.post(`${API}/auto-trader/settings`, newSettings);
       setAutoTraderSettings(prev => ({ ...prev, ...newSettings }));
       toast.success('Auto-trader settings updated');
-      // Clear entry conditions cache to refresh with new settings
+      // Invalidate cache — next stock selection pulls fresh data with current settings
       Object.keys(entryConditionsCache).forEach(key => delete entryConditionsCache[key]);
-      setEntryConditions({});
-      // Re-fetch entry conditions for displayed stocks
-      const readyStocks = scannerResults.filter(s => s.criteria_count >= 4);
-      readyStocks.forEach(stock => fetchEntryConditions(stock.symbol));
     } catch (error) {
       console.error('Failed to update auto-trader settings:', error);
       toast.error('Failed to update settings');
@@ -2083,10 +2079,10 @@ export default function Trading({ account }) {
                     </div>
                     <div className="flex items-center gap-2">
                       <input type="checkbox" id="volume-climax"
-                        checked={autoTraderSettings.volume_climax_exit_enabled || false}
-                        onChange={(e) => updateAutoTraderSettings({ volume_climax_exit_enabled: e.target.checked })}
+                        checked={autoTraderSettings.volume_climax_stop_enabled || false}
+                        onChange={(e) => updateAutoTraderSettings({ volume_climax_stop_enabled: e.target.checked })}
                         className="w-3 h-3 rounded border-[#FF1A40]/30 bg-[#121212] text-[#FF1A40]" />
-                      <label htmlFor="volume-climax" className="text-[10px] text-neutral-300 cursor-pointer">Volume Climax Exit</label>
+                      <label htmlFor="volume-climax" className="text-[10px] text-neutral-300 cursor-pointer">Volume Climax Stop Tighten</label>
                     </div>
                   </div>
                 </div>

@@ -140,7 +140,7 @@ export default function StockChartCard({ stock, symbol, currentPrice, pctChange,
                 </div>
               </div>
             ) : (
-              <CandlestickChart 
+              <CandlestickChart symbol={symbol} 
                 data={bars} 
                 height={400} 
                 sma20={data.sma20}

@@ -846,7 +846,7 @@ async def get_auto_trader_status():
     try:
         account = await asyncio.to_thread(alpaca_service.get_account)
         # Margin trading, always at the max - see get_account() for details.
-        portfolio_value = float(account.get('margin_buying_power', 0)) or float(account.get('portfolio_value', 0))
+        portfolio_value = float(account.get('max_buying_power') or account.get('margin_buying_power', 0)) or float(account.get('portfolio_value', 0))
     except:
         portfolio_value = 0
     
@@ -882,23 +882,29 @@ async def get_auto_trader_status():
                 "orb_enabled": auto_trader.orb_enabled,
                 "tiered_sizing_enabled": auto_trader.tiered_sizing_enabled,
                 "psych_level_partials_enabled": auto_trader.psych_level_partials_enabled,
-                "volume_climax_exit_enabled": auto_trader.volume_climax_exit_enabled,
+                "volume_climax_stop_enabled": auto_trader.volume_climax_stop_enabled,
                 "ema9_dip_enabled": auto_trader.ema9_dip_enabled,
                 "red_candle_exit_enabled": auto_trader.red_candle_exit_enabled,
                 "extension_bar_spike_exit_enabled": auto_trader.extension_bar_spike_exit_enabled,
                 "flat_top_breakout_enabled": auto_trader.flat_top_breakout_enabled,
-                "afternoon_5min_only": auto_trader.afternoon_5min_only,  # 60
+                "afternoon_5min_only": auto_trader.afternoon_5min_only,
+                "market_regime_gate_enabled": auto_trader.market_regime_gate_enabled,
+                "market_regime": auto_trader.market_regime,
+                "red_day_risk_multiplier": auto_trader.red_day_risk_multiplier,  # 60
             "bull_flag_breakout_enabled": auto_trader.bull_flag_breakout_enabled,
             "vwap_bounce_enabled": auto_trader.vwap_bounce_enabled,
             "orb_enabled": auto_trader.orb_enabled,
             "tiered_sizing_enabled": auto_trader.tiered_sizing_enabled,
             "psych_level_partials_enabled": auto_trader.psych_level_partials_enabled,
-            "volume_climax_exit_enabled": auto_trader.volume_climax_exit_enabled,
+            "volume_climax_stop_enabled": auto_trader.volume_climax_stop_enabled,
             "ema9_dip_enabled": auto_trader.ema9_dip_enabled,
                 "red_candle_exit_enabled": auto_trader.red_candle_exit_enabled,
                 "extension_bar_spike_exit_enabled": auto_trader.extension_bar_spike_exit_enabled,
                 "flat_top_breakout_enabled": auto_trader.flat_top_breakout_enabled,
-                "afternoon_5min_only": auto_trader.afternoon_5min_only  # 60
+                "afternoon_5min_only": auto_trader.afternoon_5min_only,
+                "market_regime_gate_enabled": auto_trader.market_regime_gate_enabled,
+                "market_regime": auto_trader.market_regime,
+                "red_day_risk_multiplier": auto_trader.red_day_risk_multiplier  # 60
         },
         "entry_conditions": {
             "pullback_min_candles": auto_trader.pullback_min_candles,
@@ -960,6 +966,7 @@ async def update_auto_trader_settings(settings: dict):
                 "topping_tail_wick_ratio": auto_trader.topping_tail_wick_ratio,
                 "max_positions": auto_trader.max_positions,
                 "position_size_pct": auto_trader.position_size_pct * 100,
+                "risk_per_trade_pct": auto_trader.risk_per_trade_pct * 100,
                 "daily_max_loss_pct": auto_trader.daily_max_loss_pct * 100,
                 "no_news_scalp_enabled": auto_trader.no_news_scalp_enabled,
                 "no_news_position_size_pct": auto_trader.no_news_position_size_pct * 100,
@@ -971,28 +978,76 @@ async def update_auto_trader_settings(settings: dict):
                 "red_candle_exit_enabled": auto_trader.red_candle_exit_enabled,
                 "extension_bar_spike_exit_enabled": auto_trader.extension_bar_spike_exit_enabled,
                 "flat_top_breakout_enabled": auto_trader.flat_top_breakout_enabled,
-                "afternoon_5min_only": auto_trader.afternoon_5min_only
+                "afternoon_5min_only": auto_trader.afternoon_5min_only,
+                "market_regime_gate_enabled": auto_trader.market_regime_gate_enabled,
+                "market_regime": auto_trader.market_regime,
+                "red_day_risk_multiplier": auto_trader.red_day_risk_multiplier
             }
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @api_router.get("/auto-trader/history")
-async def get_auto_trader_history():
-    """Get today's trade history"""
-    winners = [t for t in auto_trader.trade_history if t['pnl'] > 0]
-    losers = [t for t in auto_trader.trade_history if t['pnl'] < 0]
+async def get_auto_trader_history(date: str = None):
+    """Get trade history for a specific date from MongoDB (default: today Eastern)."""
+    from datetime import date as dt_date
+    import pytz
+    eastern = pytz.timezone('US/Eastern')
+    if date:
+        try:
+            target_date = dt_date.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+    else:
+        target_date = datetime.now(eastern).date()
     
+    from datetime import timedelta
+    start_dt = datetime(target_date.year, target_date.month, target_date.day, tzinfo=eastern)
+    end_dt = start_dt + timedelta(days=1)
+    start_utc = start_dt.astimezone(timezone.utc)
+    end_utc = end_dt.astimezone(timezone.utc)
+    
+    trades_cursor = trade_history.collection.find({
+        'entry_time': {'$gte': start_utc.isoformat(), '$lt': end_utc.isoformat()}
+    }).sort('entry_time', 1)
+    
+    trades = []
+    winners = []
+    losers = []
+    total_volume = 0
+    async for t in trades_cursor:
+        pnl = t.get('pnl', 0) or 0
+        shares = t.get('shares', 0) or 0
+        entry_px = t.get('entry_price', 0) or 0
+        total_volume += shares * entry_px
+        rec = {
+            'symbol': t.get('symbol', ''),
+            'entry_price': entry_px,
+            'exit_price': t.get('exit_price', 0) or 0,
+            'shares': shares,
+            'pnl': pnl,
+            'pnl_pct': t.get('pnl_pct', 0) or 0,
+            'exit_reason': t.get('exit_reason', ''),
+            'entry_time': t.get('entry_time', ''),
+            'exit_time': t.get('exit_time', ''),
+        }
+        trades.append(rec)
+        if pnl > 0: winners.append(rec)
+        else: losers.append(rec)
+    
+    total = len(trades)
     return {
-        "trades": auto_trader.trade_history,
+        "trades": trades,
+        "date": str(target_date),
         "summary": {
-            "total_trades": len(auto_trader.trade_history),
+            "total_trades": total,
             "winners": len(winners),
             "losers": len(losers),
-            "win_rate": (len(winners) / len(auto_trader.trade_history) * 100) if auto_trader.trade_history else 0,
-            "total_pnl": sum(t['pnl'] for t in auto_trader.trade_history),
-            "avg_win": (sum(t['pnl'] for t in winners) / len(winners)) if winners else 0,
-            "avg_loss": (sum(t['pnl'] for t in losers) / len(losers)) if losers else 0
+            "win_rate": round((len(winners) / total * 100), 1) if total else 0,
+            "total_pnl": round(sum(t['pnl'] for t in trades), 2),
+            "avg_win": round((sum(t['pnl'] for t in winners) / len(winners)), 2) if winners else 0,
+            "avg_loss": round((sum(t['pnl'] for t in losers) / len(losers)), 2) if losers else 0,
+            "total_volume": round(total_volume, 2),
         }
     }
 
@@ -1130,22 +1185,50 @@ async def check_entry_conditions(symbol: str):
         }
 
 @api_router.get("/trade-history")
-async def get_trade_history(limit: int = 100, symbol: str = None):
-    """Get historical trades"""
-    trades = await trade_history.get_trades(limit=limit, symbol=symbol)
+async def get_trade_history(limit: int = 100, symbol: str = None, date: str = None, days: int = 0, source: str = 'current'):
+    """Get historical trades (optionally filtered by date: YYYY-MM-DD, or last N days).  Pass source to read from an archived snapshot."""
+    trades = await trade_history.get_trades(limit=limit, symbol=symbol, date=date, days=days, source=source)
     return {"trades": trades}
 
 @api_router.get("/trade-history/analytics")
-async def get_trade_analytics(days: Optional[int] = 180):
-    """Get trading performance analytics (bounded to last `days` days by default; pass 0 for all-time)"""
-    analytics = await trade_history.get_analytics(days=days if days else None)
+async def get_trade_analytics(days: Optional[int] = 180, source: str = 'current'):
+    """Get trading performance analytics (bounded to last `days` days by default; pass 0 for all-time).  Pass source for historical snapshots."""
+    analytics = await trade_history.get_analytics(days=days if days else None, source=source)
     return analytics
+
+@api_router.get("/trade-history/sources")
+async def get_trade_history_sources():
+    """List available history sources: current account + archived snapshots from prior API keys / account swaps."""
+    return {"sources": await trade_history.list_sources()}
+
+@api_router.get("/trade-history/fees")
+async def get_trade_fees(days: Optional[int] = 180):
+    """Daily regulatory fee totals (SEC REG, FINRA TAF, CAT) from Alpaca.
+
+    Returns {fees: {date: amount}, total_fees: float} where amounts are
+    negative (fees are a cost). Pass days=0 for all-time. Fees are daily
+    aggregates keyed by ET trading date, matching trade-history grouping.
+    """
+    return await trade_history.get_fees(days=days if days else None)
 
 @api_router.get("/trade-history/daily-pnl")
 async def get_daily_pnl(days: int = 30):
     """Get daily P&L for the last N days"""
     daily_pnl = await trade_history.get_daily_pnl(days=days)
     return {"daily_pnl": daily_pnl}
+
+@api_router.get("/trade-history/dashboard")
+async def get_trade_dashboard(days: int = 0, limit: int = 2000):
+    """Single call for the History page — trades, analytics, fees,
+    sources, and live account state. Replaces 5 parallel API round-trips
+    with 1, eliminating the SSH-tunnel latency tax on every load."""
+    return {
+        "trades": await trade_history.get_trades(limit=limit, days=0),
+        "analytics": await trade_history.get_analytics(days=days if days else None),
+        "fees": await trade_history.get_fees(days=days if days else None),
+        "sources": await trade_history.list_sources(),
+        "account": alpaca_service.get_account(),
+    }
 
 @api_router.post("/trade-history/log")
 async def log_trade(trade_data: dict):
@@ -1201,6 +1284,13 @@ async def process_auto_trading(request: Request):
     try:
         if not auto_trader.active:
             return {"message": "Auto-trader not active"}
+        if not auto_trader.is_trading_hours():
+            raise HTTPException(status_code=403, detail="Outside trading hours")
+        if auto_trader.is_past_entry_cutoff():
+            raise HTTPException(status_code=403, detail="Past entry cutoff")
+        risk = auto_trader.check_risk_limits(0)
+        if not risk.get('can_trade', True):
+            raise HTTPException(status_code=403, detail=f"Trading halted: {risk.get('reason', 'unknown')}")
         
         # Get scanner results from most recent scan
         criteria = {
@@ -1216,7 +1306,7 @@ async def process_auto_trading(request: Request):
         # instead of running a duplicate full 128-batch snapshot scan.
         scanner_results = await asyncio.to_thread(scanner_service.scan_market, criteria)
         account = await asyncio.to_thread(alpaca_service.get_account)
-        portfolio_value = account.get('margin_buying_power') or account.get('portfolio_value', 0)
+        portfolio_value = account.get('max_buying_power') or account.get('margin_buying_power') or account.get('portfolio_value', 0)
         
         await auto_trader.process_scanner_results(scanner_results, portfolio_value)
         
@@ -1499,19 +1589,15 @@ async def update_trading_mode(body: TradingModeUpdate):
 @api_router.get("/news/{symbol}")
 async def get_news(symbol: str, limit: int = 5):
     """
-    Get recent news for a symbol - Alpaca/Benzinga first (fast, no scraping),
-    Google News RSS fallback ONLY when Alpaca has zero raw articles at all
-    for this symbol (illiquid micro-caps Benzinga doesn't cover). This is a
-    display feed for a human to read, not an entry signal - every raw
-    article Alpaca/Benzinga finds is returned as-is (sentiment/temperature
-    tagged, never dropped), even weak/neutral/negative ones. Falling back
-    to Google News only when Alpaca found NOTHING (not just "nothing that
-    clears the catalyst bar") avoids discarding real Alpaca articles in
-    favor of a different source's take on the same story.
+    Get recent news for a symbol with AI-grade enrichment.
+    Each article is enriched with ai_level, ai_catalyst, ai_reason, ai_summary
+    (3 sentences) from the momentumx.news_grades cache. Ungraded articles are
+    enqueued for the Hermes AI grader (on-demand priority).
     """
     try:
         from services.google_news_service import google_news_service
         from services.scanner_service import scanner_service
+        from services import news_grader_service
 
         result = await asyncio.to_thread(scanner_service.check_alpaca_news, symbol, 24, limit, 0)
         news_source = 'Benzinga (Alpaca)'
@@ -1525,6 +1611,31 @@ async def get_news(symbol: str, limit: int = 5):
                 pass
             result = await asyncio.to_thread(google_news_service.search_stock_news, symbol, 24, limit, company_name, 0)
             news_source = 'Google News'
+
+        # Enrich each article with AI grade + 3-sentence summary (on-demand)
+        ungraded = []
+        for a in result.get('articles', []):
+            grade = await asyncio.to_thread(news_grader_service.get_grade_direct, a.get('title', ''))
+            if grade:
+                a['ai_level'] = grade.get('level')
+                a['ai_catalyst'] = grade.get('catalyst')
+                a['ai_reason'] = grade.get('reason')
+                a['ai_summary'] = grade.get('summary')
+                a['ai_graded'] = True
+            else:
+                a['ai_graded'] = False
+                ungraded.append({
+                    'headline': a.get('title', ''),
+                    'symbol': symbol,
+                    'freshness': a.get('freshness'),
+                    'score': a.get('score'),
+                    'link': a.get('link', ''),
+                })
+
+        # Enqueue ungraded for the Hermes grader (fire-and-forget)
+        if ungraded:
+            import threading as _t
+            _t.Thread(target=news_grader_service.enqueue_articles, args=(ungraded,), daemon=True).start()
 
         return {
             "symbol": symbol,
@@ -1552,7 +1663,7 @@ async def exit_monitor_loop():
         try:
             await auto_trader.reconcile_open_positions()
             account = await asyncio.to_thread(alpaca_service.get_account)
-            portfolio_value = account.get('margin_buying_power') or account.get('portfolio_value', 0)
+            portfolio_value = account.get('max_buying_power') or account.get('margin_buying_power') or account.get('portfolio_value', 0)
             await auto_trader.monitor_exits(portfolio_value)
         except Exception as e:
             logger.error(f"Exit monitor loop error: {str(e)}")
@@ -1597,7 +1708,7 @@ async def auto_trader_loop():
                     await market_data_stream.subscribe(candidate_symbols)
                 account = await asyncio.to_thread(alpaca_service.get_account)
                 # Margin trading, always at the max - see get_account() for details.
-                portfolio_value = account.get('margin_buying_power') or account.get('portfolio_value', 0)
+                portfolio_value = account.get('max_buying_power') or account.get('margin_buying_power') or account.get('portfolio_value', 0)
                 await auto_trader.process_scanner_results(scanner_results, portfolio_value)
         except Exception as e:
             logger.error(f"Auto-trader loop error: {str(e)}")

@@ -118,7 +118,7 @@ export function MiniChartTile({ symbol, timeframe, liveTrade, levels }) {
             </span>
           </div>
         ) : (
-          <CandlestickChart data={bars} height={220} vwap={vwap} blockTrades={blockTrades} livePrice={liveTrade} levels={levels} />
+          <CandlestickChart symbol={symbol} data={bars} height={220} vwap={vwap} blockTrades={blockTrades} livePrice={liveTrade} levels={levels} />
         )}
       </div>
     </div>

@@ -14,6 +14,7 @@ import time
 import threading
 from typing import Dict, Tuple, Optional
 import urllib.parse
+from services import news_grader_service
 
 logger = logging.getLogger(__name__)
 

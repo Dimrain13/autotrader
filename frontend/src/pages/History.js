@@ -13,57 +13,76 @@ export default function History() {
   const [tradeNews, setTradeNews] = useState({}); // {symbol: news_data}
   const [account, setAccount] = useState(null);
   const [expandedDays, setExpandedDays] = useState({}); // {dateKey: boolean}
+  const [feeData, setFeeData] = useState({}); // {dateKey: feeAmount} from Alpaca
+  const [historySources, setHistorySources] = useState([]); // archived account snapshots
+  const [selectedHistSource, setSelectedHistSource] = useState(''); // active historical source id
+  const [historicalTrades, setHistoricalTrades] = useState([]);
+  const [historicalAnalytics, setHistoricalAnalytics] = useState(null);
+  const [histLoading, setHistLoading] = useState(false);
+
+  const CACHE_KEY = "momentumx_history_dashboard";
 
   useEffect(() => {
-    fetchTradeHistory();
-    fetchAnalytics();
-    fetchAccount();
+    // Show cached data instantly, then refresh in background
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (cached) {
+      try {
+        const d = JSON.parse(cached);
+        setTrades(d.trades || []);
+        setFeeData(d.fees || {});
+        setHistorySources(d.sources || []);
+        if (d.analytics) setAnalytics(d.analytics);
+        if (d.account) setAccount(d.account);
+        setLoading(false);
+      } catch (_) {}
+    }
+    fetchDashboard();
   }, []);
 
-  const fetchAccount = async () => {
+  const fetchDashboard = async () => {
     try {
-      const response = await axios.get(`${API}/account`, { timeout: 10000 });
-      setAccount(response.data);
+      const resp = await axios.get(
+        `${API}/trade-history/dashboard?days=0&limit=2000`,
+        { timeout: 20000 }
+      );
+      const d = resp.data;
+      setTrades(d.trades || []);
+      setFeeData(d.fees || {});
+      setHistorySources(d.sources || []);
+      if (d.analytics) setAnalytics(d.analytics);
+      if (d.account) setAccount(d.account);
+      localStorage.setItem(CACHE_KEY, JSON.stringify(d));
     } catch (error) {
-      console.error('Failed to fetch account:', error);
-    }
-  };
-
-  const fetchTradeHistory = async () => {
-    try {
-      const response = await axios.get(`${API}/trade-history?limit=2000`, { timeout: 10000 });
-      setTrades(response.data.trades || []);
-    } catch (error) {
-      console.error('Failed to fetch trade history:', error);
+      console.error("Failed to fetch dashboard:", error);
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchAnalytics = async () => {
+  const loadHistoricalSource = async (sourceId) => {
+    setSelectedHistSource(sourceId);
+    if (!sourceId) {
+      setHistoricalTrades([]);
+      setHistoricalAnalytics(null);
+      return;
+    }
+    setHistLoading(true);
     try {
-      const response = await axios.get(`${API}/trade-history/analytics`, { timeout: 10000 });
-      setAnalytics(response.data);
+      const [tradesRes, analyticsRes] = await Promise.all([
+        axios.get(`${API}/trade-history?limit=2000&source=${encodeURIComponent(sourceId)}`, { timeout: 15000 }),
+        axios.get(`${API}/trade-history/analytics?days=0&source=${encodeURIComponent(sourceId)}`, { timeout: 15000 })
+      ]);
+      setHistoricalTrades(tradesRes.data.trades || []);
+      setHistoricalAnalytics(analyticsRes.data);
     } catch (error) {
-      console.error('Failed to fetch analytics:', error);
-      // Set default analytics when API fails
-      setAnalytics({
-        total_trades: 0,
-        winners: 0,
-        losers: 0,
-        win_rate: 0,
-        total_pnl: 0,
-        avg_win: 0,
-        avg_loss: 0,
-        largest_win: 0,
-        largest_loss: 0,
-        profit_factor: 0,
-        best_stock: 'N/A',
-        worst_stock: 'N/A',
-        expectancy: 0
-      });
+      console.error('Failed to load historical source:', error);
+      setHistoricalTrades([]);
+      setHistoricalAnalytics(null);
+    } finally {
+      setHistLoading(false);
     }
   };
+
 
   // Fetch news for traded symbols
   const fetchNewsForTrades = async (tradeList) => {
@@ -109,19 +128,25 @@ export default function History() {
     });
     
     const yearlyPnL = yearTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+    // Regulatory fees (SEC/FINRA/CAT) for the current year, keyed by ET date
+    const yearlyFees = Object.entries(feeData).reduce((sum, [date, amt]) => {
+      return date.startsWith(String(currentYear)) ? sum + amt : sum;
+    }, 0);
+    const netYearlyPnL = yearlyPnL + yearlyFees;
     const totalTradeSize = yearTrades.reduce((sum, t) => sum + ((t.entry_price || 0) * (t.shares || 0)), 0);
     
     // Calculate based on account size (starting capital estimate)
     const accountValue = account?.portfolio_value || 100000;
     // Estimate starting capital by subtracting total P&L from current value
-    const startingCapital = accountValue - yearlyPnL;
-    const yearlyPctOnAccount = startingCapital > 0 ? (yearlyPnL / startingCapital) * 100 : 0;
+    const startingCapital = accountValue - netYearlyPnL;
+    const yearlyPctOnAccount = startingCapital > 0 ? (netYearlyPnL / startingCapital) * 100 : 0;
     
     // Calculate based on total capital deployed (trade size)
-    const yearlyPctOnTrades = totalTradeSize > 0 ? (yearlyPnL / totalTradeSize) * 100 : 0;
+    const yearlyPctOnTrades = totalTradeSize > 0 ? (netYearlyPnL / totalTradeSize) * 100 : 0;
     
     return {
-      yearlyPnL,
+      yearlyPnL: netYearlyPnL,
+      yearlyFees,
       yearlyPctOnAccount: yearlyPctOnAccount.toFixed(2),
       yearlyPctOnTrades: yearlyPctOnTrades.toFixed(2),
       totalTradeSize,
@@ -174,6 +199,13 @@ export default function History() {
       }
     });
     
+    // Attach Alpaca regulatory fees (daily aggregates keyed by ET date) and
+    // compute net P&L = gross trade P&L + fees (fees are negative).
+    Object.values(dailyData).forEach(day => {
+      day.fees = feeData[day.dateKey] || 0;
+      day.netPnl = (day.pnl || 0) + day.fees;
+    });
+    
     // Sort by date descending (most recent first)
     return Object.values(dailyData)
       .sort((a, b) => new Date(b.dateKey) - new Date(a.dateKey))
@@ -210,14 +242,17 @@ export default function History() {
           {/* Total P&L */}
           <Card className="bg-[#0A0A0A] border-white/5">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs text-neutral-500 uppercase tracking-wider font-mono">Total P&L</CardTitle>
+              <CardTitle className="text-xs text-neutral-500 uppercase tracking-wider font-mono">Total P&L (Net)</CardTitle>
             </CardHeader>
             <CardContent>
               <div className={`text-3xl font-mono font-bold ${analytics.total_pnl >= 0 ? 'text-[#00E599]' : 'text-[#FF1A40]'}`}>
                 ${analytics.total_pnl?.toFixed(2) || '0.00'}
               </div>
               <div className="text-xs text-neutral-500 mt-1">
-                {analytics.total_trades || 0} trades
+                {analytics.total_trades || 0} trades · Gross ${analytics.gross_pnl?.toFixed(2) || '0.00'}
+              </div>
+              <div className="text-xs text-neutral-500 mt-0.5">
+                Fees ${analytics.total_fees?.toFixed(2) || '0.00'}
               </div>
             </CardContent>
           </Card>
@@ -281,10 +316,11 @@ export default function History() {
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div>
-                <div className="text-xs text-neutral-500 uppercase mb-1">Year P&L</div>
+                <div className="text-xs text-neutral-500 uppercase mb-1">Year P&L (Net)</div>
                 <div className={`text-2xl font-mono font-bold ${getYearlyPerformance().yearlyPnL >= 0 ? 'text-[#00E599]' : 'text-[#FF1A40]'}`}>
                   ${getYearlyPerformance().yearlyPnL.toFixed(2)}
                 </div>
+                <div className="text-[10px] text-neutral-600">Fees ${getYearlyPerformance().yearlyFees.toFixed(2)}</div>
               </div>
               <div>
                 <div className="text-xs text-neutral-500 uppercase mb-1">% Return (Account)</div>
@@ -333,7 +369,8 @@ export default function History() {
                 <thead>
                   <tr className="text-left text-xs text-neutral-500 uppercase border-b border-white/10">
                     <th className="pb-2 pr-4">Date</th>
-                    <th className="pb-2 pr-4 text-right">P&L</th>
+                    <th className="pb-2 pr-4 text-right">Net P&L</th>
+                    <th className="pb-2 pr-4 text-right">Fees</th>
                     <th className="pb-2 pr-4 text-center">Trades</th>
                     <th className="pb-2 pr-4 text-center">W/L</th>
                     <th className="pb-2 pr-4 text-right">Win Rate</th>
@@ -363,8 +400,11 @@ export default function History() {
                             </span>
                           </div>
                         </td>
-                        <td className={`py-3 pr-4 text-right font-mono font-bold ${day.pnl >= 0 ? 'text-[#00E599]' : 'text-[#FF1A40]'}`}>
-                          {day.pnl >= 0 ? '+' : ''}${day.pnl.toFixed(2)}
+                        <td className={`py-3 pr-4 text-right font-mono font-bold ${day.netPnl >= 0 ? 'text-[#00E599]' : 'text-[#FF1A40]'}`}>
+                          {day.netPnl >= 0 ? '+' : ''}${day.netPnl.toFixed(2)}
+                        </td>
+                        <td className="py-3 pr-4 text-right font-mono text-neutral-400">
+                          {day.fees < 0 ? `-$${Math.abs(day.fees).toFixed(2)}` : `$${day.fees.toFixed(2)}`}
                         </td>
                         <td className="py-3 pr-4 text-center font-mono text-neutral-400">
                           {day.trades}
@@ -384,7 +424,7 @@ export default function History() {
                       {/* Expanded trades for this day */}
                       {expandedDays[day.dateKey] && (
                         <tr key={`${day.dateKey}-expanded`}>
-                          <td colSpan="6" className="bg-[#111] border-b border-white/10">
+                          <td colSpan="7" className="bg-[#111] border-b border-white/10">
                             <div className="p-3">
                               <table className="w-full text-xs">
                                 <thead>
@@ -396,6 +436,7 @@ export default function History() {
                                     <th className="pb-2 text-right">P&L</th>
                                     <th className="pb-2 text-right">%</th>
                                     <th className="pb-2 text-left">Exit Reason</th>
+                                    <th className="pb-2 text-left">Strategy</th>
                                     <th className="pb-2 text-left">Time</th>
                                   </tr>
                                 </thead>
@@ -425,6 +466,7 @@ export default function History() {
                                           {trade.exit_reason || 'Unknown'}
                                         </span>
                                       </td>
+                                      <td className="py-2 text-neutral-400">{trade.strategy || 'Manual'}</td>
                                       <td className="py-2 text-neutral-500">
                                         {trade.exit_time ? new Date(trade.exit_time).toLocaleTimeString('en-US', {
                                           hour: '2-digit',
@@ -443,24 +485,34 @@ export default function History() {
                   );})}
                 </tbody>
                 <tfoot>
-                  <tr className="text-sm border-t border-white/20 bg-white/5">
-                    <td className="py-3 pr-4 font-bold text-white">TOTAL</td>
-                    <td className={`py-3 pr-4 text-right font-mono font-bold ${getDailyPerformance().reduce((sum, d) => sum + d.pnl, 0) >= 0 ? 'text-[#00E599]' : 'text-[#FF1A40]'}`}>
-                      {getDailyPerformance().reduce((sum, d) => sum + d.pnl, 0) >= 0 ? '+' : ''}${getDailyPerformance().reduce((sum, d) => sum + d.pnl, 0).toFixed(2)}
-                    </td>
-                    <td className="py-3 pr-4 text-center font-mono font-bold text-white">
-                      {getDailyPerformance().reduce((sum, d) => sum + d.trades, 0)}
-                    </td>
-                    <td className="py-3 pr-4 text-center font-mono">
-                      <span className="text-[#00E599]">{getDailyPerformance().reduce((sum, d) => sum + d.winners, 0)}W</span>
-                      <span className="text-neutral-600 mx-1">/</span>
-                      <span className="text-[#FF1A40]">{getDailyPerformance().reduce((sum, d) => sum + d.losers, 0)}L</span>
-                    </td>
-                    <td className="py-3 pr-4 text-right font-mono text-neutral-400">-</td>
-                    <td className="py-3 text-right font-mono font-bold text-white">
-                      ${getDailyPerformance().reduce((sum, d) => sum + d.volume, 0).toLocaleString(undefined, {maximumFractionDigits: 0})}
-                    </td>
-                  </tr>
+                  {(() => {
+                    const days = getDailyPerformance();
+                    const netTotal = days.reduce((sum, d) => sum + d.netPnl, 0);
+                    const feesTotal = days.reduce((sum, d) => sum + d.fees, 0);
+                    return (
+                      <tr className="text-sm border-t border-white/20 bg-white/5">
+                        <td className="py-3 pr-4 font-bold text-white">TOTAL</td>
+                        <td className={`py-3 pr-4 text-right font-mono font-bold ${netTotal >= 0 ? 'text-[#00E599]' : 'text-[#FF1A40]'}`}>
+                          {netTotal >= 0 ? '+' : ''}${netTotal.toFixed(2)}
+                        </td>
+                        <td className="py-3 pr-4 text-right font-mono text-neutral-400">
+                          {feesTotal < 0 ? `-$${Math.abs(feesTotal).toFixed(2)}` : `$${feesTotal.toFixed(2)}`}
+                        </td>
+                        <td className="py-3 pr-4 text-center font-mono font-bold text-white">
+                          {days.reduce((sum, d) => sum + d.trades, 0)}
+                        </td>
+                        <td className="py-3 pr-4 text-center font-mono">
+                          <span className="text-[#00E599]">{days.reduce((sum, d) => sum + d.winners, 0)}W</span>
+                          <span className="text-neutral-600 mx-1">/</span>
+                          <span className="text-[#FF1A40]">{days.reduce((sum, d) => sum + d.losers, 0)}L</span>
+                        </td>
+                        <td className="py-3 pr-4 text-right font-mono text-neutral-400">-</td>
+                        <td className="py-3 text-right font-mono font-bold text-white">
+                          ${days.reduce((sum, d) => sum + d.volume, 0).toLocaleString(undefined, {maximumFractionDigits: 0})}
+                        </td>
+                      </tr>
+                    );
+                  })()}
                 </tfoot>
               </table>
             </div>
@@ -564,6 +616,7 @@ export default function History() {
                     <th className="pb-2">%</th>
                     <th className="pb-2">Hold Time</th>
                     <th className="pb-2">Exit Reason</th>
+                    <th className="pb-2">Strategy</th>
                     <th className="pb-2">News Catalyst</th>
                     <th className="pb-2">Date</th>
                   </tr>
@@ -586,6 +639,7 @@ export default function History() {
                       </td>
                       <td className="py-3 text-neutral-400 text-xs">{trade.hold_time || 'N/A'}</td>
                       <td className="py-3 text-neutral-400 text-xs">{trade.exit_reason || 'Manual'}</td>
+                      <td className="py-3 text-neutral-400 text-xs">{trade.strategy || 'Manual'}</td>
                       <td className="py-3 text-xs max-w-[200px]">
                         {tradeNews[trade.symbol]?.has_news && tradeNews[trade.symbol]?.articles?.length > 0 ? (
                           <a 
@@ -613,6 +667,80 @@ export default function History() {
           )}
         </CardContent>
       </Card>
+
+      {/* Historical Data (previous API accounts) */}
+      {historySources.filter(s => s.id !== 'current').length > 0 && (
+        <Card className="bg-[#0A0A0A] border-white/5 border-l-4 border-l-amber-500">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-bold flex items-center gap-2">
+              Historical Data (previous API accounts)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-3 mb-3">
+              <select
+                value={selectedHistSource}
+                onChange={(e) => loadHistoricalSource(e.target.value)}
+                className="bg-[#111] border border-white/10 text-white rounded px-3 py-1.5 text-sm"
+              >
+                <option value="">Select a previous account...</option>
+                {historySources.filter(s => s.id !== 'current').map(s => (
+                  <option key={s.id} value={s.id}>{s.label} ({s.count} trades)</option>
+                ))}
+              </select>
+              {histLoading && <span className="text-neutral-500 text-xs">Loading...</span>}
+            </div>
+            {historicalTrades.length > 0 && historicalAnalytics && (
+              <>
+                <div className="flex flex-wrap gap-x-6 gap-y-1 mb-3 text-sm">
+                  <span className="text-neutral-400">{historicalAnalytics.total_trades} trades</span>
+                  <span className={historicalAnalytics.total_pnl >= 0 ? 'text-[#00E599]' : 'text-[#FF1A40]'}>
+                    Total P&amp;L: ${historicalAnalytics.total_pnl?.toFixed(2)}
+                  </span>
+                  <span className="text-neutral-400">Gross: ${historicalAnalytics.gross_pnl?.toFixed(2)}</span>
+                  <span className="text-neutral-400">Win Rate: {historicalAnalytics.win_rate}%</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-neutral-500 uppercase border-b border-white/10">
+                        <th className="pb-2">Symbol</th>
+                        <th className="pb-2">Entry</th>
+                        <th className="pb-2">Exit</th>
+                        <th className="pb-2 text-right">Shares</th>
+                        <th className="pb-2 text-right">P&amp;L</th>
+                        <th className="pb-2 text-right">%</th>
+                        <th className="pb-2">Strategy</th>
+                        <th className="pb-2">Exit Reason</th>
+                        <th className="pb-2">Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicalTrades.map((trade, idx) => (
+                        <tr key={idx} className="border-b border-white/5 hover:bg-white/5">
+                          <td className="py-1.5 font-mono font-bold text-white">{trade.symbol}</td>
+                          <td className="py-1.5 font-mono text-neutral-400">${trade.entry_price?.toFixed(2)}</td>
+                          <td className="py-1.5 font-mono text-neutral-400">${trade.exit_price?.toFixed(2)}</td>
+                          <td className="py-1.5 text-right font-mono text-neutral-400">{trade.shares?.toLocaleString()}</td>
+                          <td className={`py-1.5 text-right font-mono font-bold ${trade.pnl >= 0 ? 'text-[#00E599]' : 'text-[#FF1A40]'}`}>
+                            {trade.pnl >= 0 ? '+' : ''}${trade.pnl?.toFixed(2)}
+                          </td>
+                          <td className={`py-1.5 text-right font-mono ${trade.pnl_pct >= 0 ? 'text-[#00E599]' : 'text-[#FF1A40]'}`}>
+                            {trade.pnl_pct >= 0 ? '+' : ''}{trade.pnl_pct?.toFixed(2)}%
+                          </td>
+                          <td className="py-1.5 text-neutral-400">{trade.strategy || 'Manual'}</td>
+                          <td className="py-1.5 text-neutral-400">{trade.exit_reason || 'Manual'}</td>
+                          <td className="py-1.5 text-neutral-500">{trade.exit_time ? new Date(trade.exit_time).toLocaleDateString() : 'N/A'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

@@ -44,6 +44,7 @@ from database import db
 logger = logging.getLogger(__name__)
 
 
+import time
 class AutoTraderService:
     def __init__(self):
         self.active = False
@@ -53,7 +54,8 @@ class AutoTraderService:
         # 2:1 profit-target:stop-loss ratio + 1% conservative daily-loss kill switch,
         # matching Ross Cameron's documented risk rules (see file docstring above).
         self.max_positions = 5
-        self.position_size_pct = 0.50  # 50% of margin buying power per trade (Ross Cameron small-account sizing) (up to 5 concurrent = 50% max exposure)
+        self.position_size_pct = 0.50  # Absolute CEILING: max 50% of EQUITY per position (safety cap, not the sizing driver)
+        self.risk_per_trade_pct = 0.01  # Ross Cameron risk-based sizing: risk 1% of EQUITY per trade
         self.profit_target_pct = 0.02  # 2% profit target - sell 50% here (2:1 with the 1% stop)
         self.stop_loss_pct = 0.01  # 1% initial stop loss
         self.reward_risk_ratio = 2.0  # multiplier applied to the structural stop distance
@@ -162,6 +164,19 @@ class AutoTraderService:
         self.front_side_dollar_breakout_threshold = 0.10  # within 10% of $1.00 counts
         self.front_side_max_stop_distance_pct = 0.12  # wide structural stops (whole-dollar/ATH/MA-wall), compensated by 25% sizing
 
+        # Market-regime gate (Ross Cameron: check the tape before trading).
+        # Ross looks at SPY / the index futures and market breadth FIRST, and
+        # on red days he defensively pulls back to far fewer, smaller trades.
+        # This bot previously had NO such filter - it traded identically on
+        # green and red days (e.g. 203 trades on the Aug 14 Red Day while Ross
+        # cut back to ~4 tickers).
+        self.market_regime_gate_enabled = True
+        self.red_day_risk_multiplier = 0.5   # on a red day, risk HALF per trade
+        self.red_day_spy_threshold_pct = -0.005  # SPY <= -0.5% intraday = red day
+        self.market_regime = "neutral"  # green / neutral / red (updated each cycle)
+        self._regime_cache_ts = 0.0
+        self._regime_cache_ttl = 60.0  # seconds - regime doesn't change every scan
+
         # Flat Top Breakout (Ross Cameron pattern #2)
         self.flat_top_breakout_enabled = True
         self.flat_top_lookback_bars = 30
@@ -171,15 +186,25 @@ class AutoTraderService:
         # After 11:30 AM ET -> 5-min chart only
         self.afternoon_5min_only = True
 
-        # Feature flags referenced by the /auto-trader/status endpoint and the
-        # frontend toggles but whose underlying logic is not yet implemented.
-        # Defined here (default False) so the status endpoint doesn't 500 with
-        # AttributeError and so a future toggle flip is a no-op rather than a
-        # crash. See SKILL notes: tiered A+/A/B sizing, multi-tier round-number
-        # partials, and volume-climax exit are documented-but-unbuilt.
+        # --- Exit Improvements (Ross Cameron) ---
+
+        # Tiered position sizing: Ross sizes bigger on A+ setups (5/5 +
+        # first-pullback + news), normal on A (5/5 + pattern), smaller on
+        # B (4/5 or lower). Default False to match Friday Aug 14 state.
         self.tiered_sizing_enabled = False
+        self.position_size_tiers = {'A+': 1.5, 'A': 1.0, 'B': 0.6}
+
+        # Psych-level partials: Ross takes partials at round numbers
+        # ($5, $10, $15, $20...) because retail traders cluster orders
+        # there. Sell 20% of remaining position at each psych level.
         self.psych_level_partials_enabled = False
-        self.volume_climax_exit_enabled = False
+        self.psych_level_sell_pct = 0.20
+
+        # Volume climax stop tightening: Ross says a massive volume spike on a green
+        # candle signals exhaustion — the last buyers are piling in.
+        # Tighten the trailing stop to the candle's low to protect profits.
+        self.volume_climax_stop_enabled = False
+        self.volume_climax_ratio = 3.0  # 3x average volume = climax
 
         self.no_news_position_size_pct = 0.25  # Hard-cap: 25% of the normal calculated size (spec range was 25-50%, defaulting to the more conservative end since there's no catalyst backing the move)
         self.no_news_bailout_seconds = 60  # Shorter than the normal 90s bailout - no catalyst means even less reason to wait for follow-through
@@ -214,8 +239,10 @@ class AutoTraderService:
         # profitable exits. Ross Cameron re-enters stopped-out stocks but
         # NOT stocks where profit was already captured on the first surge.
         self.entries_today = {}  # {symbol: count} — entries per stock today
+        self.losses_today = {}  # {symbol: count} — stopped-out exits per stock today (Ross: max 2 loss re-entries)
         self.profitable_exit_info = {}  # {symbol: {'exit_price': float, 'capture_ratio': float, 'entry_price': float, 'profit_target': float}}
-        self.conservative_re_entry = set()  # symbols flagged for reduced-size re-entry (partial capture)
+        self.conservative_re_entry = set()  # symbols flagged for reduced-size re-entry
+        self._recently_reconciled = {}  # symbol->timestamp, prevents re-adopt loop (partial capture)
 
         # Trading Hours (Ross Cameron alignment): 7 AM - 1 PM EST.
         # Ross is a morning trader - flat by ~1 PM. Entries stop at 11:30 AM
@@ -250,6 +277,7 @@ class AutoTraderService:
                     'breakeven_stops': self.breakeven_stops,
                     'exited_today': list(self.exited_today),
                     'entries_today': self.entries_today,
+                    'losses_today': self.losses_today,
                     'profitable_exit_info': self.profitable_exit_info,
                     'conservative_re_entry': list(self.conservative_re_entry),
                     'updated_at': datetime.now(timezone.utc).isoformat()
@@ -280,6 +308,7 @@ class AutoTraderService:
             self.breakeven_stops = doc.get('breakeven_stops', {}) or {}
             self.exited_today = set(doc.get('exited_today', []) or [])
             self.entries_today = doc.get('entries_today', {}) or {}
+            self.losses_today = doc.get('losses_today', {}) or {}
             # Backward compat: migrate old 'profitable_exit_prices' (flat float dict)
             # to new 'profitable_exit_info' (dict of dicts with capture_ratio).
             old_prices = doc.get('profitable_exit_prices', {})
@@ -344,6 +373,12 @@ class AutoTraderService:
             self.trading_start_hour = int(settings['trading_start_hour'])
         if 'trading_end_hour' in settings:
             self.trading_end_hour = int(settings['trading_end_hour'])
+        if 'trading_end_minute' in settings:
+            self.trading_end_minute = int(settings['trading_end_minute'])
+        if 'entry_cutoff_hour' in settings:
+            self.entry_cutoff_hour = int(settings['entry_cutoff_hour'])
+        if 'entry_cutoff_minute' in settings:
+            self.entry_cutoff_minute = int(settings['entry_cutoff_minute'])
 
         # Trade management settings
         if 'profit_target_pct' in settings:
@@ -368,6 +403,8 @@ class AutoTraderService:
             self.max_positions = int(settings['max_positions'])
         if 'position_size_pct' in settings:
             self.position_size_pct = float(settings['position_size_pct']) / 100
+        if 'risk_per_trade_pct' in settings:
+            self.risk_per_trade_pct = float(settings['risk_per_trade_pct']) / 100
         if 'daily_max_loss_pct' in settings:
             self.daily_max_loss_pct = float(settings['daily_max_loss_pct']) / 100
         if 'no_news_scalp_enabled' in settings:
@@ -392,14 +429,18 @@ class AutoTraderService:
             self.flat_top_breakout_enabled = bool(settings['flat_top_breakout_enabled'])
         if 'front_side_breakout_enabled' in settings:
             self.front_side_breakout_enabled = bool(settings['front_side_breakout_enabled'])
+        if 'market_regime_gate_enabled' in settings:
+            self.market_regime_gate_enabled = bool(settings['market_regime_gate_enabled'])
+        if 'red_day_risk_multiplier' in settings:
+            self.red_day_risk_multiplier = float(settings['red_day_risk_multiplier'])
         if 'afternoon_5min_only' in settings:
             self.afternoon_5min_only = bool(settings['afternoon_5min_only'])
         if 'tiered_sizing_enabled' in settings:
             self.tiered_sizing_enabled = bool(settings['tiered_sizing_enabled'])
         if 'psych_level_partials_enabled' in settings:
             self.psych_level_partials_enabled = bool(settings['psych_level_partials_enabled'])
-        if 'volume_climax_exit_enabled' in settings:
-            self.volume_climax_exit_enabled = bool(settings['volume_climax_exit_enabled'])
+        if 'volume_climax_stop_enabled' in settings:
+            self.volume_climax_stop_enabled = bool(settings['volume_climax_stop_enabled'])
 
         logger.info(f"Auto-trader settings updated: {settings}")
 
@@ -421,13 +462,85 @@ class AutoTraderService:
             self.daily_pnl = 0.0
             self.consecutive_losses = 0
             self.consecutive_loss_pnl = 0.0
-            self.starting_portfolio_value = portfolio_value
+            # P&L baseline must be ACCOUNT EQUITY, not margin buying power.
+            # portfolio_value here is margin_buying_power (used for position
+            # sizing); using it as the daily-P&L denominator inflated the base
+            # to ~4x and made daily_pnl_pct meaningless.
+            try:
+                _acct = alpaca_service.get_account()
+                _equity = float(_acct.get('portfolio_value') or _acct.get('cash') or 0)
+                self.starting_portfolio_value = _equity if _equity > 0 else portfolio_value
+            except Exception:
+                self.starting_portfolio_value = portfolio_value
             self.last_reset_date = today
             self.trade_history = []
             self.exited_today = set()  # Reset exited stocks for new trading day
             self.entries_today = {}  # Reset per-symbol entry counter
+            self.losses_today = {}  # Reset per-symbol loss counter
             self.profitable_exit_info = {}  # Reset profitable exit tracking
             self.conservative_re_entry = set()  # Reset conservative re-entry flags
+
+    async def check_market_regime(self) -> str:
+        """
+        Ross Cameron's market-tape check: is the broad market green, neutral,
+        or red RIGHT NOW? Uses SPY (proxy for the index futures Ross watches)
+        plus QQQ as confirmation. Returns 'green' / 'neutral' / 'red'.
+
+        Red = SPY is down meaningfully intraday (<= red_day_spy_threshold_pct)
+        AND not bouncing. Green = SPY up meaningfully. Everything else neutral.
+
+        Cached for `_regime_cache_ttl` seconds - the tape doesn't change fast
+        enough to warrant a fresh SPY/QQQ bar pull every 60s scan cycle.
+        """
+        import time as _time
+        now = _time.time()
+        if now - self._regime_cache_ts < self._regime_cache_ttl:
+            return self.market_regime
+
+        try:
+            _spy = await asyncio.to_thread(
+                alpaca_service.get_bars_with_fallback, "SPY", "5Min", 30
+            )
+            _qqq = await asyncio.to_thread(
+                alpaca_service.get_bars_with_fallback, "QQQ", "5Min", 30
+            )
+            # get_bars_with_fallback returns {'bars': [...], 'source': ...} -
+            # extract the bare list (same as _get_real_bars does).
+            spy_bars = (_spy or {}).get('bars', []) or []
+            qqq_bars = (_qqq or {}).get('bars', []) or []
+        except Exception as e:
+            logger.warning(f"Market-regime check failed (treating as neutral): {e}")
+            self.market_regime = "neutral"
+            self._regime_cache_ts = now
+            return self.market_regime
+
+        def intraday_change_pct(bars):
+            if not bars or len(bars) < 2:
+                return 0.0
+            # day open = first bar's open, current = last bar's close
+            day_open = bars[0]["open"]
+            last_close = bars[-1]["close"]
+            if day_open <= 0:
+                return 0.0
+            return ((last_close - day_open) / day_open) * 100
+
+        spy_chg = intraday_change_pct(spy_bars)
+        qqq_chg = intraday_change_pct(qqq_bars)
+
+        # Red: SPY below threshold AND QQQ not strongly green (confirmation)
+        if spy_chg <= self.red_day_spy_threshold_pct * 100 and qqq_chg < 0.2:
+            regime = "red"
+        elif spy_chg >= 0.3 and qqq_chg >= 0.0:
+            regime = "green"
+        else:
+            regime = "neutral"
+
+        self.market_regime = regime
+        self._regime_cache_ts = now
+        logger.info(
+            f"📈 Market regime: {regime.upper()} (SPY {spy_chg:+.2f}%, QQQ {qqq_chg:+.2f}%)"
+        )
+        return regime
 
     def is_trading_hours(self) -> bool:
         """Check if within trading window (7 AM - 3:30 PM EST)
@@ -507,19 +620,78 @@ class AutoTraderService:
             'consecutive_losses': self.consecutive_losses
         }
 
-    def calculate_position_size(self, portfolio_value: float, stock_price: float) -> int:
+    def get_setup_tier(self, signal: dict) -> tuple:
+        """Ross Cameron: size bigger on A+ setups, smaller on B.
+        
+        A+: 5/5 scanner + first-pullback pattern + news catalyst (best)
+        A:  5/5 scanner + non-pullback pattern (bull flag/VWAP/ORB/etc)
+        B:  4/5 or lower (or no-news scalp)
         """
-        Calculate shares to buy based on position_size_pct of REAL account
-        MARGIN BUYING POWER (portfolio_value here is actually the account's
-        margin_buying_power - see alpaca_service.get_account() - so trades
-        are always sized against the full margin capacity, not unlevered
-        equity; must come from the live Alpaca account - never simulated).
-        """
-        position_capital = portfolio_value * self.position_size_pct
-        shares = int(position_capital / stock_price)
-        shares = max(1, shares)  # At least 1 share
+        if not self.tiered_sizing_enabled:
+            return 'A', 1.0
 
-        logger.info(f"Position sizing: ${portfolio_value:,.2f} × {self.position_size_pct*100}% = ${position_capital:,.2f} / ${stock_price:.2f} = {shares} shares")
+        criteria = signal.get('criteria_count', 0)
+        is_no_news = signal.get('is_no_news_scalp', False)
+        is_bull = signal.get('is_bull_flag', False)
+        is_vwap = signal.get('is_vwap_bounce', False)
+        is_orb = signal.get('is_orb', False)
+        is_flat = signal.get('is_flat_top_breakout', False)
+        is_9ema = signal.get('is_9_ema_dip', False)
+        is_front = signal.get('is_front_side_breakout', False)
+
+        # "First pullback" is the default — not any named pattern
+        is_pullback = not (is_no_news or is_bull or is_vwap or is_orb
+                           or is_flat or is_9ema or is_front)
+
+        if criteria >= 5 and is_pullback:
+            return 'A+', self.position_size_tiers.get('A+', 1.5)
+        elif criteria >= 5 and not is_no_news:
+            return 'A', self.position_size_tiers.get('A', 1.0)
+        else:
+            return 'B', self.position_size_tiers.get('B', 0.6)
+
+    def calculate_position_size(self, equity: float, entry_price: float, stop_loss_price: float) -> int:
+        """
+        Ross Cameron risk-based position sizing.
+
+        Risk a fixed % of EQUITY per trade, then derive share count from the
+        stop distance. Wider stop -> fewer shares; tighter stop -> more shares.
+        Caps dollar loss per trade at risk_per_trade_pct of equity REGARDLESS
+        of position size. The stop distance controls position size, not the
+        other way around.
+
+        shares = (equity * risk_per_trade_pct) / (entry - stop)
+
+        position_size_pct is kept only as an ABSOLUTE CEILING (never hold more
+        than position_size_pct of equity in one position), replacing the old
+        "50% of 4x margin buying power" formula that put 2x equity into trades.
+        """
+        risk_pct = self.risk_per_trade_pct
+        if self.market_regime_gate_enabled and self.market_regime == "red":
+            risk_pct = self.risk_per_trade_pct * self.red_day_risk_multiplier
+            logger.info(
+                f"   🔴 Red day - halving risk to {risk_pct*100:.2f}% of equity "
+                f"(Ross trades smaller on red days)"
+            )
+        risk_dollars = equity * risk_pct
+        risk_per_share = entry_price - stop_loss_price
+        if risk_per_share <= 0:
+            risk_per_share = entry_price * self.stop_loss_pct
+        if risk_per_share <= 0:
+            risk_per_share = 0.01
+
+        shares = int(risk_dollars / risk_per_share)
+        shares = max(1, shares)
+
+        max_shares = int((equity * self.position_size_pct) / entry_price) if entry_price > 0 else 0
+        if max_shares > 0 and shares > max_shares:
+            logger.info(f"   ! Position capped at {max_shares} shares ({self.position_size_pct*100:.0f}% of equity ceiling)")
+            shares = max_shares
+
+        logger.info(
+            f"Risk-based sizing: ${equity:,.2f} equity x {self.risk_per_trade_pct*100}% "
+            f"= ${risk_dollars:,.2f} risk / ${risk_per_share:.2f} risk-per-share = {shares} shares"
+        )
 
         return shares
 
@@ -591,6 +763,20 @@ class AutoTraderService:
         level = math.ceil(price / 0.50) * 0.50
         if level - price < 0.05:  # already basically at this level - use the next one up
             level += 0.50
+
+    def _next_psych_level(self, price: float, above: float = 0) -> float:
+        """Find the next round-number psych level above `above` (or entry)."""
+        if price < 5:
+            step = 0.25
+        elif price < 20:
+            step = 0.50
+        else:
+            step = 1.00
+        base = above if above > 0 else price
+        level = (int(base / step) + 1) * step
+        if level <= above:
+            level += step
+        return round(level, 2)
         return round(level - buffer, 2)
 
     def check_first_pullback(self, bars: List[Dict]) -> Dict:
@@ -895,6 +1081,13 @@ class AutoTraderService:
 
         if not bars:
             logger.warning(f"{symbol}: No real historical data available - skipping")
+                # Save fetched bars to local store for future backtests
+        if bars and len(bars) >= 50:
+            try:
+                from services.bar_store import save_bars
+                save_bars(symbol, bars, timeframe)
+            except Exception:
+                pass
         return bars if bars else None
 
     async def check_entry_signals(self, stock: Dict) -> Optional[Dict]:
@@ -980,6 +1173,11 @@ class AutoTraderService:
             # Rule 3: After a LOSING exit, allow exactly 1 re-entry.
             # Ross Cameron re-enters stopped-out stocks when the next setup
             # forms. The first entry might have been a false breakout.
+            loss_count = self.losses_today.get(symbol, 0)
+            if loss_count >= 2:
+                logger.info(f"[ENTRY-FILTER] {symbol}: ⛔ Re-entry blocked "
+                           f"({loss_count} stopped-out exits) - Ross rule: max 1 re-entry after loss")
+                return None
             if entries_count >= 1 and symbol not in self.profitable_exit_info:
                 logger.info(
                     f"[ENTRY-FILTER] {symbol}: Re-entry #{entries_count + 1} "
@@ -1130,6 +1328,15 @@ class AutoTraderService:
         try:
             if symbol in self.open_positions:
                 return None
+
+            # Ross Cameron: max 1 re-entry after 2 STOPPED-OUT exits.
+            # Winning exits don't count — if you're making money, keep trading.
+            # Only losing exits count toward the re-entry limit.
+            loss_count = self.losses_today.get(symbol, 0)
+            if loss_count >= 2:
+                logger.info(f"[ENTRY-FILTER] {symbol}: ⛔ Re-entry blocked "
+                           f"({loss_count} stopped-out exits) - Ross rule: max 1 re-entry after loss")
+                return None
             if stock.get("criteria_count", 0) < 5:
                 return None
             bars = await self._get_real_bars(symbol, timeframe="1Min", limit=100)
@@ -1174,6 +1381,15 @@ class AutoTraderService:
         try:
             if symbol in self.open_positions:
                 return None
+
+            # Ross Cameron: max 1 re-entry after 2 STOPPED-OUT exits.
+            # Winning exits don't count — if you're making money, keep trading.
+            # Only losing exits count toward the re-entry limit.
+            loss_count = self.losses_today.get(symbol, 0)
+            if loss_count >= 2:
+                logger.info(f"[ENTRY-FILTER] {symbol}: ⛔ Re-entry blocked "
+                           f"({loss_count} stopped-out exits) - Ross rule: max 1 re-entry after loss")
+                return None
             if stock.get("criteria_count", 0) < 5:
                 return None
             bars = await self._get_real_bars(symbol, timeframe="1Min", limit=100)
@@ -1213,6 +1429,15 @@ class AutoTraderService:
         symbol = stock.get("symbol")
         try:
             if symbol in self.open_positions:
+                return None
+
+            # Ross Cameron: max 1 re-entry after 2 STOPPED-OUT exits.
+            # Winning exits don't count — if you're making money, keep trading.
+            # Only losing exits count toward the re-entry limit.
+            loss_count = self.losses_today.get(symbol, 0)
+            if loss_count >= 2:
+                logger.info(f"[ENTRY-FILTER] {symbol}: ⛔ Re-entry blocked "
+                           f"({loss_count} stopped-out exits) - Ross rule: max 1 re-entry after loss")
                 return None
             if stock.get("criteria_count", 0) < 5:
                 return None
@@ -1266,6 +1491,14 @@ class AutoTraderService:
             if symbol in self.open_positions:
                 return None
 
+            # Ross Cameron: max 1 re-entry after 2 STOPPED-OUT exits.
+            # Winning exits don't count — if you're making money, keep trading.
+            # Only losing exits count toward the re-entry limit.
+            loss_count = self.losses_today.get(symbol, 0)
+            if loss_count >= 2:
+                logger.info(f"[ENTRY-FILTER] {symbol}: ⛔ Re-entry blocked "
+                           f"({loss_count} stopped-out exits) - Ross rule: max 1 re-entry after loss")
+                return None
             if stock.get("criteria_count", 0) < 4:
                 logger.info(f"[9EMA-DIP-REJECT] {symbol}: Only {stock.get("criteria_count", 0)}/5 criteria met - need 4+")
                 return None
@@ -1400,6 +1633,14 @@ class AutoTraderService:
             if symbol in self.open_positions:
                 return None
 
+            # Ross Cameron: max 1 re-entry after 2 STOPPED-OUT exits.
+            # Winning exits don't count — if you're making money, keep trading.
+            # Only losing exits count toward the re-entry limit.
+            loss_count = self.losses_today.get(symbol, 0)
+            if loss_count >= 2:
+                logger.info(f"[ENTRY-FILTER] {symbol}: ⛔ Re-entry blocked "
+                           f"({loss_count} stopped-out exits) - Ross rule: max 1 re-entry after loss")
+                return None
             criteria_count = stock.get("criteria_count", 0)
             if criteria_count < 4:
                 return None
@@ -1570,6 +1811,15 @@ class AutoTraderService:
         try:
             if symbol in self.open_positions:
                 return None
+
+            # Ross Cameron: max 1 re-entry after 2 STOPPED-OUT exits.
+            # Winning exits don't count — if you're making money, keep trading.
+            # Only losing exits count toward the re-entry limit.
+            loss_count = self.losses_today.get(symbol, 0)
+            if loss_count >= 2:
+                logger.info(f"[ENTRY-FILTER] {symbol}: ⛔ Re-entry blocked "
+                           f"({loss_count} stopped-out exits) - Ross rule: max 1 re-entry after loss")
+                return None
             if stock.get("criteria_count", 0) < 4:
                 return None
             bars = await self._get_real_bars(symbol, timeframe="1Min", limit=self.flat_top_lookback_bars)
@@ -1640,6 +1890,14 @@ class AutoTraderService:
             if symbol in self.open_positions:
                 return None
 
+            # Ross Cameron: max 1 re-entry after 2 STOPPED-OUT exits.
+            # Winning exits don't count — if you're making money, keep trading.
+            # Only losing exits count toward the re-entry limit.
+            loss_count = self.losses_today.get(symbol, 0)
+            if loss_count >= 2:
+                logger.info(f"[ENTRY-FILTER] {symbol}: ⛔ Re-entry blocked "
+                           f"({loss_count} stopped-out exits) - Ross rule: max 1 re-entry after loss")
+                return None
             bars = await self._get_real_bars(symbol, timeframe="1Min", limit=100)
             if not bars or len(bars) < 50:
                 logger.debug(f"{symbol}: [no-news scalp] Skipped - insufficient real market data")
@@ -1709,7 +1967,39 @@ class AutoTraderService:
             entry_price = signal['entry_price']
             is_no_news_scalp = signal.get('is_no_news_scalp', False)
 
-            shares = self.calculate_position_size(portfolio_value, entry_price)
+            # --- GLOBAL ENTRY GUARD (2026-08-17) ---
+            # Applies to EVERY strategy uniformly (previously only First Pullback
+            # had a re-entry cap; the other 7 strategies could re-enter a symbol
+            # endlessly -> 36 entries/day vs Ross's 4). Ross takes 1-2 shots per
+            # stock max, and never enters a symbol already in a position.
+            if symbol in self.open_positions:
+                logger.info(f"[ENTRY-GUARD] {symbol}: already in position - skip")
+                return False
+            entries_count = self.entries_today.get(symbol, 0)
+            if entries_count >= 2:
+                logger.info(f"[ENTRY-GUARD] {symbol}: max 2 entries/day reached ({entries_count}/2) - skip")
+                return False
+
+            equity = 0.0
+            try:
+                _acct = await asyncio.to_thread(alpaca_service.get_account)
+                equity = float(_acct.get('portfolio_value') or _acct.get('cash') or 0)
+            except Exception:
+                pass
+            if equity <= 0:
+                equity = portfolio_value / 4.0 if portfolio_value > 0 else 0
+            if equity <= 0:
+                equity = portfolio_value
+
+            shares = self.calculate_position_size(equity, entry_price, signal.get('stop_loss_price', entry_price * 0.99))
+
+            # Tiered position sizing (Ross Cameron: A+ = 1.5x, A = 1.0x, B = 0.6x)
+            # No-news scalp is always B-tier (no catalyst) — skip tiering there.
+            if self.tiered_sizing_enabled and not is_no_news_scalp:
+                tier, mult = self.get_setup_tier(signal)
+                shares = max(1, int(shares * mult))
+                logger.info(f"   Tier: {tier} ({mult*100:.0f}% sizing)")
+
             if is_no_news_scalp:
                 # Hard-reduced size - no catalyst backing this move
                 shares = max(1, int(shares * self.no_news_position_size_pct))
@@ -1789,6 +2079,12 @@ class AutoTraderService:
             # stocks often partially fill. Using requested shares for the
             # stop order would be rejected (more shares than held).
             actual_shares = int(filled_qty)
+            # Use the ACTUAL fill price, not the signal price. entry_price
+            # came from the signal (where the bot DECIDED to enter); a market
+            # order fills at a different (usually worse) price. Using the
+            # signal price made every downstream P&L number fictional.
+            if order.get('filled_avg_price'):
+                entry_price = float(order['filled_avg_price'])
             logger.info(
                 f"   📊 {symbol}: Filled {actual_shares}/{shares} shares "
                 f"@ avg ${order.get('filled_avg_price', entry_price)}"
@@ -1865,6 +2161,7 @@ class AutoTraderService:
             logger.info(f"🛡️ {symbol}: Stop-loss placed at ${initial_stop:.2f} (structural: pullback low)")
 
             if order and order.get('order_id'):
+                self.entries_today[symbol] = self.entries_today.get(symbol, 0) + 1
                 self.open_positions[symbol] = {
                     'order_id': order['order_id'],
                     'symbol': symbol,
@@ -1900,8 +2197,7 @@ class AutoTraderService:
                     )
                 }
 
-                self.partial_sold[symbol] = False
-                self.entries_today[symbol] = self.entries_today.get(symbol, 0) + 1
+                pass  # duplicate entries_today removed
                 logger.info(f"   📋 Entry #{self.entries_today[symbol]} for {symbol} today")
                 await self.save_state()
 
@@ -2049,6 +2345,20 @@ class AutoTraderService:
             if symbol in self.open_positions:
                 continue  # already tracked
 
+            # Prevent re-adopt loop: if we just adopted+closed this symbol
+            # but it still shows in Alpaca (e.g. stop order holding shares,
+            # or a sell that hasn't settled), don't re-adopt it immediately.
+            # This was the root cause of the 8x duplicate logging (ADVB et al).
+            now_ts = time.time()
+            last = self._recently_reconciled.get(symbol, 0)
+            if now_ts - last < 600:  # 10-minute cooldown
+                continue
+
+            # Clean stale entries (>10 min)
+            stale = [s for s, t in self._recently_reconciled.items() if now_ts - t > 600]
+            for s in stale:
+                del self._recently_reconciled[s]
+
             entry_price = float(pos.get('avg_entry_price', 0))
             if entry_price <= 0:
                 continue
@@ -2103,6 +2413,7 @@ class AutoTraderService:
                 'strategy': 'Reconciled (adopted)',
             }
             self.partial_sold[symbol] = False
+            self._recently_reconciled[symbol] = time.time()
             logger.info(f"🔁 reconcile: adopted {symbol} @ ${entry_price:.2f} ({int(qty)} sh) - stop ${stop:.2f}, target ${target:.2f}")
             # Place a real exchange stop for the adopted position - without it
             # the reconciled position is only protected by the 5s software poll.
@@ -2272,6 +2583,33 @@ class AutoTraderService:
 
                 trailing_stop = position_data.get('trailing_stop', position_data['stop_loss'])
 
+                # --- Volume Climax Exit (Ross Cameron) ---
+                # When volume spikes to 3x+ average on a green candle while in
+                # profit, it can signal exhaustion — the last buyers are piling
+                # in. Tighten the trailing stop to the candle's low (does NOT
+                # exit — just protects profits with a tighter stop).
+                if self.volume_climax_stop_enabled and current_price > entry_price:
+                    try:
+                        vc_bars = await self._get_real_bars(symbol, timeframe="1Min", limit=15)
+                        if vc_bars and len(vc_bars) >= 10:
+                            recent_v = [b.get('volume', 0) for b in vc_bars[-11:-1]]
+                            avg_v = sum(recent_v) / max(len(recent_v), 1)
+                            latest_v = vc_bars[-1].get('volume', 0)
+                            green = vc_bars[-1]['close'] > vc_bars[-1]['open']
+                            if (avg_v > 0 and latest_v > avg_v * self.volume_climax_ratio
+                                    and green):
+                                cstop = vc_bars[-1]['low']
+                                cur_trail = position_data.get('trailing_stop', 0)
+                                if cstop > cur_trail:
+                                    logger.info(
+                                        f"   📊 {symbol}: Volume climax — "
+                                        f"tightening stop to ${cstop:.2f} (candle low)"
+                                    )
+                                    position_data['trailing_stop'] = cstop
+                                    state_changed = True
+                    except Exception:
+                        pass
+
                 # --- Topping-tail check (Ross Cameron: a long upper wick on
                 # the latest 1-min candle while in profit signals sellers
                 # stepping in - an early-exit trigger independent of
@@ -2287,6 +2625,27 @@ class AutoTraderService:
                             topping_tail = latest_bar['high'] > entry_price and wick_ratio >= self.topping_tail_wick_ratio
                     except Exception as e:
                         logger.debug(f"{symbol}: topping-tail check skipped: {e}")
+
+                # --- Psych-Level Partial Exit (Ross Cameron) ---
+                # At each round-number psych level crossed, sell 20% of the
+                # remaining position. Works alongside the profit-target ladder —
+                # Ross takes partials at $5, $10, $15, $20 as retail clusters.
+                if self.psych_level_partials_enabled and current_price > entry_price:
+                    nxt = self._next_psych_level(entry_price, position_data.get('last_psych_level', 0))
+                    if current_price >= nxt and nxt > position_data.get('last_psych_level', 0):
+                        pshares = max(1, int(shares * self.psych_level_sell_pct))
+                        remain = shares - pshares
+                        if remain >= 1:
+                            logger.info(
+                                f"   📈 PSYCH LEVEL ${nxt:.2f} — "
+                                f"selling {pshares}/{shares} shares"
+                            )
+                            ok = await self.sell_with_retry(symbol, pshares, f"PSYCH LEVEL ${nxt:.2f}")
+                            if ok:
+                                position_data['shares'] = remain
+                                position_data['last_psych_level'] = nxt
+                                state_changed = True
+                                continue
 
                 # --- FIRST RED CANDLE EXIT ---
                 red_candle_exit = False
@@ -2441,12 +2800,22 @@ class AutoTraderService:
                             await self.sell_with_retry(symbol, shares_to_sell, "CLEANUP RETRY")
 
                     if success:
-                        # Use real fill price for P&L, not the last quote, when available
+                        # Use the real SELL fill price for P&L. The old code fetched
+                        # the BUY order_id here (stored at entry), so exit_price
+                        # equalled the entry fill and every P&L was ~$0/fictional.
+                        # Query the most recent closed SELL fill instead, mirroring
+                        # the broker-close path.
                         exit_price = current_price
                         try:
-                            filled_order = await asyncio.to_thread(alpaca_service.get_order, current_position.get('order_id')) if current_position.get('order_id') else None
-                            if filled_order and filled_order.get('filled_avg_price'):
-                                exit_price = float(filled_order['filled_avg_price'])
+                            closed_orders = await asyncio.to_thread(
+                                alpaca_service.get_orders, "closed", 10, [symbol]
+                            )
+                            for o in (closed_orders or []):
+                                if (str(o.get('side', '')).lower() == 'sell'
+                                        and float(o.get('filled_qty') or 0) > 0
+                                        and o.get('filled_avg_price')):
+                                    exit_price = float(o['filled_avg_price'])
+                                    break
                         except Exception:
                             pass
 
@@ -2516,6 +2885,11 @@ class AutoTraderService:
                             'exit_time': datetime.now(timezone.utc).isoformat()
                         })
 
+                        # Track losing exits for Ross re-entry guard
+                        if pnl < 0:
+                            self.losses_today[symbol] = self.losses_today.get(symbol, 0) + 1
+                            logger.info(f"   📉 {symbol}: Loss #{self.losses_today[symbol]} today — Ross allows max 2 loss re-entries")
+
                         await trade_history.log_trade({
                             'symbol': symbol,
                             'entry_price': entry_price,
@@ -2544,6 +2918,24 @@ class AutoTraderService:
         except Exception as e:
             logger.error(f"Error monitoring exits: {str(e)}")
 
+    def reconcile_pnl_from_alpaca(self):
+        """Overwrite daily_pnl from Alpaca (source of truth), not local math.
+
+        realized P&L = account equity - starting_portfolio_value - unrealized.
+        Running this every scan cycle snaps the DB back to the broker's number
+        even when the local exit-accumulation misses a broker-close, partial
+        fill, or dropped round-trip. Fails silently to the tracked value."""
+        try:
+            acct = alpaca_service.get_account()
+            equity = float(acct.get('portfolio_value') or acct.get('cash') or 0)
+            if equity <= 0:
+                return
+            positions = alpaca_service.get_positions()
+            unreal = sum(float(p.get('unrealized_pl') or 0) for p in positions)
+            self.daily_pnl = round(equity - self.starting_portfolio_value - unreal, 2)
+        except Exception as e:
+            logger.error(f"reconcile_pnl_from_alpaca failed: {e}")
+
     async def process_scanner_results(self, scanner_results: List[Dict], portfolio_value: float):
         """Process scanner results and execute trades"""
         try:
@@ -2551,6 +2943,7 @@ class AutoTraderService:
                 return
 
             self.reset_daily_tracking(portfolio_value)
+            self.reconcile_pnl_from_alpaca()
 
             if not self.is_trading_hours():
                 logger.info(f"Outside trading hours ({self.trading_start_hour} AM - {self.trading_end_hour - 12 if self.trading_end_hour > 12 else self.trading_end_hour}:{self.trading_end_minute:02d} PM EST)")
@@ -2568,6 +2961,12 @@ class AutoTraderService:
                 logger.info(f"   Consecutive Losses: {risk_check['consecutive_losses']}")
                 # (existing positions are managed by the dedicated exit loop)
                 return
+
+            # Market-regime gate: Ross checks the tape BEFORE entering. On a
+            # red day (SPY/QQQ dumping) he pulls back to half-size - this is
+            # enforced in calculate_position_size via the risk multiplier.
+            if self.market_regime_gate_enabled:
+                await self.check_market_regime()
 
             if len(self.open_positions) >= self.max_positions:
                 logger.info(f"Max positions reached ({self.max_positions})")
