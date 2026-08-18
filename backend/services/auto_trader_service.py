@@ -56,6 +56,7 @@ class AutoTraderService:
         'orb': 'Opening Range Breakout',
         'nonews': 'Scalping Trade (No News)',
         'warrior': 'Auto-Trader (Warrior Trading)',
+        'creamer': 'Creamer Golden Pocket',
     }
 
     def __init__(self):
@@ -158,6 +159,14 @@ class AutoTraderService:
         self.ema9_dip_period = 9
         self.ema9_dip_tolerance_pct = 0.015  # within 1.5% of 9 EMA counts as "dip"
         self.ema9_dip_bailout_seconds = 90
+
+        # Creamer Golden Pocket (Strategy 9) — Chris Creamer's World Cup winner
+        # Value-up structure + fib golden pocket pullback + reversal confirmation.
+        self.creamer_enabled = True
+        self.creamer_volume_min_ratio = 1.5
+        self.creamer_golden_pocket_low = 0.705
+        self.creamer_golden_pocket_high = 0.886
+        self.creamer_max_stop_pct = 0.05
 
         # Ross Cameron exit rules
         self.red_candle_exit_enabled = True
@@ -1848,6 +1857,93 @@ class AutoTraderService:
             logger.error(f"Front-side breakout check error {symbol}: {e}")
             return None
 
+
+    async def check_creamer_golden_pocket(self, stock):
+        """Strategy 9: Creamer Golden Pocket (Chris Creamer's World Cup winner)."""
+        if not getattr(self, 'creamer_enabled', False):
+            return None
+        symbol = stock.get('symbol')
+        try:
+            if symbol in self.open_positions:
+                return None
+            if stock.get("criteria_count", 0) < 3:
+                return None
+            bars_15m = await self._get_real_bars(symbol, timeframe="15Min", limit=50)
+            if not bars_15m:
+                logger.info(f"CREAMER: {symbol} no 15m bars")
+                return None
+            bars_5m = await self._get_real_bars(symbol, timeframe="5Min", limit=100)
+            if not bars_15m or len(bars_15m) < 10 or not bars_5m or len(bars_5m) < 20:
+                return None
+            highs_15 = [b['high'] for b in bars_15m]
+            lows_15 = [b['low'] for b in bars_15m]
+            swing_highs = []
+            swing_lows = []
+            for i in range(2, len(bars_15m) - 2):
+                if highs_15[i] > highs_15[i-1] and highs_15[i] > highs_15[i-2] and highs_15[i] > highs_15[i+1] and highs_15[i] > highs_15[i+2]:
+                    swing_highs.append(highs_15[i])
+                if lows_15[i] < lows_15[i-1] and lows_15[i] < lows_15[i-2] and lows_15[i] < lows_15[i+1] and lows_15[i] < lows_15[i+2]:
+                    swing_lows.append(lows_15[i])
+            if len(swing_highs) < 2 or len(swing_lows) < 2:
+                logger.info(f"CREAMER: {symbol} insufficient swings (H:{len(swing_highs)} L:{len(swing_lows)})")
+                return None
+            if swing_highs[-1] <= swing_highs[-2]:
+                logger.info(f"CREAMER: {symbol} no higher high ({swing_highs[-1]:.2f} <= {swing_highs[-2]:.2f})")
+                return None
+            if swing_lows[-1] <= swing_lows[-2]:
+                logger.info(f"CREAMER: {symbol} no higher low ({swing_lows[-1]:.2f} <= {swing_lows[-2]:.2f})")
+                return None
+            last_swing_high = swing_highs[-1]
+            last_swing_low = swing_lows[-1]
+            prev_swing_low = swing_lows[-2]
+            fib_range = last_swing_high - prev_swing_low
+            if fib_range <= 0:
+                return None
+            pocket_low = last_swing_high - (fib_range * self.creamer_golden_pocket_high)
+            pocket_high = last_swing_high - (fib_range * self.creamer_golden_pocket_low)
+            current_price = bars_5m[-1]['close']
+            if current_price > pocket_high or current_price < pocket_low:
+                logger.info(f"CREAMER: {symbol} not in pocket (px={current_price:.2f} pocket={pocket_low:.2f}-{pocket_high:.2f})")
+                return None
+            if len(swing_lows) >= 3 and pocket_low > swing_lows[-2]:
+                return None
+            recent_5m = bars_5m[-15:]
+            touch_idx = -1
+            for i in range(len(recent_5m) - 1, -1, -1):
+                if pocket_low <= recent_5m[i]['low'] <= pocket_high:
+                    touch_idx = i
+                    break
+            if touch_idx < 0 or touch_idx + 1 >= len(recent_5m):
+                return None
+            touch = recent_5m[touch_idx]
+            body_low = min(touch['open'], touch['close'])
+            lower_wick = body_low - touch['low']
+            candle_range = max(touch['high'] - touch['low'], 0.01)
+            if lower_wick / candle_range < 0.4:
+                return None
+            nxt = recent_5m[touch_idx + 1]
+            if nxt['close'] <= nxt['open']:
+                return None
+            volumes = [b['volume'] for b in bars_5m[-20:]]
+            avg_vol = sum(volumes[-10:-1]) / max(len(volumes[-10:-1]), 1)
+            if nxt['volume'] < avg_vol * self.creamer_volume_min_ratio:
+                return None
+            entry_price = current_price
+            stop_loss = round(touch['low'] * 0.995, 2)
+            risk = entry_price - stop_loss
+            if risk <= 0:
+                return None
+            if risk / entry_price > self.creamer_max_stop_pct:
+                return None
+            target = last_swing_high
+            if target <= entry_price:
+                target = round(entry_price + (2.0 * risk), 2)
+            logger.info(f"CREAMER GP: {symbol} @ ${entry_price:.2f} pocket=${pocket_low:.2f}-${pocket_high:.2f} stop=${stop_loss} target=${target:.2f}")
+            return {"symbol": symbol, "entry_price": entry_price, "stop_loss_price": stop_loss, "target_price": target, "risk_per_share": risk, "criteria_count": stock.get("criteria_count", 4), "is_creamer_golden_pocket": True, "timestamp": datetime.now(timezone.utc).isoformat()}
+        except Exception as e:
+            logger.error(f"Creamer GP error {symbol}: {e}")
+            return None
+
     async def check_flat_top_breakout(self, stock):
         if not self.flat_top_breakout_enabled:
             return None
@@ -2262,8 +2358,10 @@ class AutoTraderService:
                     'is_flat_top_breakout': signal.get('is_flat_top_breakout', False),
                     'is_9_ema_dip': signal.get('is_9_ema_dip', False),
                     'is_front_side_breakout': signal.get('is_front_side_breakout', False),
+                    'is_creamer_golden_pocket': signal.get('is_creamer_golden_pocket', False),
                     'strategy': (
                         'Bull Flag Breakout' if signal.get('is_bull_flag')
+                        else 'Creamer Golden Pocket' if signal.get('is_creamer_golden_pocket')
                         else 'Front-Side Breakout' if signal.get('is_front_side_breakout')
                         else 'Flat Top Breakout' if signal.get('is_flat_top_breakout')
                         else '9 EMA Dip Buy' if signal.get('is_9_ema_dip')
@@ -3274,6 +3372,17 @@ class AutoTraderService:
                     if es:
                         if await self.execute_entry(es, portfolio_value):
                             logger.info(f"Front-Side Breakout trade: {es['symbol']}")
+
+            # Creamer Golden Pocket (Strategy 9) — Chris Creamer's World Cup
+            if self.creamer_enabled and len(self.open_positions) < self.max_positions:
+                cp_stocks = [s for s in scanner_results if s.get("criteria_count", 0) >= 3]
+                for stock in cp_stocks:
+                    if len(self.open_positions) >= self.max_positions:
+                        break
+                    es = await self.check_creamer_golden_pocket(stock)
+                    if es:
+                        if await self.execute_entry(es, portfolio_value):
+                            logger.info(f"Creamer Golden Pocket trade: {es['symbol']}")
 
             # VWAP Bounce (Strategy 4) - institutional support
             if self.vwap_bounce_enabled and len(self.open_positions) < self.max_positions:
