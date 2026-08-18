@@ -1925,12 +1925,95 @@ class AutoTraderService:
             return None
 
 
+    def check_creamer_environment(self, bars_15m, bars_5m):
+        """Classify market environment for Creamer strategy (from 'Most Traders
+        Misunderstand Delta' and '4 Layers' videos).
+
+        Creamer trades differently per regime:
+        - Initiative Expansion (trending): continuation models OK
+        - Balanced Rotation (ranging): reversal models OK at extremes
+        - Low Participation (chop): skip everything — edge degrades
+
+        Detects chop via:
+        1. ADX proxy: narrow candle bodies relative to ranges (low conviction)
+        2. Overlapping structure: repeated rejection at same levels
+        3. Low volume expansion: no sustained displacement
+
+        Returns: dict(regime='trending'|'ranging'|'chop', score=int, skip=bool)
+        """
+        try:
+            if not bars_15m or len(bars_15m) < 10:
+                return {'regime': 'unknown', 'score': 0, 'skip': True}
+
+            closes = [b['close'] for b in bars_15m]
+            highs = [b['high'] for b in bars_15m]
+            lows = [b['low'] for b in bars_15m]
+            volumes = [b['volume'] for b in bars_15m]
+
+            # 1. Body/range ratio: low ratio = low conviction = chop signal
+            body_ratios = []
+            for i in range(len(bars_15m)):
+                rng = max(highs[i] - lows[i], 0.001)
+                body = abs(closes[i] - highs[i] if i == 0 else closes[i] - closes[i-1])
+                # Use open-close body when available
+                body2 = abs(bars_15m[i]['open'] - closes[i])
+                body_ratios.append(max(body, body2) / rng)
+
+            avg_body_ratio = sum(body_ratios[-10:]) / len(body_ratios[-10:])
+
+            # 2. Directional consistency: count consecutive same-direction moves
+            up_moves = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
+            down_moves = len(closes) - 1 - up_moves
+            directional_pct = max(up_moves, down_moves) / max(len(closes) - 1, 1)
+
+            # 3. Volume trend: declining volume = compression
+            vol_first_half = sum(volumes[:5]) / max(len(volumes[:5]), 1)
+            vol_second_half = sum(volumes[-5:]) / max(len(volumes[-5:]), 1)
+            vol_trend = vol_second_half / max(vol_first_half, 1)
+
+            # Classify
+            chop_score = 0
+            if avg_body_ratio < 0.35:
+                chop_score += 2  # Low conviction candles
+            if directional_pct < 0.65:
+                chop_score += 1  # No clear direction
+            if vol_trend < 0.7:
+                chop_score += 1  # Declining volume
+
+            if chop_score >= 3:
+                return {'regime': 'chop', 'score': chop_score, 'skip': True}
+            elif chop_score >= 2 or directional_pct < 0.72:
+                return {'regime': 'ranging', 'score': chop_score, 'skip': False}
+            else:
+                return {'regime': 'trending', 'score': chop_score, 'skip': False}
+
+        except Exception as e:
+            logger.error(f"Creamer environment error: {e}")
+            return {'regime': 'unknown', 'score': 0, 'skip': False}
+
+    def _get_premarket_levels(self, bars_5m):
+        """Extract pre-market reference levels from early 5-min bars.
+        Returns (premarket_high, premarket_low) or (None, None) if insufficient data.
+        Used for Creamer confluence scoring — session extremes that align with
+        the golden pocket add conviction (from 'Map My Trades' video Layer 3).
+        """
+        try:
+            if not bars_5m or len(bars_5m) < 5:
+                return (None, None)
+            # First 5 bars approximate the pre-market / opening range
+            early = bars_5m[:5]
+            pm_high = max(b['high'] for b in early)
+            pm_low = min(b['low'] for b in early)
+            return (pm_high, pm_low)
+        except Exception:
+            return (None, None)
+
     def check_creamer_sentiment(self, bars_5m, bars_15m):
         """Multi-timeframe sentiment filter (from 'Avoid Bad Trades' video).
 
         Scores EMA + RSI + MACD + Bollinger + VWAP + OBV across two timeframes
         (5-min execution + 15-min context). Weighted vote per Creamer's weights:
-        EMA 2.0, OBV 2.0, MACD 1.75, BB 1.25, RSI 1.0 (VWAP 1.0 added).
+        EMA 2.0, OBV 2.0, MACD 1.75, BB 1.25, RSI 1.0, VWAP 2.5.
 
         Returns:
             (bullish: bool, score: float) - score > 0 = bullish, < 0 = bearish
@@ -1980,19 +2063,20 @@ class AutoTraderService:
                 rsi_vote = 1.0 if rsi > 50 else -1.0
                 score += rsi_vote * 1.0
 
-                # VWAP (weight 1.0): price above VWAP = bullish
+                # VWAP (weight 2.5): price above VWAP = bullish
+                # Creamer's actual weight from TradingView indicator (20% of total)
                 vwap_vote = 0.0
                 vwap = self._calculate_vwap(bars)
                 if vwap:
                     vwap_vote = 1.0 if closes[-1] > vwap else -1.0
-                    score += vwap_vote * 1.0
+                    score += vwap_vote * 2.5
 
                 votes[tf_name] = {
                     'ema': ema_vote, 'obv': obv_vote, 'macd': macd_vote,
                     'bb': bb_vote, 'rsi': rsi_vote, 'vwap': vwap_vote
                 }
 
-            # Normalize: max possible |score| = 2 * (2+2+1.75+1.25+1+1) = 18
+            # Normalize: max possible |score| = 2 * (2+2+1.75+1.25+1+2.5) = 21
             bullish = score > 0
             return (bullish, score)
 
@@ -2058,6 +2142,13 @@ class AutoTraderService:
             if closes_15[-1] < sma20_15 * 0.98:
                 logger.info(f"CREAMER: {symbol} below 15m SMA20 (px={closes_15[-1]:.2f} sma={sma20_15:.2f})")
                 return None
+
+            # ENVIRONMENT CHECK: skip Creamer in chop/compression
+            env = self.check_creamer_environment(bars_15m, bars_5m)
+            if env['skip']:
+                logger.info(f"CREAMER: {symbol} environment={env['regime']} (chop_score={env['score']}) - skipping")
+                return None
+
             last_swing_high = swing_highs[-1]
             last_swing_low = swing_lows[-1]
             prev_swing_low = swing_lows[-2]
@@ -2092,6 +2183,32 @@ class AutoTraderService:
             candle_range = max(touch['high'] - touch['low'], 0.01)
             if lower_wick / candle_range < 0.4:
                 return None
+
+            # POCKET TIERING: A+ sweet spot (0.705-0.886) vs B transition (0.62-0.705)
+            # Creamer's sweet spot is the golden pocket proper. The 0.62 zone is
+            # early-warning — still valid but lower conviction.
+            sweet_low = last_swing_high - (fib_range * 0.886)   # 0.886 level
+            sweet_high = last_swing_high - (fib_range * 0.705)  # 0.705 level
+            in_sweet_spot = (touch['low'] >= sweet_low and touch['low'] <= sweet_high)
+            pocket_tier = 'A+' if in_sweet_spot else 'B'
+            if pocket_tier == 'B':
+                # Stricter for B zone: require stronger wick ratio for entry
+                if lower_wick / candle_range < 0.45:
+                    logger.info(f"CREAMER: {symbol} in B-tier pocket, wick too weak ({lower_wick/candle_range:.2f})")
+                    return None
+
+            # PRE-MARKET CONFLUENCE: check if pocket aligns with pre-market extremes
+            pm_high, pm_low = self._get_premarket_levels(bars_5m)
+            pm_confluence = False
+            if pm_low and pm_high:
+                pm_range = max(pm_high - pm_low, 0.01)
+                # Pocket near pre-market low = bullish confluence (support held)
+                if abs(pocket_low - pm_low) / pm_range < 0.15:
+                    pm_confluence = True
+                # Pocket near pre-market high = potential resistance area
+                if abs(pocket_high - pm_high) / pm_range < 0.15:
+                    pm_confluence = True
+
             nxt = recent_5m[touch_idx + 1]
             if nxt['close'] <= nxt['open']:
                 return None
@@ -2118,8 +2235,9 @@ class AutoTraderService:
             friction_zone = round(pocket_high + (target - pocket_high) * 0.3, 2)
             logger.info(
                 f"CREAMER GP: {symbol} @ ${entry_price:.2f} "
-                f"pocket={pocket_low:.2f}-{pocket_high:.2f} stop={stop_loss} "
-                f"target={target:.2f} friction={friction_zone:.2f} inval={invalidation_target:.2f}"
+                f"pocket={pocket_low:.2f}-{pocket_high:.2f} tier={pocket_tier} "
+                f"stop={stop_loss} target={target:.2f} friction={friction_zone:.2f} "
+                f"inval={invalidation_target:.2f} env={env['regime']} confluence={'pm' if pm_confluence else 'none'}"
             )
             return {
                 "symbol": symbol, "entry_price": entry_price,
@@ -2132,6 +2250,10 @@ class AutoTraderService:
                     "pocket_high": pocket_high, "pocket_low": pocket_low,
                     "friction_zone": friction_zone,
                     "invalidation_target": invalidation_target,
+                    "pocket_tier": pocket_tier,
+                    "environment": env['regime'],
+                    "pm_confluence": pm_confluence,
+                    "sentiment_score": sentiment_score if sentiment_bullish is not None else 0.0,
                 },
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
