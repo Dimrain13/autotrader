@@ -808,6 +808,71 @@ class AutoTraderService:
             ema.append((closes[i] - ema[-1]) * mult + ema[-1])
         return ema
 
+    def _calculate_rsi(self, closes, period=14):
+        """Wilder RSI. Returns float 0-100 (50 if insufficient data)."""
+        if len(closes) < period + 1:
+            return 50.0
+        gains = 0.0
+        losses = 0.0
+        for i in range(1, period + 1):
+            change = closes[i] - closes[i - 1]
+            if change >= 0:
+                gains += change
+            else:
+                losses -= change
+        avg_gain = gains / period
+        avg_loss = losses / period
+        for i in range(period + 1, len(closes)):
+            change = closes[i] - closes[i - 1]
+            gain = max(change, 0.0)
+            loss = max(-change, 0.0)
+            avg_gain = ((avg_gain * (period - 1)) + gain) / period
+            avg_loss = ((avg_loss * (period - 1)) + loss) / period
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return 100.0 - (100.0 / (1.0 + rs))
+
+    def _calculate_bollinger(self, closes, period=20, num_std=2.0):
+        """Returns dict with middle, upper, lower, pct_b (position within bands)."""
+        if len(closes) < period:
+            return None
+        window = closes[-period:]
+        mid = sum(window) / period
+        var = sum((c - mid) ** 2 for c in window) / period
+        std = var ** 0.5
+        upper = mid + (num_std * std)
+        lower = mid - (num_std * std)
+        price = closes[-1]
+        pct_b = 0.5 if upper == lower else (price - lower) / (upper - lower)
+        return {'middle': mid, 'upper': upper, 'lower': lower, 'pct_b': pct_b, 'price': price}
+
+    def _calculate_obv(self, bars):
+        """On-Balance Volume. Returns (current_obv, obv_series) or None."""
+        if len(bars) < 2:
+            return None
+        obv = [0.0]
+        for i in range(1, len(bars)):
+            if bars[i]['close'] > bars[i - 1]['close']:
+                obv.append(obv[-1] + bars[i]['volume'])
+            elif bars[i]['close'] < bars[i - 1]['close']:
+                obv.append(obv[-1] - bars[i]['volume'])
+            else:
+                obv.append(obv[-1])
+        return obv
+
+    def _calculate_vwap(self, bars):
+        """VWAP over the provided bars. Returns vwap value or None."""
+        if not bars:
+            return None
+        typical_prices = [(b['high'] + b['low'] + b['close']) / 3 for b in bars]
+        volumes = [b['volume'] for b in bars]
+        total_vol = sum(volumes)
+        if total_vol == 0:
+            return None
+        vwap = sum(tp * v for tp, v in zip(typical_prices, volumes)) / total_vol
+        return vwap
+
     def _nearest_psych_level(self, price: float, buffer: float = 0.02) -> float:
         """
         Ross Cameron's psychological (whole/half-dollar) resistance rule:
@@ -1860,6 +1925,81 @@ class AutoTraderService:
             return None
 
 
+    def check_creamer_sentiment(self, bars_5m, bars_15m):
+        """Multi-timeframe sentiment filter (from 'Avoid Bad Trades' video).
+
+        Scores EMA + RSI + MACD + Bollinger + VWAP + OBV across two timeframes
+        (5-min execution + 15-min context). Weighted vote per Creamer's weights:
+        EMA 2.0, OBV 2.0, MACD 1.75, BB 1.25, RSI 1.0 (VWAP 1.0 added).
+
+        Returns:
+            (bullish: bool, score: float) - score > 0 = bullish, < 0 = bearish
+        """
+        try:
+            if not bars_5m or not bars_15m or len(bars_5m) < 30 or len(bars_15m) < 20:
+                return (None, 0.0)
+
+            closes_5m = [b['close'] for b in bars_5m]
+            closes_15m = [b['close'] for b in bars_15m]
+
+            score = 0.0
+            votes = {}
+
+            for tf_name, closes, bars in [('5m', closes_5m, bars_5m), ('15m', closes_15m, bars_15m)]:
+                # EMA (weight 2.0): price above EMA20 = bullish
+                ema20 = self._calculate_ema(closes, 20)
+                ema_vote = 0.0
+                if ema20 and ema20[-1] is not None:
+                    ema_vote = 1.0 if closes[-1] > ema20[-1] else -1.0
+                    score += ema_vote * 2.0
+
+                # OBV (weight 2.0): OBV rising over last 5 bars = bullish
+                obv_vote = 0.0
+                obv = self._calculate_obv(bars)
+                if obv and len(obv) >= 6:
+                    obv_slope = obv[-1] - obv[-6]
+                    obv_vote = 1.0 if obv_slope > 0 else -1.0
+                    score += obv_vote * 2.0
+
+                # MACD (weight 1.75): bullish if macd > signal
+                macd_vote = 0.0
+                mc = self.calculate_macd(closes)
+                macd_vote = 1.0 if mc.get('bullish') else -1.0
+                score += macd_vote * 1.75
+
+                # Bollinger (weight 1.25): pct_b > 0.5 = bullish (upper half)
+                bb_vote = 0.0
+                bb = self._calculate_bollinger(closes)
+                if bb:
+                    bb_vote = 1.0 if bb['pct_b'] > 0.5 else -1.0
+                    score += bb_vote * 1.25
+
+                # RSI (weight 1.0): RSI > 50 = bullish (but < 70, not overbought)
+                rsi_vote = 0.0
+                rsi = self._calculate_rsi(closes)
+                rsi_vote = 1.0 if rsi > 50 else -1.0
+                score += rsi_vote * 1.0
+
+                # VWAP (weight 1.0): price above VWAP = bullish
+                vwap_vote = 0.0
+                vwap = self._calculate_vwap(bars)
+                if vwap:
+                    vwap_vote = 1.0 if closes[-1] > vwap else -1.0
+                    score += vwap_vote * 1.0
+
+                votes[tf_name] = {
+                    'ema': ema_vote, 'obv': obv_vote, 'macd': macd_vote,
+                    'bb': bb_vote, 'rsi': rsi_vote, 'vwap': vwap_vote
+                }
+
+            # Normalize: max possible |score| = 2 * (2+2+1.75+1.25+1+1) = 18
+            bullish = score > 0
+            return (bullish, score)
+
+        except Exception as e:
+            logger.error(f"Creamer sentiment error: {e}")
+            return (None, 0.0)
+
     async def check_creamer_golden_pocket(self, stock):
         """Strategy 9: Creamer Golden Pocket (Chris Creamer's World Cup winner).
 
@@ -1958,6 +2098,11 @@ class AutoTraderService:
             volumes = [b['volume'] for b in bars_5m[-20:]]
             avg_vol = sum(volumes[-10:-1]) / max(len(volumes[-10:-1]), 1)
             if nxt['volume'] < avg_vol * self.creamer_volume_min_ratio:
+                return None
+            # Multi-timeframe sentiment filter: only long when bullish
+            sentiment_bullish, sentiment_score = self.check_creamer_sentiment(bars_5m, bars_15m)
+            if sentiment_bullish is False:
+                logger.info(f"CREAMER: {symbol} sentiment bearish (score={sentiment_score:.1f}) - no long")
                 return None
             entry_price = current_price
             stop_loss = round(touch['low'] * 0.995, 2)
