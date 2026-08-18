@@ -164,9 +164,11 @@ class AutoTraderService:
         # Value-up structure + fib golden pocket pullback + reversal confirmation.
         self.creamer_enabled = True
         self.creamer_volume_min_ratio = 1.5
-        self.creamer_golden_pocket_low = 0.705
+        self.creamer_golden_pocket_low = 0.62
         self.creamer_golden_pocket_high = 0.886
         self.creamer_max_stop_pct = 0.05
+        self.creamer_invalidation_ext = 1.1   # 1.1 fib - if 0.886 breaks, target continuation here
+        self.creamer_friction_enabled = True  # move stop to BE at first resistance, add on acceptance
 
         # Ross Cameron exit rules
         self.red_candle_exit_enabled = True
@@ -1859,7 +1861,23 @@ class AutoTraderService:
 
 
     async def check_creamer_golden_pocket(self, stock):
-        """Strategy 9: Creamer Golden Pocket (Chris Creamer's World Cup winner)."""
+        """Strategy 9: Creamer Golden Pocket (Chris Creamer's World Cup winner).
+
+        Refined with full Order Flow series insights (14 videos analyzed):
+        - Environment: value-up structure (HH/HL) + trending bias
+        - Location: fib golden pocket 0.62-0.886 (expanded from 0.705-0.886)
+          + 0.62 = transition zone (early warning)
+          + 0.705-0.886 = golden pocket (primary entry zone)
+          + 1.1 = invalidation extension (continuation target if 0.886 breaks)
+        - Confirmation: bullish reversal candle + volume + next candle green
+        - Friction: first resistance = move stop to BE; acceptance = add;
+          failure = exit at BE (from 'How I Read Stacked Imbalances')
+
+        NON-AUTOMATABLE (requires futures/options):
+        - Footprint charts, delta, absorption, stacked imbalances, GEX,
+          volume profile POC/VA, session-specific path layers.
+        See: CREAMER_NON_AUTOMATABLE.md
+        """
         if not getattr(self, 'creamer_enabled', False):
             return None
         symbol = stock.get('symbol')
@@ -1887,11 +1905,18 @@ class AutoTraderService:
             if len(swing_highs) < 2 or len(swing_lows) < 2:
                 logger.info(f"CREAMER: {symbol} insufficient swings (H:{len(swing_highs)} L:{len(swing_lows)})")
                 return None
+            # Value-up structure: higher high AND higher low
             if swing_highs[-1] <= swing_highs[-2]:
                 logger.info(f"CREAMER: {symbol} no higher high ({swing_highs[-1]:.2f} <= {swing_highs[-2]:.2f})")
                 return None
             if swing_lows[-1] <= swing_lows[-2]:
                 logger.info(f"CREAMER: {symbol} no higher low ({swing_lows[-1]:.2f} <= {swing_lows[-2]:.2f})")
+                return None
+            # TOP-DOWN BIAS: confirm price is above 20-period SMA on 15-min
+            closes_15 = [b['close'] for b in bars_15m]
+            sma20_15 = sum(closes_15[-20:]) / min(len(closes_15[-20:]), 20)
+            if closes_15[-1] < sma20_15 * 0.98:
+                logger.info(f"CREAMER: {symbol} below 15m SMA20 (px={closes_15[-1]:.2f} sma={sma20_15:.2f})")
                 return None
             last_swing_high = swing_highs[-1]
             last_swing_low = swing_lows[-1]
@@ -1899,14 +1924,20 @@ class AutoTraderService:
             fib_range = last_swing_high - prev_swing_low
             if fib_range <= 0:
                 return None
-            pocket_low = last_swing_high - (fib_range * self.creamer_golden_pocket_high)
-            pocket_high = last_swing_high - (fib_range * self.creamer_golden_pocket_low)
+            # Expanded golden pocket: 0.62 (transition) to 0.886 (invalidation)
+            pocket_low = last_swing_high - (fib_range * self.creamer_golden_pocket_high)  # 0.886
+            pocket_high = last_swing_high - (fib_range * self.creamer_golden_pocket_low)  # 0.62
+            # 1.1 invalidation extension
+            invalidation_target = last_swing_high - (fib_range * self.creamer_invalidation_ext)
             current_price = bars_5m[-1]['close']
             if current_price > pocket_high or current_price < pocket_low:
                 logger.info(f"CREAMER: {symbol} not in pocket (px={current_price:.2f} pocket={pocket_low:.2f}-{pocket_high:.2f})")
                 return None
+            # Golden pocket must be below prior value area (swing low)
             if len(swing_lows) >= 3 and pocket_low > swing_lows[-2]:
+                logger.info(f"CREAMER: {symbol} pocket in value area, not below it")
                 return None
+            # Find the candle that touched the golden pocket
             recent_5m = bars_5m[-15:]
             touch_idx = -1
             for i in range(len(recent_5m) - 1, -1, -1):
@@ -1938,8 +1969,27 @@ class AutoTraderService:
             target = last_swing_high
             if target <= entry_price:
                 target = round(entry_price + (2.0 * risk), 2)
-            logger.info(f"CREAMER GP: {symbol} @ ${entry_price:.2f} pocket=${pocket_low:.2f}-${pocket_high:.2f} stop=${stop_loss} target=${target:.2f}")
-            return {"symbol": symbol, "entry_price": entry_price, "stop_loss_price": stop_loss, "target_price": target, "risk_per_share": risk, "criteria_count": stock.get("criteria_count", 4), "is_creamer_golden_pocket": True, "timestamp": datetime.now(timezone.utc).isoformat()}
+            # Friction zone: interpolate halfway between pocket_high and target
+            friction_zone = round(pocket_high + (target - pocket_high) * 0.3, 2)
+            logger.info(
+                f"CREAMER GP: {symbol} @ ${entry_price:.2f} "
+                f"pocket={pocket_low:.2f}-{pocket_high:.2f} stop={stop_loss} "
+                f"target={target:.2f} friction={friction_zone:.2f} inval={invalidation_target:.2f}"
+            )
+            return {
+                "symbol": symbol, "entry_price": entry_price,
+                "stop_loss_price": stop_loss, "target_price": target,
+                "risk_per_share": risk,
+                "criteria_count": stock.get("criteria_count", 4),
+                "is_creamer_golden_pocket": True,
+                "creamer_meta": {
+                    "swing_high": last_swing_high, "swing_low": last_swing_low,
+                    "pocket_high": pocket_high, "pocket_low": pocket_low,
+                    "friction_zone": friction_zone,
+                    "invalidation_target": invalidation_target,
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
         except Exception as e:
             logger.error(f"Creamer GP error {symbol}: {e}")
             return None
