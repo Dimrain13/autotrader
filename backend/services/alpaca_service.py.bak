@@ -346,7 +346,7 @@ class AlpacaService:
         # Extended hours: 4:00 AM - 9:30 AM ET (pre-market) and 4:00 PM - 8:00 PM ET (after-hours)
         return not regular_open
     
-    def place_market_order(self, symbol: str, qty: float, side: str = "buy", client_order_id: str = None):
+    def place_market_order(self, symbol: str, qty: float, side: str = "buy"):
         if not self.trading_client:
             raise Exception("Alpaca API not configured")
         
@@ -405,8 +405,7 @@ class AlpacaService:
                     side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
                     time_in_force=TimeInForce.DAY,
                     limit_price=limit_price,
-                    extended_hours=True,
-                    client_order_id=client_order_id or f"mx-{side.lower()}-{int(__import__('time').time()*1000)}"
+                    extended_hours=True
                 )
                 
                 order = self.trading_client.submit_order(order_data=order_data)
@@ -431,7 +430,6 @@ class AlpacaService:
                                 "order_id": order_id,
                                 "symbol": updated_order.symbol,
                                 "qty": float(updated_order.qty) if updated_order.qty else None,
-                                "filled_qty": float(updated_order.filled_qty) if updated_order.filled_qty else 0,
                                 "side": updated_order.side.value,
                                 "status": updated_order.status.value,
                                 "filled_avg_price": float(updated_order.filled_avg_price) if updated_order.filled_avg_price else None,
@@ -463,8 +461,7 @@ class AlpacaService:
                 symbol=symbol,
                 qty=qty,
                 side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
-                time_in_force=TimeInForce.DAY,
-                client_order_id=client_order_id or f"mx-{side.lower()}-{int(__import__('time').time()*1000)}"
+                time_in_force=TimeInForce.DAY
             )
         
             order = self.trading_client.submit_order(order_data=order_data)
@@ -528,31 +525,6 @@ class AlpacaService:
                 "created_at": order.created_at.isoformat() if order.created_at else None
             }
     
-    def _place_market_order_regular(self, symbol: str, qty: float, side: str = "sell"):
-        """Place a regular market order (not extended hours). Used as fallback
-        when extended-hours limit orders keep failing — the market order will
-        execute at the next market open."""
-        if not self.trading_client:
-            raise Exception("Alpaca API not configured")
-        order_data = MarketOrderRequest(
-            symbol=symbol,
-            qty=qty,
-            side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
-            time_in_force=TimeInForce.DAY,
-            client_order_id=f"mx-{side.lower()}-fallback-{int(__import__('time').time()*1000)}"
-        )
-        order = self.trading_client.submit_order(order_data=order_data)
-        return {
-            "order_id": str(order.id),
-            "symbol": order.symbol,
-            "qty": float(order.qty) if order.qty else None,
-            "filled_qty": float(order.filled_qty) if order.filled_qty else 0,
-            "side": order.side.value,
-            "status": order.status.value,
-            "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None,
-            "created_at": order.created_at.isoformat() if order.created_at else None
-        }
-
     def place_bracket_order(self, symbol: str, qty: float, stop_loss_price: float, take_profit_price: float):
         """
         Place a bracket order with automatic stop loss and take profit
@@ -668,12 +640,9 @@ class AlpacaService:
                 
                 logger.debug(f"{symbol}: bid=${bid:.2f}, ask=${ask:.2f}, using ${current_price:.2f}")
             
-            # Use Alpaca raw unrealized_pl — source of truth. Fresh-quote
-            # midpoint is display-only; P&L must come from the broker.
-            raw_unrealized = float(pos.unrealized_pl) if hasattr(pos, "unrealized_pl") and pos.unrealized_pl else 0
-            raw_unrealized_pc = float(pos.unrealized_plpc) if hasattr(pos, "unrealized_plpc") and pos.unrealized_plpc else 0
-            # Use Alpaca current_price (not our midpoint) for display
-            current_price = alpaca_current_price
+            # Recalculate P&L with fresh price
+            unrealized_pl = (current_price - entry_price) * qty
+            unrealized_plpc = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
             
             result.append({
                 "symbol": symbol,
@@ -681,11 +650,10 @@ class AlpacaService:
                 "avg_entry_price": entry_price,
                 "market_value": current_price * qty,
                 "current_price": round(current_price, 2),
-                "unrealized_pl": round(raw_unrealized, 2),
-                "unrealized_plpc": round(raw_unrealized_pc, 2),
+                "unrealized_pl": round(unrealized_pl, 2),
+                "unrealized_plpc": round(unrealized_plpc, 2),
                 "side": pos.side,
                 "cost_basis": float(pos.cost_basis) if hasattr(pos, 'cost_basis') else None,
-                "qty_available": float(pos.qty_available) if hasattr(pos, 'qty_available') else qty,
             })
         
         return result
