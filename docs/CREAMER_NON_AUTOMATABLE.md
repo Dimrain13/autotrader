@@ -78,3 +78,49 @@ These require volume profile data at specific price levels (not just bar volume)
 | Dark Pool Decoder | Premium & Discount video | Zone tool that automatically draws 3-level zones on swing points. Proprietary indicator. |
 | ATAS template (.cts) | ATAS Settings video | Pre-configured Bid×Ask cluster, volume proportion colors, 400% imbalance, bold white font. |
 | Tanuki Trade | World Cup video | Web-based platform for naive GEX calculations on NQ (free/cheap alternative to CBOE data). |
+| ATAS X | Stacked Imbalances video | Footprint platform. Rithmic data feed, AMP Futures $300 intraday margins on E-Minis. |
+
+---
+
+## 7. Session Range / Statistical Exhaustion Rules (NQ Futures)
+
+These require session-timed ranges and historical NQ volatility statistics.
+
+| Rule | Source | Description |
+|---|---|---|
+| Asia anchor | Volatility Range + Session Projections videos | Asia session = daily auction anchor. Price deviates away, then returns to tap Asia range. |
+| ATR-normalized expansion zones | Volatility Range video | Level 1, AVR-, AVR, AVR+, MAX zones = statistical exhaustion points measured from Asia high/low, normalized by daily ATR (20-period). ~8 years NQ history. |
+| Session rotation model | Volatility Range video | Asia builds range → London "Judas swing" (sweeps Asia low/high) → NY resolves true direction. |
+| Fib projections -2.33/-2.5/-4/-4.5 | Session Projections video | Extension levels beyond range for breakout targets/reversals. |
+| OTE (optimal trade entry) | Session Projections video | Fib-based "deep premium/discount" zone within a session range. |
+| First presented fair value gap | Session Projections video | The first FVG printed in a range/timeframe gets special attention. |
+| Tokyo hourly opens | Stacked Imbalances video | 8:00 PM + 9:00 PM EST hourly opens. His most profitable session (Asia). Avoid CME open. |
+
+---
+
+## 8. Prop Firm Bankroll Management (Account Strategy)
+
+These are cash-flow/account management rules, not per-trade bot logic.
+
+| Rule | Source | Description |
+|---|---|---|
+| Evals = inventory | Fullport video | Treat evaluations as disposable. Pass in 1-2 high-conviction trades. Blowing evals is expected cost of business. |
+| Funded = assets | Fullport video | Protect funded accounts. Secure payout early in month first. |
+| Flywheel | Fullport video | Payout → use surplus only to buy more evals → repeat. Never start month with zero funded accounts. |
+| Scale then synchronize | Fullport video | Trade accounts individually when scaling; group into non-correlated portfolios at 6-10+ accounts. |
+| Eval sizing | Fullport video | Focused aggression: 1-2 large well-defined trades. |
+| Funded sizing | Fullport video | Conservative, protect the income stream. |
+
+---
+
+## 9. Multi-Timeframe Sentiment (Automatable — see note)
+
+This one IS portable to our equities bot. The "Avoid Bad Trades" indicator scores
+EMA + RSI + MACD + Bollinger Bands + VWAP + On-Balance Volume across 7 timeframes:
+- Lower TF (first 3): 2/3 vote = sentiment
+- Higher TF (last 4): 3/4 vote = sentiment
+- Only take longs when both are bullish, shorts when both bearish
+- His weights: EMA 2.0, OBV 2.0, MACD 1.75, BB 1.25, RSI 1.0 (reversal-focused)
+
+This is implementable now with our existing indicator stack (we already compute
+MACD, SMA/EMA, volume). RSI + Bollinger + OBV + VWAP would need to be added.
