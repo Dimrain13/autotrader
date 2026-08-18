@@ -281,6 +281,65 @@ function buildData(pattern) {
       break;
     }
 
+    case 'creamer_golden_pocket': {
+      // Value-up structure (HH/HL) -> pullback into fib golden pocket 0.62-0.886
+      // -> reversal candle (long lower wick) -> green confirmation -> entry.
+      let px = 15.00;
+      const baseSwingLow = 15.00;
+      for (let i = 0; i < 6; i++) push(px, px + 0.15, 0.08, 70000), px += 0.15;
+      for (let i = 0; i < 8; i++) push(px, px + 0.22, 0.10, 120000), px += 0.22;
+      const swingHigh = px;
+      const pocketLow = 15.26, pocketHigh = 15.86;
+      const sweetLow = 15.60, sweetHigh = 15.86;
+      for (let i = 0; i < 4; i++) { push(px, px - 0.22, 0.10, 55000); px -= 0.22; }
+      const touchOpen = px;
+      const touchLow = sweetLow - 0.02;
+      const touchClose = touchOpen + 0.04;
+      candles.push({
+        time: t, open: touchOpen,
+        high: touchOpen + 0.08,
+        low: touchLow,
+        close: touchClose
+      });
+      volume.push({ time: t, value: 85000, color: VOL_UP });
+      const touchIdx = candles.length - 1;
+      t += 300;
+      px = touchClose;
+      const confirmOpen = px;
+      const confirmClose = px + 0.20;
+      candles.push({
+        time: t, open: confirmOpen,
+        high: confirmClose + 0.05,
+        low: confirmOpen - 0.04,
+        close: confirmClose
+      });
+      volume.push({ time: t, value: 160000, color: VOL_UP });
+      const confirmIdx = candles.length - 1;
+      t += 300;
+      px = confirmClose;
+      const entry = confirmClose;
+      for (let i = 0; i < 8; i++) push(px, px + 0.16, 0.08, 100000), px += 0.16;
+
+      meta.entry = entry;
+      meta.stop = touchLow * 0.995;
+      meta.target = swingHigh;
+      if (meta.target <= meta.entry) meta.target = meta.entry + 2 * (meta.entry - meta.stop);
+      const frictionZone = pocketHigh + (meta.target - pocketHigh) * 0.3;
+
+      addLine('SWING HIGH (target)', UP, 1, levelLine(candles, 0, swingHigh));
+      addLine('POCKET 0.62', VWAP_C, 1, levelLine(candles, 0, pocketHigh));
+      addLine('POCKET 0.886', '#f85149', 1, levelLine(candles, 0, pocketLow));
+      addLine('ENTRY', WHITE, 0, levelLine(candles, confirmIdx, entry));
+      addLine('STOP', DOWN, 2, levelLine(candles, confirmIdx, meta.stop));
+      addLine('FRICTION (move to BE)', '#f0883e', 2, levelLine(candles, confirmIdx, frictionZone));
+
+      mark(6, 'HH+HL (uptrend)', { color: UP, shape: 'circle' });
+      mark(14, 'Swing High', { color: UP });
+      mark(touchIdx, 'Touch pocket (rejection wick)', { color: VWAP_C, position: 'belowBar' });
+      mark(confirmIdx, 'Green confirm + vol = BUY', { color: UP, position: 'aboveBar' });
+      break;
+    }
+
     default:
       break;
   }
@@ -422,7 +481,13 @@ const STRATEGIES = [
     id: 'extension_spike',
     title: 'Exit: Extension Bar Spike',
     rr: null,
-    desc: 'A single candle whose range is 3x+ the recent average is an extension spike — sell into the strength.',
+    desc: "A single candle whose range is 3x+ the recent average is an extension spike \u2014 sell into the strength.",
+  },
+  {
+    id: "creamer_golden_pocket",
+    title: "Creamer Golden Pocket",
+    rr: "2:1 min",
+    desc: "Chris Creamer's World Cup winner adapted for small-cap momentum. Value-up structure (HH/HL on 15m) pulls back into the fib golden pocket (0.62-0.886) in discount. A reversal candle with long lower wick rejects sellers, then a green confirmation candle with 1.5x volume triggers entry. Stop below the touch low. Target = prior swing high. Friction zone at 30% for BE management. Requires bullish multi-TF sentiment (EMA/OBV/MACD/BB/RSI/VWAP).",
   },
 ];
 
