@@ -57,6 +57,7 @@ class AutoTraderService:
         'nonews': 'Scalping Trade (No News)',
         'warrior': 'Auto-Trader (Warrior Trading)',
         'creamer': 'Creamer Golden Pocket',
+        'creamercont': 'Creamer Continuation',
     }
 
     def __init__(self):
@@ -169,6 +170,9 @@ class AutoTraderService:
         self.creamer_max_stop_pct = 0.05
         self.creamer_invalidation_ext = 1.1   # 1.1 fib - if 0.886 breaks, target continuation here
         self.creamer_friction_enabled = True  # move stop to BE at first resistance, add on acceptance
+        self.creamer_cont_enabled = True          # Continuation entry (WIN STREAK video)
+        self.creamer_cont_volume_ratio = 2.0      # big trade = 2x avg volume
+        self.creamer_cont_body_ratio = 0.55       # big trade bullish body >= 55% of range
 
         # Ross Cameron exit rules
         self.red_candle_exit_enabled = True
@@ -2261,6 +2265,138 @@ class AutoTraderService:
             logger.error(f"Creamer GP error {symbol}: {e}")
             return None
 
+    async def check_creamer_continuation(self, stock):
+        """Creamer Continuation Entry (from '12-Month WIN STREAK' video).
+
+        Big Trade Continuation: in a trending environment, a big trade prints
+        (volume spike + strong bullish body), gets follow-through, then price
+        pulls back to retest the big-trade level. Sellers fail to push lower,
+        buyers re-engage on a green candle -> long.
+
+        Stop below the retest low. Target 2:1 (or measured move from the big
+        trade body). Friction zone 30% to target moves stop to BE.
+
+        Differs from Golden Pocket (a reversal) — this is a continuation and
+        ONLY fires when check_creamer_environment says 'trending'.
+        """
+        if not getattr(self, 'creamer_cont_enabled', False):
+            return None
+        symbol = stock.get('symbol')
+        try:
+            if symbol in self.open_positions:
+                return None
+            if stock.get("criteria_count", 0) < 3:
+                return None
+
+            bars_5m = await self._get_real_bars(symbol, timeframe="5Min", limit=100)
+            bars_15m = await self._get_real_bars(symbol, timeframe="15Min", limit=50)
+            if not bars_5m or len(bars_5m) < 30 or not bars_15m or len(bars_15m) < 10:
+                return None
+
+            # Only fire in a TRENDING environment (continuation degrades in chop)
+            env = self.check_creamer_environment(bars_15m, bars_5m)
+            if env['regime'] != 'trending':
+                logger.info(f"CREAMER CONT: {symbol} env={env['regime']} (not trending) - skip")
+                return None
+
+            # Big trade = volume spike candle with strong bullish body, in the
+            # last ~25 bars (so follow-through + retest can still unfold).
+            closes = [b['close'] for b in bars_5m]
+            volumes = [b['volume'] for b in bars_5m]
+            avg_vol = sum(volumes[-25:-5]) / max(len(volumes[-25:-5]), 1)
+            big_idx = -1
+            for i in range(len(bars_5m) - 15, len(bars_5m) - 3):
+                b = bars_5m[i]
+                rng = max(b['high'] - b['low'], 0.001)
+                body = b['close'] - b['open']
+                if (b['volume'] >= avg_vol * self.creamer_cont_volume_ratio
+                        and body > 0
+                        and (body / rng) >= self.creamer_cont_body_ratio):
+                    big_idx = i
+                    break  # take the most recent big trade
+            if big_idx < 0:
+                logger.info(f"CREAMER CONT: {symbol} no big trade candle")
+                return None
+
+            big = bars_5m[big_idx]
+            big_close = big['close']
+            big_low = big['low']
+
+            # Follow-through: at least one close after big trade is above big_close
+            ft = any(bars_5m[j]['close'] > big_close for j in range(big_idx + 1, len(bars_5m)))
+            if not ft:
+                logger.info(f"CREAMER CONT: {symbol} no follow-through after big trade")
+                return None
+
+            # Pullback retest: recent bars pull back toward the big-trade level
+            # (hold above big_low). Find the retest low.
+            retest_low = None
+            for j in range(big_idx + 1, len(bars_5m) - 1):
+                b = bars_5m[j]
+                if b['low'] <= big_close * 1.02 and b['low'] >= big_low * 0.99:
+                    retest_low = b['low']
+                if b['low'] < big_low * 0.99:
+                    # broke below the big trade — level not defended, invalid
+                    logger.info(f"CREAMER CONT: {symbol} retest broke big-trade level")
+                    return None
+            if retest_low is None:
+                logger.info(f"CREAMER CONT: {symbol} no retest into big-trade level")
+                return None
+
+            # Re-engagement: the current/last candle is green and closes back up
+            last = bars_5m[-1]
+            if last['close'] <= last['open']:
+                logger.info(f"CREAMER CONT: {symbol} last candle not green (no re-engage)")
+                return None
+            if last['close'] <= big_close:
+                logger.info(f"CREAMER CONT: {symbol} re-engage close {last['close']:.2f} <= big-trade close {big_close:.2f}")
+                return None
+
+            # Multi-TF sentiment must be bullish (same gate as Golden Pocket)
+            sentiment_bullish, sentiment_score = self.check_creamer_sentiment(bars_5m, bars_15m)
+            if sentiment_bullish is False:
+                logger.info(f"CREAMER CONT: {symbol} sentiment bearish (score={sentiment_score:.1f})")
+                return None
+
+            entry_price = last['close']
+            stop_loss = round(retest_low * 0.995, 2)  # 0.5% buffer below retest low
+            risk = entry_price - stop_loss
+            if risk <= 0:
+                return None
+            if risk / entry_price > self.creamer_max_stop_pct:
+                logger.info(f"CREAMER CONT: {symbol} risk too wide ({risk/entry_price*100:.1f}%)")
+                return None
+
+            # Target: measured move (big trade body projected) or 2:1, whichever larger
+            measured = big_close + (big['close'] - big['open']) * 2
+            target = max(round(entry_price + (2.0 * risk), 2), round(measured, 2))
+
+            friction_zone = round(entry_price + (target - entry_price) * 0.3, 2)
+
+            logger.info(
+                f"CREAMER CONT: {symbol} @ ${entry_price:.2f} "
+                f"bigTrade={big_close:.2f} retest={retest_low:.2f} stop={stop_loss} "
+                f"target={target:.2f} friction={friction_zone:.2f}"
+            )
+            return {
+                "symbol": symbol, "entry_price": entry_price,
+                "stop_loss_price": stop_loss, "target_price": target,
+                "risk_per_share": risk,
+                "criteria_count": stock.get("criteria_count", 4),
+                "is_creamer_continuation": True,
+                "creamer_meta": {
+                    "big_trade_close": big_close,
+                    "big_trade_low": big_low,
+                    "retest_low": retest_low,
+                    "friction_zone": friction_zone,
+                    "environment": env['regime'],
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Creamer continuation error {symbol}: {e}")
+            return None
+
     async def check_flat_top_breakout(self, stock):
         if not self.flat_top_breakout_enabled:
             return None
@@ -2676,9 +2812,11 @@ class AutoTraderService:
                     'is_9_ema_dip': signal.get('is_9_ema_dip', False),
                     'is_front_side_breakout': signal.get('is_front_side_breakout', False),
                     'is_creamer_golden_pocket': signal.get('is_creamer_golden_pocket', False),
+                    'is_creamer_continuation': signal.get('is_creamer_continuation', False),
                     'creamer_meta': signal.get('creamer_meta', {}),
                     'strategy': (
                         'Bull Flag Breakout' if signal.get('is_bull_flag')
+                        else 'Creamer Continuation' if signal.get('is_creamer_continuation')
                         else 'Creamer Golden Pocket' if signal.get('is_creamer_golden_pocket')
                         else 'Front-Side Breakout' if signal.get('is_front_side_breakout')
                         else 'Flat Top Breakout' if signal.get('is_flat_top_breakout')
@@ -2750,6 +2888,10 @@ class AutoTraderService:
             return 'vwap'
         if signal.get('is_orb'):
             return 'orb'
+        if signal.get('is_creamer_continuation'):
+            return 'creamercont'
+        if signal.get('is_creamer_golden_pocket'):
+            return 'creamer'
         if is_no_news_scalp:
             return 'nonews'
         return 'warrior'
@@ -3221,7 +3363,7 @@ class AutoTraderService:
                 # proven itself — move stop to breakeven to eliminate downside risk.
                 # This is BEFORE the generic trailing stop engages, so it protects
                 # profits earlier than a passive 1% trail.
-                if (position_data.get('is_creamer_golden_pocket')
+                if ((position_data.get('is_creamer_golden_pocket') or position_data.get('is_creamer_continuation'))
                         and getattr(self, 'creamer_friction_enabled', False)
                         and not position_data.get('breakeven_stop_active', False)):
                     creamer_meta = position_data.get('creamer_meta', {})
@@ -3725,6 +3867,17 @@ class AutoTraderService:
                     if es:
                         if await self.execute_entry(es, portfolio_value):
                             logger.info(f"Creamer Golden Pocket trade: {es['symbol']}")
+
+            # Creamer Continuation Entry (trending only) — from WIN STREAK video
+            if getattr(self, 'creamer_cont_enabled', False) and len(self.open_positions) < self.max_positions:
+                cc_stocks = [s for s in scanner_results if s.get("criteria_count", 0) >= 3]
+                for stock in cc_stocks:
+                    if len(self.open_positions) >= self.max_positions:
+                        break
+                    es = await self.check_creamer_continuation(stock)
+                    if es:
+                        if await self.execute_entry(es, portfolio_value):
+                            logger.info(f"Creamer Continuation trade: {es['symbol']}")
 
             # VWAP Bounce (Strategy 4) - institutional support
             if self.vwap_bounce_enabled and len(self.open_positions) < self.max_positions:
