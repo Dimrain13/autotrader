@@ -542,15 +542,15 @@ const STRATEGIES = [
   },
   {
     id: "creamer_golden_pocket",
-    title: "Creamer A Setup — Golden Pocket Reversal",
+    title: "Creamer Golden Pocket (A+ / B tiers)",
     rr: "2:1 min",
-    desc: "Chris Creamer's World Cup winner adapted for small-cap momentum. Value-up structure (HH/HL on 15m) pulls back into the fib golden pocket (0.62-0.886) in discount. A reversal candle with long lower wick rejects sellers, then a green confirmation candle with 1.5x volume triggers entry. Stop below the touch low. Target = prior swing high. Friction zone at 30% for BE management. Requires bullish multi-TF sentiment (EMA/OBV/MACD/BB/RSI/VWAP).",
+    desc: "Chris Creamer's World Cup winner. Value-up structure (HH/HL on 15m) pulls back into the fib golden pocket in discount. Two quality tiers: A+ sweet spot (0.705-0.886) = full-size entry; B transition (0.62-0.705) = needs stronger wick + confirmation. Reversal candle with long lower wick rejects sellers, green confirmation candle with 1.5x volume triggers entry. Stop below the touch low. Target = prior swing high. Friction zone (30% to target) moves stop to breakeven. Requires bullish multi-TF sentiment.",
   },
   {
     id: "creamer_continuation",
-    title: "Creamer B Setup — Big Trade Continuation",
+    title: "Creamer Continuation Entry",
     rr: "2:1",
-    desc: "Creamer's second entry model (from the 12-Month WIN STREAK video). Only in trending environments: a big trade prints on a volume spike and gets follow-through, then price pulls back to retest the big-trade level. Sellers fail to push lower, buyers re-engage on a green candle — buy the re-engagement, stop below the retest low, target 2x the risk.",
+    desc: "Creamer's second entry model (from the 12-Month WIN STREAK video) — a separate setup for trending days, not a quality tier. A big trade prints on a volume spike and gets follow-through, then price pulls back to retest the big-trade level. Sellers fail to push lower, buyers re-engage on a green candle — buy the re-engagement, stop below the retest low, target 2x the risk.",
   },
 ];
 
