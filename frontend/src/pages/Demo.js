@@ -340,6 +340,63 @@ function buildData(pattern) {
       break;
     }
 
+    case 'creamer_continuation': {
+      // B SETUP — Big Trade Continuation (from '12-Month WIN STREAK' video).
+      // Trending environment: big trade prints -> follow-through -> pullback
+      // retests the area -> sellers fail -> buyers re-engage -> long.
+      let px = 12.00;
+      for (let i = 0; i < 6; i++) push(px, px + 0.12, 0.06, 70000), px += 0.12;
+      for (let i = 0; i < 7; i++) push(px, px + 0.18, 0.09, 110000), px += 0.18; // trending leg
+      // BIG TRADE candle: large volume, strong body, close near high
+      const btOpen = px;
+      const btClose = px + 0.30;
+      candles.push({
+        time: t, open: btOpen,
+        high: btClose + 0.04,
+        low: btOpen - 0.06,
+        close: btClose
+      });
+      volume.push({ time: t, value: 240000, color: VOL_UP }); // big trade = large volume
+      const btIdx = candles.length - 1;
+      t += 300;
+      px = btClose;
+      // Follow-through (acceptance above the big trade)
+      for (let i = 0; i < 3; i++) push(px, px + 0.10, 0.05, 90000), px += 0.10;
+      const bigTradeLevel = btClose; // the defended level
+      // Pullback retest: sellers push back down into the big trade area
+      for (let i = 0; i < 4; i++) { push(px, px - 0.14, 0.07, 60000); px -= 0.14; }
+      const retestLow = px;
+      // Buyers re-engage: green candle flips back up off the retest
+      const reEntryClose = px + 0.16;
+      candles.push({
+        time: t, open: px,
+        high: reEntryClose + 0.04,
+        low: px - 0.05,
+        close: reEntryClose
+      });
+      volume.push({ time: t, value: 150000, color: VOL_UP });
+      const reEntryIdx = candles.length - 1;
+      t += 300;
+      px = reEntryClose;
+      const entry = reEntryClose;
+      for (let i = 0; i < 8; i++) push(px, px + 0.15, 0.07, 100000), px += 0.15;
+      meta.entry = entry;
+      meta.stop = retestLow * 0.99;  // just below the retest / big trade
+      meta.target = entry + 2 * (entry - meta.stop);
+
+      addLine('BIG TRADE LEVEL (defend)', VWAP_C, 1, levelLine(candles, 0, bigTradeLevel));
+      addLine('ENTRY', WHITE, 0, levelLine(candles, reEntryIdx, entry));
+      addLine('STOP', DOWN, 2, levelLine(candles, reEntryIdx, meta.stop));
+      addLine('TARGET 2:1', UP, 2, levelLine(candles, reEntryIdx, meta.target));
+
+      mark(6, 'Trending leg', { color: UP, shape: 'circle' });
+      mark(btIdx, 'BIG TRADE (volume spike)', { color: VWAP_C, position: 'aboveBar' });
+      mark(btIdx + 3, 'Follow-through', { color: UP });
+      mark(reEntryIdx - 1, 'Retest (sellers fail)', { color: DOWN, position: 'belowBar', shape: 'arrowDown' });
+      mark(reEntryIdx, 'Buyers re-engage = BUY', { color: UP, position: 'aboveBar' });
+      break;
+    }
+
     default:
       break;
   }
@@ -485,9 +542,15 @@ const STRATEGIES = [
   },
   {
     id: "creamer_golden_pocket",
-    title: "Creamer Golden Pocket",
+    title: "Creamer A Setup — Golden Pocket Reversal",
     rr: "2:1 min",
     desc: "Chris Creamer's World Cup winner adapted for small-cap momentum. Value-up structure (HH/HL on 15m) pulls back into the fib golden pocket (0.62-0.886) in discount. A reversal candle with long lower wick rejects sellers, then a green confirmation candle with 1.5x volume triggers entry. Stop below the touch low. Target = prior swing high. Friction zone at 30% for BE management. Requires bullish multi-TF sentiment (EMA/OBV/MACD/BB/RSI/VWAP).",
+  },
+  {
+    id: "creamer_continuation",
+    title: "Creamer B Setup — Big Trade Continuation",
+    rr: "2:1",
+    desc: "Creamer's second entry model (from the 12-Month WIN STREAK video). Only in trending environments: a big trade prints on a volume spike and gets follow-through, then price pulls back to retest the big-trade level. Sellers fail to push lower, buyers re-engage on a green candle — buy the re-engagement, stop below the retest low, target 2x the risk.",
   },
 ];
 
