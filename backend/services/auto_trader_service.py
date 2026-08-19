@@ -2676,6 +2676,7 @@ class AutoTraderService:
                     'is_9_ema_dip': signal.get('is_9_ema_dip', False),
                     'is_front_side_breakout': signal.get('is_front_side_breakout', False),
                     'is_creamer_golden_pocket': signal.get('is_creamer_golden_pocket', False),
+                    'creamer_meta': signal.get('creamer_meta', {}),
                     'strategy': (
                         'Bull Flag Breakout' if signal.get('is_bull_flag')
                         else 'Creamer Golden Pocket' if signal.get('is_creamer_golden_pocket')
@@ -2709,6 +2710,7 @@ class AutoTraderService:
                         'entry_time': datetime.now(timezone.utc).isoformat(),
                         'status': 'open',
                         'strategy': 'Auto-Trader (entry recovery)',
+                        'creamer_meta': signal.get('creamer_meta', {}),
                     }
                 logger.info(f"   📋 Entry #{self.entries_today[symbol]} for {symbol} today")
                 await self.save_state()
@@ -3212,6 +3214,29 @@ class AutoTraderService:
                         logger.debug(f"{symbol}: Trailing stop updated to ${new_trailing_stop:.2f}")
 
                 trailing_stop = position_data.get('trailing_stop', position_data['stop_loss'])
+
+                # --- Creamer Friction Zone (move stop to BE at 30% to target) ---
+                # Creamer's rule: when price reaches the first resistance zone
+                # (~30% of the way from pocket top to target), the position has
+                # proven itself — move stop to breakeven to eliminate downside risk.
+                # This is BEFORE the generic trailing stop engages, so it protects
+                # profits earlier than a passive 1% trail.
+                if (position_data.get('is_creamer_golden_pocket')
+                        and getattr(self, 'creamer_friction_enabled', False)
+                        and not position_data.get('breakeven_stop_active', False)):
+                    creamer_meta = position_data.get('creamer_meta', {})
+                    friction_zone = creamer_meta.get('friction_zone')
+                    if friction_zone and current_price >= friction_zone:
+                        be_stop = entry_price * (1 + self.breakeven_buffer_pct)
+                        if be_stop > trailing_stop:
+                            position_data['trailing_stop'] = be_stop
+                            position_data['breakeven_stop_active'] = True
+                            state_changed = True
+                            logger.info(
+                                f"   🛡️  Creamer {symbol}: Friction zone hit "
+                                f"(${friction_zone:.2f}) — stop moved to BE "
+                                f"(${be_stop:.2f})"
+                            )
 
                 # --- Volume Climax Exit (Ross Cameron) ---
                 # When volume spikes to 3x+ average on a green candle while in
